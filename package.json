@@ -1,0 +1,21 @@
+{
+  "name": "soirvu",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev":"vite",
+    "preview":"vite preview",
+    "tauri":"tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api":"^2"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "@tauri-apps/cli": "^2",
+    "svelte": "^5.57.2",
+    "vite": "^8.3.4"
+  }
+}
