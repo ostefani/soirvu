@@ -17,6 +17,14 @@ pub enum Error {
     Unlock,
     /// Creating a vault with an empty passphrase is not allowed.
     EmptyPassphrase,
+    /// A new vault can only be created in an empty folder.
+    FolderNotEmpty,
+    /// The header and the database are not from the same vault.
+    VaultMismatch,
+    /// A file could not be read or written.
+    Io(std::io::Error),
+    /// The SQLite/SQLCipher database reported an error.
+    Database(rusqlite::Error),
     /// The operating system could not give us random bytes.
     Random(String),
     /// JSON could not be read or written.
@@ -32,6 +40,10 @@ impl fmt::Display for Error {
             Error::InvalidRecoveryKey(s) => write!(f, "invalid recovery key: {s}"),
             Error::Unlock => write!(f, "could not unlock the vault"),
             Error::EmptyPassphrase => write!(f, "the passphrase must not be empty"),
+            Error::FolderNotEmpty => write!(f, "the folder is not empty"),
+            Error::VaultMismatch => write!(f, "the database does not belong to this vault header"),
+            Error::Io(e) => write!(f, "file error: {e}"),
+            Error::Database(e) => write!(f, "database error: {e}"),
             Error::Random(s) => write!(f, "random number generator failed: {s}"),
             Error::Json(e) => write!(f, "header JSON error: {e}"),
         }
@@ -44,6 +56,18 @@ impl std::error::Error for Error {}
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
         Error::Json(e)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Error::Io(e)
+    }
+}
+
+impl From<rusqlite::Error> for Error {
+    fn from(e: rusqlite::Error) -> Self {
+        Error::Database(e)
     }
 }
 

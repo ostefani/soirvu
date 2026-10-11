@@ -27,9 +27,9 @@ pub const WRAPPED_LEN: usize = KEY_LEN + 16;
 pub type Key = Zeroizing<[u8; KEY_LEN]>;
 
 /// Labels that turn the master key into independent sub-keys (HKDF "info").
-const LABEL_DB: &str = "diary/v1/db";
-const LABEL_ATTACHMENTS: &str = "diary/v1/attachments";
-const LABEL_RECOVERY_KEK: &str = "diary/v1/kek/recovery";
+const LABEL_DB: &str = "soirvu/v1/db";
+const LABEL_ATTACHMENTS: &str = "soirvu/v1/attachments";
+const LABEL_RECOVERY_KEK: &str = "soirvu/v1/kek/recovery";
 
 // ---------------------------------------------------------------------------
 // Limits for Argon2id settings read from a header.
