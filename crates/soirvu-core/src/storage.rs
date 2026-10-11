@@ -1,71 +1,122 @@
-//! The encrypted SQLite database (`soirvu.db`), using SQLCipher.
+//! The encrypted SQLite database (`soirvu.db`), using SQLCipher, and its schema.
 
+use std::fs::{self, File};
 use std::io;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use data_encoding::HEXLOWER;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::crypto::Key;
 use crate::error::{Error, Result};
 
-/// Stored in SQLite's `user_version`. Later changes to the tables bump it,
-/// and a migration brings older databases up to date.
-pub const SCHEMA_VERSION: i64 = 1;
+// ---------------------------------------------------------------------------
+// Schema and migrations.
+//
+// The database stores its version in SQLite's `user_version`. MIGRATIONS is an
+// ordered list: entry number N (counting from 1) upgrades a database from
+// version N-1 to version N. NEVER edit a migration that has shipped; add a new
+// one at the end instead. Each migration runs in its own transaction, so a
+// failure leaves the database exactly as it was.
+// ---------------------------------------------------------------------------
+
+const MIGRATION_1_META: &str = "
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+";
+
+const MIGRATION_2_ENTRIES: &str = "
+CREATE TABLE device (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE entry (
+  rid        INTEGER PRIMARY KEY,
+  id         TEXT NOT NULL UNIQUE,
+  entry_date TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  rev        INTEGER NOT NULL DEFAULT 1,
+  device_id  TEXT NOT NULL REFERENCES device(id),
+  lseq       INTEGER NOT NULL,
+  title      TEXT,
+  body_md    TEXT,
+  mood       INTEGER,
+  tz         TEXT
+);
+CREATE INDEX entry_date_idx ON entry(entry_date DESC, created_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX entry_lseq_idx ON entry(lseq);
+
+CREATE TABLE tag (
+  id       INTEGER PRIMARY KEY,
+  name     TEXT NOT NULL,
+  name_key TEXT NOT NULL UNIQUE
+);
+CREATE TABLE entry_tag (
+  entry_rid INTEGER NOT NULL REFERENCES entry(rid) ON DELETE CASCADE,
+  tag_id    INTEGER NOT NULL REFERENCES tag(id),
+  PRIMARY KEY (entry_rid, tag_id)
+);
+CREATE INDEX entry_tag_tag_idx ON entry_tag(tag_id);
+
+CREATE VIRTUAL TABLE entry_fts USING fts5(
+  title, body_md,
+  content='entry', content_rowid='rid',
+  tokenize='trigram'
+);
+CREATE TRIGGER entry_fts_insert AFTER INSERT ON entry BEGIN
+  INSERT INTO entry_fts(rowid, title, body_md) VALUES (new.rid, new.title, new.body_md);
+END;
+CREATE TRIGGER entry_fts_delete AFTER DELETE ON entry BEGIN
+  INSERT INTO entry_fts(entry_fts, rowid, title, body_md)
+    VALUES ('delete', old.rid, old.title, old.body_md);
+END;
+CREATE TRIGGER entry_fts_update AFTER UPDATE OF title, body_md ON entry BEGIN
+  INSERT INTO entry_fts(entry_fts, rowid, title, body_md)
+    VALUES ('delete', old.rid, old.title, old.body_md);
+  INSERT INTO entry_fts(rowid, title, body_md) VALUES (new.rid, new.title, new.body_md);
+END;
+
+INSERT INTO meta (key, value) VALUES ('lseq', '0');
+";
+
+const MIGRATIONS: &[&str] = &[MIGRATION_1_META, MIGRATION_2_ENTRIES];
+
+/// The schema version this build of the app understands.
+pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
+
+/// Milliseconds since 1970-01-01 UTC.
+pub(crate) fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
 
 pub struct Database {
     conn: Connection,
 }
 
 impl Database {
-    /// Creates a new encrypted database file and writes the first table.
+    /// Creates a new encrypted database file at the newest schema.
     /// Refuses to touch a file that already exists.
     pub fn create(path: &Path, key: &Key, vault_id: &str) -> Result<Database> {
-        if path.exists() {
-            return Err(Error::Io(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "database file already exists",
-            )));
-        }
-        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
-            | OpenFlags::SQLITE_OPEN_CREATE
-            | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let conn = Connection::open_with_flags(path, flags)?;
-        apply_key(&conn, key)?;
-        configure(&conn)?;
-
-        conn.execute_batch(
-            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
-        )?;
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('vault_id', ?1), ('created_by_app_version', ?2)",
-            params![vault_id, env!("CARGO_PKG_VERSION")],
-        )?;
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        Ok(Database { conn })
+        create_with(path, key, vault_id, MIGRATIONS)
     }
 
-    /// Opens an existing database. Never creates a file: a missing file is an error.
-    pub fn open(path: &Path, key: &Key) -> Result<Database> {
-        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let conn = Connection::open_with_flags(path, flags)?;
-        apply_key(&conn, key)?;
-
-        // SQLite does not check the key when it is set; the first real read does.
-        // With a wrong key this fails with "file is not a database".
-        conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| {
-            row.get::<_, i64>(0)
-        })?;
-        configure(&conn)?;
-
-        let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version != SCHEMA_VERSION {
-            return Err(Error::UnsupportedFormat(format!(
-                "database schema version {version}"
-            )));
-        }
-        Ok(Database { conn })
+    /// Opens an existing database and upgrades its schema if it is older.
+    /// Never creates a file: a missing file is an error.
+    ///
+    /// Before any upgrade the database file is copied into `backup_dir`. The copy
+    /// is ciphertext under the same key, so it is as safe as the original.
+    pub fn open(path: &Path, key: &Key, backup_dir: &Path) -> Result<Database> {
+        open_with(path, key, backup_dir, MIGRATIONS)
     }
 
     /// Reads one value from the `meta` table.
@@ -78,10 +129,119 @@ impl Database {
             .optional()?)
     }
 
-    /// The raw connection, for repositories that will be added later.
+    /// Returns this vault's device id, creating the device row the first time.
+    ///
+    /// NOTE: for now the id lives inside the database. When sync arrives it has to
+    /// move to the app's own settings, because a copied vault folder would
+    /// otherwise carry the id to another computer.
+    pub fn ensure_device(&mut self) -> Result<String> {
+        if let Some(id) = self.meta("device_id")? {
+            return Ok(id);
+        }
+        let id = Uuid::now_v7().to_string();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO device (id, name, created_at) VALUES (?1, 'this device', ?2)",
+            params![id, now_ms()],
+        )?;
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES ('device_id', ?1)",
+            [&id],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// The raw connection (read access).
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
+
+    /// The raw connection (write access; needed to start transactions).
+    pub(crate) fn conn_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
+}
+
+fn create_with(path: &Path, key: &Key, vault_id: &str, migrations: &[&str]) -> Result<Database> {
+    if path.exists() {
+        return Err(Error::Io(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "database file already exists",
+        )));
+    }
+    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
+        | OpenFlags::SQLITE_OPEN_CREATE
+        | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let mut conn = Connection::open_with_flags(path, flags)?;
+    apply_key(&conn, key)?;
+    configure(&conn)?;
+
+    migrate(&mut conn, migrations, 0)?;
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('vault_id', ?1), ('created_by_app_version', ?2)",
+        params![vault_id, env!("CARGO_PKG_VERSION")],
+    )?;
+    Ok(Database { conn })
+}
+
+fn open_with(path: &Path, key: &Key, backup_dir: &Path, migrations: &[&str]) -> Result<Database> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let mut conn = Connection::open_with_flags(path, flags)?;
+    apply_key(&conn, key)?;
+
+    // SQLite does not check the key when it is set; the first real read does.
+    // With a wrong key this fails with "file is not a database".
+    conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| {
+        row.get::<_, i64>(0)
+    })?;
+    configure(&conn)?;
+
+    let latest = migrations.len() as i64;
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > latest {
+        return Err(Error::UnsupportedFormat(format!(
+            "database schema version {version} is newer than this app understands ({latest})"
+        )));
+    }
+    if version == 0 {
+        return Err(Error::UnsupportedFormat("database has no schema".into()));
+    }
+    if version < latest {
+        backup_before_migration(&conn, path, backup_dir, version, latest)?;
+        migrate(&mut conn, migrations, version)?;
+    }
+    Ok(Database { conn })
+}
+
+/// Runs the migrations after `from`, each in its own transaction.
+fn migrate(conn: &mut Connection, migrations: &[&str], from: i64) -> Result<()> {
+    for (index, sql) in migrations.iter().enumerate().skip(from as usize) {
+        let version = index as i64 + 1;
+        let tx = conn.transaction()?;
+        tx.execute_batch(sql)?;
+        tx.pragma_update(None, "user_version", version)?;
+        tx.commit()?;
+    }
+    Ok(())
+}
+
+/// Copies the database file to `backup_dir` before its schema is upgraded.
+fn backup_before_migration(
+    conn: &Connection,
+    path: &Path,
+    backup_dir: &Path,
+    from: i64,
+    to: i64,
+) -> Result<()> {
+    // Move everything still waiting in the -wal file into the main file,
+    // so that copying that one file copies everything.
+    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+    fs::create_dir_all(backup_dir)?;
+    let target = backup_dir.join(format!("soirvu-v{from}-before-v{to}-{}.db", now_ms()));
+    fs::copy(path, &target)?;
+    File::open(&target)?.sync_all()?;
+    Ok(())
 }
 
 /// `PRAGMA key` must be the first statement on a connection.
@@ -103,4 +263,158 @@ fn configure(conn: &Connection) -> Result<()> {
          PRAGMA cipher_memory_security = ON;",
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn key() -> Key {
+        Zeroizing::new([7u8; 32])
+    }
+
+    fn user_version(db: &Database) -> i64 {
+        db.connection()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn table_exists(db: &Database, name: &str) -> bool {
+        db.connection()
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = ?1",
+                [name],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            == 1
+    }
+
+    fn backup_files(dir: &Path) -> Vec<std::path::PathBuf> {
+        match fs::read_dir(dir) {
+            Ok(entries) => entries.map(|e| e.unwrap().path()).collect(),
+            Err(_) => vec![],
+        }
+    }
+
+    #[test]
+    fn a_new_database_has_the_newest_schema() {
+        let tmp = TempDir::new().unwrap();
+        let db = Database::create(&tmp.path().join("a.db"), &key(), "vid").unwrap();
+        assert_eq!(user_version(&db), SCHEMA_VERSION);
+        for table in ["meta", "device", "entry", "tag", "entry_tag", "entry_fts"] {
+            assert!(table_exists(&db, table), "missing table {table}");
+        }
+        assert_eq!(db.meta("vault_id").unwrap().as_deref(), Some("vid"));
+    }
+
+    #[test]
+    fn an_old_database_is_upgraded_after_a_backup() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("a.db");
+        let backups = tmp.path().join("backups");
+
+        // Build a database that stops at version 1, as an older app would have.
+        let old = create_with(&path, &key(), "vid", &MIGRATIONS[..1]).unwrap();
+        assert_eq!(user_version(&old), 1);
+        assert!(!table_exists(&old, "entry"));
+        drop(old);
+
+        let db = Database::open(&path, &key(), &backups).unwrap();
+        assert_eq!(user_version(&db), SCHEMA_VERSION);
+        assert!(table_exists(&db, "entry"));
+        assert_eq!(db.meta("vault_id").unwrap().as_deref(), Some("vid")); // old data kept
+        assert_eq!(db.meta("lseq").unwrap().as_deref(), Some("0"));
+        drop(db);
+
+        // Exactly one backup, and it is encrypted.
+        let files = backup_files(&backups);
+        assert_eq!(files.len(), 1, "{files:?}");
+        let bytes = fs::read(&files[0]).unwrap();
+        assert!(!bytes.starts_with(b"SQLite format 3"));
+    }
+
+    #[test]
+    fn the_backup_is_a_version_1_database_that_opens_with_the_same_key() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("a.db");
+        let backups = tmp.path().join("backups");
+        drop(create_with(&path, &key(), "vid", &MIGRATIONS[..1]).unwrap());
+        drop(Database::open(&path, &key(), &backups).unwrap());
+
+        let backup_path = backup_files(&backups).remove(0);
+        let conn =
+            Connection::open_with_flags(&backup_path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        apply_key(&conn, &key()).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn opening_an_up_to_date_database_makes_no_backup() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("a.db");
+        let backups = tmp.path().join("backups");
+        drop(Database::create(&path, &key(), "vid").unwrap());
+        drop(Database::open(&path, &key(), &backups).unwrap());
+        assert!(backup_files(&backups).is_empty());
+    }
+
+    #[test]
+    fn a_database_from_a_newer_app_is_refused_untouched() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("a.db");
+        let backups = tmp.path().join("backups");
+        let db = Database::create(&path, &key(), "vid").unwrap();
+        db.connection()
+            .pragma_update(None, "user_version", 99)
+            .unwrap();
+        drop(db);
+
+        let result = Database::open(&path, &key(), &backups);
+        assert!(matches!(result, Err(Error::UnsupportedFormat(_))));
+        assert!(backup_files(&backups).is_empty());
+    }
+
+    #[test]
+    fn a_failing_migration_changes_nothing() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("a.db");
+        let backups = tmp.path().join("backups");
+        drop(create_with(&path, &key(), "vid", &MIGRATIONS[..1]).unwrap());
+
+        // Version 2 creates a table and then hits a syntax error.
+        let broken: &[&str] = &[
+            MIGRATION_1_META,
+            "CREATE TABLE half_done (x); THIS IS NOT SQL;",
+        ];
+        let result = open_with(&path, &key(), &backups, broken);
+        assert!(matches!(result, Err(Error::Database(_))));
+
+        // Reopened with the real list, the database is still at version 1 with no leftovers,
+        // and then upgrades normally.
+        let db = open_with(&path, &key(), &backups, &MIGRATIONS[..1]).unwrap();
+        assert_eq!(user_version(&db), 1);
+        assert!(!table_exists(&db, "half_done"));
+        drop(db);
+        let db = Database::open(&path, &key(), &backups).unwrap();
+        assert_eq!(user_version(&db), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn the_device_row_is_created_once() {
+        let tmp = TempDir::new().unwrap();
+        let mut db = Database::create(&tmp.path().join("a.db"), &key(), "vid").unwrap();
+        let first = db.ensure_device().unwrap();
+        let second = db.ensure_device().unwrap();
+        assert_eq!(first, second);
+        let rows: i64 = db
+            .connection()
+            .query_row("SELECT count(*) FROM device", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
 }

@@ -25,6 +25,13 @@ pub enum Error {
     Io(std::io::Error),
     /// The SQLite/SQLCipher database reported an error.
     Database(rusqlite::Error),
+    /// No (live) entry has this id.
+    EntryNotFound,
+    /// Something the caller supplied is not acceptable (bad date, bad tag...).
+    /// The message never contains diary text.
+    InvalidInput(String),
+    /// A search query has no word of at least 3 characters.
+    QueryTooShort,
     /// The operating system could not give us random bytes.
     Random(String),
     /// JSON could not be read or written.
@@ -44,6 +51,9 @@ impl fmt::Display for Error {
             Error::VaultMismatch => write!(f, "the database does not belong to this vault header"),
             Error::Io(e) => write!(f, "file error: {e}"),
             Error::Database(e) => write!(f, "database error: {e}"),
+            Error::EntryNotFound => write!(f, "entry not found"),
+            Error::InvalidInput(s) => write!(f, "invalid input: {s}"),
+            Error::QueryTooShort => write!(f, "search words need at least 3 characters"),
             Error::Random(s) => write!(f, "random number generator failed: {s}"),
             Error::Json(e) => write!(f, "header JSON error: {e}"),
         }

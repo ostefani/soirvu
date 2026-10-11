@@ -1,4 +1,5 @@
 pub mod crypto;
+pub mod entries;
 pub mod error;
 pub mod folder;
 pub mod storage;

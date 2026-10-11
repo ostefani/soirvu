@@ -8,13 +8,14 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::crypto::{Key, KdfParams, MasterKey, RecoveryKey};
+use crate::crypto::{KdfParams, Key, MasterKey, RecoveryKey};
 use crate::error::{Error, Result};
 use crate::storage::Database;
 use crate::vault::VaultHeader;
 
 const HEADER_FILE: &str = "vault.header.json";
 const DB_FILE: &str = "soirvu.db";
+const BACKUPS_DIR: &str = "backups";
 
 /// An UNLOCKED vault: the master key is in memory and the database is open.
 ///
@@ -25,7 +26,9 @@ pub struct Vault {
     dir: PathBuf,
     header: VaultHeader,
     master: MasterKey,
-    db: Database,
+    // The two below are `pub(crate)` so that entries.rs can add methods to Vault.
+    pub(crate) db: Database,
+    pub(crate) device_id: String,
 }
 
 impl Vault {
@@ -96,11 +99,18 @@ fn prepare_folder(dir: &Path) -> Result<()> {
 
 fn create_files(dir: &Path, passphrase: &str, kdf: KdfParams) -> Result<(Vault, RecoveryKey)> {
     let (header, recovery, master) = VaultHeader::create(passphrase, kdf)?;
-    let db = Database::create(&dir.join(DB_FILE), &master.db_key(), &header.vault_id)?;
+    let mut db = Database::create(&dir.join(DB_FILE), &master.db_key(), &header.vault_id)?;
+    let device_id = db.ensure_device()?;
     // The header goes last. A folder only counts as a vault once this file
     // exists, so a crash half-way leaves no vault that looks usable.
     write_atomic(&dir.join(HEADER_FILE), &header.to_json()?)?;
-    let vault = Vault { dir: dir.to_path_buf(), header, master, db };
+    let vault = Vault {
+        dir: dir.to_path_buf(),
+        header,
+        master,
+        db,
+        device_id,
+    };
     Ok((vault, recovery))
 }
 
@@ -122,12 +132,19 @@ fn read_header(dir: &Path) -> Result<VaultHeader> {
 }
 
 fn finish_open(dir: &Path, header: VaultHeader, master: MasterKey) -> Result<Vault> {
-    let db = Database::open(&dir.join(DB_FILE), &master.db_key())?;
+    let mut db = Database::open(&dir.join(DB_FILE), &master.db_key(), &dir.join(BACKUPS_DIR))?;
     // Belt and braces: the database must say it belongs to this header.
     if db.meta("vault_id")?.as_deref() != Some(header.vault_id.as_str()) {
         return Err(Error::VaultMismatch);
     }
-    Ok(Vault { dir: dir.to_path_buf(), header, master, db })
+    let device_id = db.ensure_device()?;
+    Ok(Vault {
+        dir: dir.to_path_buf(),
+        header,
+        master,
+        db,
+        device_id,
+    })
 }
 
 /// Writes a file so that a crash leaves either the old complete file or the
@@ -157,7 +174,11 @@ mod tests {
     const CANARY: &str = "секретная заметка Ж7Qx";
 
     fn fast() -> KdfParams {
-        KdfParams { m_kib: 8, t: 1, p: 1 }
+        KdfParams {
+            m_kib: 8,
+            t: 1,
+            p: 1,
+        }
     }
 
     /// Creates a vault in a fresh temporary folder, writes one note, returns both.
@@ -167,7 +188,8 @@ mod tests {
         let conn = vault.database().connection();
         conn.execute_batch("CREATE TABLE note (id INTEGER PRIMARY KEY, body TEXT NOT NULL)")
             .unwrap();
-        conn.execute("INSERT INTO note (body) VALUES (?1)", [CANARY]).unwrap();
+        conn.execute("INSERT INTO note (body) VALUES (?1)", [CANARY])
+            .unwrap();
         (tmp, vault, recovery)
     }
 
@@ -180,7 +202,9 @@ mod tests {
     }
 
     fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-        haystack.windows(needle.len()).any(|window| window == needle)
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
     }
 
     #[test]
@@ -221,17 +245,29 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert!(names.contains(&"soirvu.db-wal".to_string()), "files: {names:?}");
+        assert!(
+            names.contains(&"soirvu.db-wal".to_string()),
+            "files: {names:?}"
+        );
 
         let scan = |label: &str| {
             for entry in fs::read_dir(&dir).unwrap() {
                 let entry = entry.unwrap();
                 let bytes = fs::read(entry.path()).unwrap();
                 let name = entry.file_name().to_string_lossy().into_owned();
-                assert!(!contains(&bytes, CANARY.as_bytes()), "{label}: {name} has the note");
-                assert!(!contains(&bytes, "секретная".as_bytes()), "{label}: {name} has a word");
+                assert!(
+                    !contains(&bytes, CANARY.as_bytes()),
+                    "{label}: {name} has the note"
+                );
+                assert!(
+                    !contains(&bytes, "секретная".as_bytes()),
+                    "{label}: {name} has a word"
+                );
                 if name.starts_with("soirvu.db") {
-                    assert!(!bytes.starts_with(b"SQLite format 3"), "{label}: {name} is plain SQLite");
+                    assert!(
+                        !bytes.starts_with(b"SQLite format 3"),
+                        "{label}: {name} is plain SQLite"
+                    );
                 }
             }
         };
@@ -258,7 +294,10 @@ mod tests {
         let result = Vault::create(tmp.path(), PASSPHRASE, fast());
         assert!(matches!(result, Err(Error::FolderNotEmpty)));
         // The existing file is untouched and nothing was added.
-        assert_eq!(fs::read(tmp.path().join("holiday.jpg")).unwrap(), b"precious");
+        assert_eq!(
+            fs::read(tmp.path().join("holiday.jpg")).unwrap(),
+            b"precious"
+        );
         assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1);
     }
 
@@ -327,9 +366,12 @@ mod tests {
         vault.lock();
         let dir = tmp.path().join("v");
 
-        let db = Database::open(&dir.join(DB_FILE), &key).unwrap();
+        let db = Database::open(&dir.join(DB_FILE), &key, &dir.join(BACKUPS_DIR)).unwrap();
         db.connection()
-            .execute("UPDATE meta SET value = 'someone-else' WHERE key = 'vault_id'", [])
+            .execute(
+                "UPDATE meta SET value = 'someone-else' WHERE key = 'vault_id'",
+                [],
+            )
             .unwrap();
         drop(db);
 
