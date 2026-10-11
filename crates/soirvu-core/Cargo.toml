@@ -4,3 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+argon2 = "0.6.0"
+chacha20poly1305 = "0.11.0"
+hkdf = "0.13.0"
+rand = "0.10.3"
+rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher-vendored-openssl"] }
+serde = "1.0.229"
+sha2 = "0.11.0"
+zeroize = "1.9.1"

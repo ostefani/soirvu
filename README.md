@@ -1,12 +1,9 @@
-# soirvu
-
-*soir* + *vu* — "the evening, seen." A local-first, encrypted personal diary.
-
 ![Tauri](https://img.shields.io/badge/app%20shell-Tauri%202-24C8D8)
 ![Rust](https://img.shields.io/badge/language-Rust-orange)
 ![Svelte](https://img.shields.io/badge/UI-Svelte%205-FF3E00)
 ![JavaScript](https://img.shields.io/badge/language-JavaScript-yellow)
 ![ProseMirror](https://img.shields.io/badge/editor-ProseMirror-673AB7)
+
 ![Vite](https://img.shields.io/badge/build-Vite-646CFF)
 ![SQLCipher](https://img.shields.io/badge/database-SQLCipher-003B57)
 ![Argon2id](https://img.shields.io/badge/KDF-Argon2id-4B275F)
@@ -18,6 +15,10 @@
 ![Interface](https://img.shields.io/badge/interface-GUI-informational)
 ![Visitors](https://visitor-badge.laobi.icu/badge?page_id=ostefani.soirvu)
 <!-- ![License](https://img.shields.io/badge/license-MIT-green) -->
+
+# soirvu
+
+*soir* + *vu* — "the evening, seen." A local-first, encrypted personal diary.
 
 soirvu keeps your diary in an encrypted vault on your own machine. There is no account, no cloud and no network access: your entries are unreadable to anything that reads the files, and readable only by you, with your passphrase.
 
