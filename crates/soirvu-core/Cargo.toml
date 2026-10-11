@@ -6,9 +6,12 @@ edition = "2024"
 [dependencies]
 argon2 = "0.6.0"
 chacha20poly1305 = "0.11.0"
+data-encoding = "2.11.1"
 hkdf = "0.13.0"
 rand = "0.10.3"
 rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher-vendored-openssl"] }
-serde = "1.0.229"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.152"
 sha2 = "0.11.0"
+unicode-normalization = "0.1.25"
 zeroize = "1.9.1"

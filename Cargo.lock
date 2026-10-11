@@ -617,6 +617,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-encoding"
+version = "2.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
+
+[[package]]
 name = "dbus"
 version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3160,6 +3166,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "soirvu-core",
  "tauri",
  "tauri-build",
 ]
@@ -3174,11 +3181,14 @@ version = "0.1.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
+ "data-encoding",
  "hkdf",
  "rand",
  "rusqlite",
  "serde",
+ "serde_json",
  "sha2 0.11.0",
+ "unicode-normalization",
  "zeroize",
 ]
 
@@ -3929,6 +3939,15 @@ name = "unicode-ident"
 version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"
