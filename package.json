@@ -1,21 +1,25 @@
 {
-  "name": "soirvu",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {
-    "build": "vite build",
-    "dev":"vite",
-    "preview":"vite preview",
-    "tauri":"tauri"
-  },
-  "dependencies": {
-    "@tauri-apps/api":"^2"
-  },
-  "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^7.3.1",
-    "@tauri-apps/cli": "^2",
-    "svelte": "^5.57.2",
-    "vite": "^8.3.4"
-  }
+    "name": "soirvu",
+    "private": true,
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "build": "vite build",
+        "dev": "vite",
+        "preview": "vite preview",
+        "tauri": "tauri",
+        "test": "node --test test/*.test.js"
+    },
+    "dependencies": {
+        "@tauri-apps/api": "^2",
+        "markdown-it": "15.0.2",
+        "prosemirror-markdown": "1.13.8",
+        "prosemirror-model": "1.25.12"
+    },
+    "devDependencies": {
+        "@sveltejs/vite-plugin-svelte": "^7.3.1",
+        "@tauri-apps/cli": "^2",
+        "svelte": "^5.57.2",
+        "vite": "^8.3.4"
+    }
 }
