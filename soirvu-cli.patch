@@ -1,0 +1,961 @@
+diff --git a/crates/soirvu-cli/Cargo.toml b/crates/soirvu-cli/Cargo.toml
+index 6571497..a79c2a5 100644
+--- a/crates/soirvu-cli/Cargo.toml
++++ b/crates/soirvu-cli/Cargo.toml
+@@ -4,3 +4,7 @@ version = "0.1.0"
+ edition = "2024"
+ 
+ [dependencies]
++soirvu-core = { path = "../soirvu-core" }
++
++[dev-dependencies]
++tempfile = "3.27.0"
+diff --git a/crates/soirvu-cli/src/main.rs b/crates/soirvu-cli/src/main.rs
+new file mode 100644
+index 0000000..37a896d
+--- /dev/null
++++ b/crates/soirvu-cli/src/main.rs
+@@ -0,0 +1,216 @@
++//! soirvu-cli — the recovery escape hatch (DESIGN §2, §8).
++//!
++//! It runs the same `soirvu-core` code as the app, so a vault can be
++//! created, checked and exported even if the GUI is broken or gone.
++//! No argument-parsing crate: the surface is four commands, parsed by hand.
++//!
++//! Commands:
++//!   soirvu-cli create <vault-dir>
++//!   soirvu-cli header-info <vault-dir>
++//!   soirvu-cli verify <vault-dir> [--recovery <key>]
++//!   soirvu-cli export <vault-dir> <out-dir> [--recovery <key>]
++//!
++//! The passphrase comes from the SOIRVU_PASSPHRASE environment variable,
++//! or is asked for at the terminal (with echo off). `--recovery` takes the
++//! recovery key text instead of a passphrase.
++//!
++//! Exit codes: 0 = ok, 1 = the command failed or verify found problems,
++//! 2 = the command line itself was wrong.
++
++use std::env;
++use std::io::{self, BufRead, IsTerminal, Write};
++use std::path::Path;
++use std::process::ExitCode;
++use std::time::Duration;
++
++use soirvu_core::crypto::{KdfParams, RecoveryKey};
++use soirvu_core::vault::VaultHeader;
++use soirvu_core::{Error, Vault};
++
++const HEADER_FILE: &str = "vault.header.json";
++
++fn main() -> ExitCode {
++    let args: Vec<String> = env::args().skip(1).collect();
++    match run(&args) {
++        Ok(()) => ExitCode::from(0),
++        Err(RunError::Usage) => {
++            eprint!("{USAGE}");
++            ExitCode::from(2)
++        }
++        Err(RunError::Failed(message)) => {
++            eprintln!("error: {message}");
++            ExitCode::from(1)
++        }
++    }
++}
++
++enum RunError {
++    Usage,
++    Failed(String),
++}
++
++fn failed(error: Error) -> RunError {
++    RunError::Failed(error.to_string())
++}
++
++const USAGE: &str = "\
++soirvu-cli — create, check and export a Soirvu vault without the app
++
++  soirvu-cli create <vault-dir>
++  soirvu-cli header-info <vault-dir>
++  soirvu-cli verify <vault-dir> [--recovery <key>]
++  soirvu-cli export <vault-dir> <out-dir> [--recovery <key>]
++
++The passphrase is read from SOIRVU_PASSPHRASE, or asked for at the
++terminal with echo off. Export writes PLAINTEXT — see DESIGN §8.
++";
++
++fn run(args: &[String]) -> Result<(), RunError> {
++    let (cmd, rest) = args.split_first().ok_or(RunError::Usage)?;
++    match cmd.as_str() {
++        "create" if rest.len() == 1 => create(Path::new(&rest[0])),
++        "header-info" if rest.len() == 1 => header_info(Path::new(&rest[0])),
++        "verify" if !rest.is_empty() => {
++            let (dirs, recovery) = open_args(rest)?;
++            if dirs.len() != 1 {
++                return Err(RunError::Usage);
++            }
++            verify(Path::new(&dirs[0]), recovery)
++        }
++        "export" if rest.len() >= 2 => {
++            let (dirs, recovery) = open_args(rest)?;
++            if dirs.len() != 2 {
++                return Err(RunError::Usage);
++            }
++            export(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
++        }
++        _ => Err(RunError::Usage),
++    }
++}
++
++/// Splits `[paths..., --recovery <key>]` into the paths and the key text.
++fn open_args(args: &[String]) -> Result<(&[String], Option<&str>), RunError> {
++    if args.len() >= 2 && args[args.len() - 2] == "--recovery" {
++        Ok((&args[..args.len() - 2], Some(args[args.len() - 1].as_str())))
++    } else if args.iter().any(|a| a == "--recovery") {
++        Err(RunError::Usage)
++    } else {
++        Ok((args, None))
++    }
++}
++
++fn create(dir: &Path) -> Result<(), RunError> {
++    let passphrase = read_passphrase("New passphrase: ")?;
++    if passphrase.is_empty() {
++        return Err(RunError::Failed(Error::EmptyPassphrase.to_string()));
++    }
++    // Calibrated on this machine, about 0.5–1 s per unlock (DESIGN §5).
++    let kdf = KdfParams::calibrate(Duration::from_millis(750)).map_err(failed)?;
++    let (vault, recovery) = Vault::create(dir, &passphrase, kdf).map_err(failed)?;
++    let vault_id = vault.header().vault_id.clone();
++    vault.lock();
++    println!("Vault created: {vault_id}");
++    println!("Recovery key — write it down now, it is shown only once:");
++    println!("{}", recovery.to_text());
++    Ok(())
++}
++
++fn header_info(dir: &Path) -> Result<(), RunError> {
++    let bytes = std::fs::read(dir.join(HEADER_FILE))
++        .map_err(|e| RunError::Failed(format!("cannot read the vault header: {e}")))?;
++    let header = VaultHeader::from_json(&bytes).map_err(failed)?;
++    println!("format version: {}", header.format_version);
++    println!("suite: {}", header.suite);
++    println!("vault id: {}", header.vault_id);
++    for slot in &header.slots {
++        match slot {
++            soirvu_core::vault::Slot::Passphrase { kdf, .. } => {
++                println!(
++                    "slot: passphrase (Argon2id, m = {} KiB, t = {}, p = {})",
++                    kdf.m_kib, kdf.t, kdf.p
++                );
++            }
++            soirvu_core::vault::Slot::Recovery { .. } => println!("slot: recovery key"),
++        }
++    }
++    Ok(())
++}
++
++fn open(dir: &Path, recovery: Option<&str>) -> Result<Vault, RunError> {
++    match recovery {
++        Some(text) => {
++            let key = RecoveryKey::from_text(text).map_err(failed)?;
++            Vault::open_with_recovery(dir, &key).map_err(failed)
++        }
++        None => {
++            let passphrase = read_passphrase("Passphrase: ")?;
++            Vault::open_with_passphrase(dir, &passphrase).map_err(failed)
++        }
++    }
++}
++
++fn verify(dir: &Path, recovery: Option<&str>) -> Result<(), RunError> {
++    let vault = open(dir, recovery)?;
++    let report = vault.verify().map_err(failed)?;
++    println!(
++        "entries: {} ({} deleted), attachments: {} ({} bytes)",
++        report.entries, report.tombstones, report.attachments, report.attachment_bytes
++    );
++    if report.ok() {
++        println!("verify: OK");
++        Ok(())
++    } else {
++        for problem in &report.problems {
++            println!("problem: {problem}");
++        }
++        Err(RunError::Failed(format!(
++            "verify found {} problem(s)",
++            report.problems.len()
++        )))
++    }
++}
++
++fn export(dir: &Path, out: &Path, recovery: Option<&str>) -> Result<(), RunError> {
++    eprintln!("warning: export writes your diary as PLAINTEXT files.");
++    let vault = open(dir, recovery)?;
++    let report = vault.export_markdown(out).map_err(failed)?;
++    println!(
++        "exported {} entries and {} attachments to {}",
++        report.entries,
++        report.attachments,
++        report.dir.display()
++    );
++    Ok(())
++}
++
++/// Passphrase from SOIRVU_PASSPHRASE, else a terminal prompt with echo off
++/// (via `stty`; if that fails the typed text is visible), else a line from
++/// standard input (for scripts that pipe it).
++fn read_passphrase(prompt: &str) -> Result<String, RunError> {
++    if let Ok(passphrase) = env::var("SOIRVU_PASSPHRASE") {
++        return Ok(passphrase);
++    }
++    let stdin = io::stdin();
++    let mut line = String::new();
++    if stdin.is_terminal() {
++        eprint!("{prompt}");
++        let _ = io::stderr().flush();
++        let echo_off = std::process::Command::new("stty")
++            .arg("-echo")
++            .status()
++            .map(|s| s.success())
++            .unwrap_or(false);
++        let read = stdin.lock().read_line(&mut line);
++        if echo_off {
++            let _ = std::process::Command::new("stty").arg("echo").status();
++            eprintln!();
++        }
++        read.map_err(|e| RunError::Failed(e.to_string()))?;
++    } else {
++        stdin
++            .lock()
++            .read_line(&mut line)
++            .map_err(|e| RunError::Failed(e.to_string()))?;
++    }
++    Ok(line.trim_end_matches(['\n', '\r']).to_string())
++}
+diff --git a/crates/soirvu-cli/tests/cli.rs b/crates/soirvu-cli/tests/cli.rs
+new file mode 100644
+index 0000000..93a7a1a
+--- /dev/null
++++ b/crates/soirvu-cli/tests/cli.rs
+@@ -0,0 +1,158 @@
++//! End-to-end tests: run the real `soirvu-cli` binary against real vaults.
++//! Vaults with content are made through `soirvu-core` directly — the CLI
++//! has no "add entry" command on purpose; it is a recovery tool.
++
++use std::fs;
++use std::process::{Command, Output};
++
++use soirvu_core::crypto::KdfParams;
++use soirvu_core::entries::EntryDraft;
++use soirvu_core::Vault;
++use tempfile::TempDir;
++
++const PASSPHRASE: &str = "correct horse battery staple";
++
++/// The weakest settings a REAL build accepts. The core's own unit tests
++/// use much weaker ones, but those only pass inside the core: its low
++/// floors are `#[cfg(test)]`, and a test of this crate compiles the core
++/// as a normal dependency, with the production floors (DESIGN §5).
++/// So vaults made here cost a real Argon2id run each. Still fast enough.
++fn fast() -> KdfParams {
++    KdfParams {
++        m_kib: 64 * 1024,
++        t: 3,
++        p: 1,
++    }
++}
++
++fn cli(args: &[&str], passphrase: &str) -> Output {
++    Command::new(env!("CARGO_BIN_EXE_soirvu-cli"))
++        .args(args)
++        .env("SOIRVU_PASSPHRASE", passphrase)
++        .output()
++        .expect("run soirvu-cli")
++}
++
++fn stdout(output: &Output) -> String {
++    String::from_utf8_lossy(&output.stdout).into_owned()
++}
++
++/// A vault with one entry and one attachment, made with the core.
++/// Returns the temp dir, the vault dir, and the recovery key text.
++fn vault_with_content() -> (TempDir, std::path::PathBuf, String) {
++    let tmp = TempDir::new().unwrap();
++    let dir = tmp.path().join("v");
++    let (mut vault, recovery) = Vault::create(&dir, PASSPHRASE, fast()).unwrap();
++    let entry = vault
++        .create_entry(&EntryDraft {
++            entry_date: "2026-10-13".into(),
++            title: Some("Проверка".into()),
++            body_md: "текст про книгу".into(),
++            ..Default::default()
++        })
++        .unwrap();
++    vault
++        .add_attachment(&entry.id, "a.bin", "application/octet-stream", b"bytes")
++        .unwrap();
++    vault.lock();
++    (tmp, dir, recovery.to_text())
++}
++
++#[test]
++fn create_then_header_info_then_verify() {
++    let tmp = TempDir::new().unwrap();
++    let dir = tmp.path().join("v");
++    let dir_s = dir.to_string_lossy().into_owned();
++
++    // Note: `create` calibrates Argon2id on this machine, so it is slower
++    // than the other commands. That is the design (§5), not a bug.
++    let created = cli(&["create", &dir_s], PASSPHRASE);
++    assert!(created.status.success(), "{}", stdout(&created));
++    let text = stdout(&created);
++    assert!(text.contains("Vault created:"));
++    assert!(text.contains("Recovery key")); // shown once, at creation
++
++    let info = cli(&["header-info", &dir_s], PASSPHRASE);
++    assert!(info.status.success());
++    let text = stdout(&info);
++    assert!(text.contains("format version: 1"));
++    assert!(text.contains("slot: passphrase"));
++    assert!(text.contains("slot: recovery key"));
++
++    let checked = cli(&["verify", &dir_s], PASSPHRASE);
++    assert!(checked.status.success(), "{}", stdout(&checked));
++    assert!(stdout(&checked).contains("verify: OK"));
++}
++
++#[test]
++fn verify_and_export_work_with_the_recovery_key() {
++    let (_tmp, dir, recovery_text) = vault_with_content();
++    let dir_s = dir.to_string_lossy().into_owned();
++
++    // A wrong passphrase in the environment must not matter: --recovery
++    // replaces the passphrase entirely.
++    let checked = cli(&["verify", &dir_s, "--recovery", &recovery_text], "wrong");
++    assert!(checked.status.success(), "{}", stdout(&checked));
++    assert!(stdout(&checked).contains("entries: 1"));
++    assert!(stdout(&checked).contains("attachments: 1"));
++
++    let out = _tmp.path().join("out");
++    let out_s = out.to_string_lossy().into_owned();
++    let exported = cli(
++        &["export", &dir_s, &out_s, "--recovery", &recovery_text],
++        "wrong",
++    );
++    assert!(exported.status.success(), "{}", stdout(&exported));
++    assert!(stdout(&exported).contains("exported 1 entries and 1 attachments"));
++
++    let year = out.join("2026");
++    let files: Vec<_> = fs::read_dir(&year).unwrap().collect();
++    assert_eq!(files.len(), 1);
++    let md = fs::read_to_string(files[0].as_ref().unwrap().path()).unwrap();
++    assert!(md.contains("текст про книгу"));
++    assert!(md.contains("title: \"Проверка\""));
++}
++
++#[test]
++fn a_wrong_passphrase_fails() {
++    let (_tmp, dir, _recovery) = vault_with_content();
++    let dir_s = dir.to_string_lossy().into_owned();
++    let checked = cli(&["verify", &dir_s], "not the passphrase");
++    assert_eq!(checked.status.code(), Some(1));
++}
++
++#[test]
++fn create_refuses_a_folder_that_is_not_empty() {
++    let tmp = TempDir::new().unwrap();
++    fs::write(tmp.path().join("mine.txt"), b"precious").unwrap();
++    let dir_s = tmp.path().to_string_lossy().into_owned();
++    let created = cli(&["create", &dir_s], PASSPHRASE);
++    assert_eq!(created.status.code(), Some(1));
++    assert_eq!(fs::read(tmp.path().join("mine.txt")).unwrap(), b"precious");
++}
++
++#[test]
++fn no_arguments_is_a_usage_error() {
++    let out = cli(&[], PASSPHRASE);
++    assert_eq!(out.status.code(), Some(2));
++    let err = String::from_utf8_lossy(&out.stderr).into_owned();
++    assert!(err.contains("soirvu-cli create"), "{err}");
++}
++
++#[test]
++fn verify_reports_a_damaged_vault() {
++    let (_tmp, dir, _recovery) = vault_with_content();
++    // Damage the blob: flip its last byte.
++    let attachments = dir.join("attachments");
++    let shard = fs::read_dir(&attachments).unwrap().next().unwrap().unwrap().path();
++    let blob = fs::read_dir(&shard).unwrap().next().unwrap().unwrap().path();
++    let mut bytes = fs::read(&blob).unwrap();
++    let last = bytes.len() - 1;
++    bytes[last] ^= 0x01;
++    fs::write(&blob, bytes).unwrap();
++
++    let dir_s = dir.to_string_lossy().into_owned();
++    let checked = cli(&["verify", &dir_s], PASSPHRASE);
++    assert_eq!(checked.status.code(), Some(1));
++    assert!(stdout(&checked).contains("problem:"), "{}", stdout(&checked));
++}
+diff --git a/crates/soirvu-core/src/export.rs b/crates/soirvu-core/src/export.rs
+new file mode 100644
+index 0000000..d64a048
+--- /dev/null
++++ b/crates/soirvu-core/src/export.rs
+@@ -0,0 +1,334 @@
++//! Markdown export (DESIGN §8): the whole vault as plain files.
++//!
++//! ```text
++//! out/
++//! ├── 2026/2026-10-11-<slug>-<shortid>.md     one file per live entry
++//! └── assets/<attachment-id>-<name>           the decrypted attachments
++//! ```
++//!
++//! Export is PLAINTEXT. The caller (the app, the CLI) must warn the user and
++//! must already hold an unlocked vault; this module only writes files.
++//! Tombstones are not exported (the JSON export, later, is the lossless one
++//! that includes them).
++
++use std::fs;
++use std::path::{Path, PathBuf};
++
++use crate::entries::ListQuery;
++use crate::error::{Error, Result};
++use crate::folder::Vault;
++
++/// What an export wrote.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct ExportReport {
++    pub entries: usize,
++    pub attachments: usize,
++    pub dir: PathBuf,
++}
++
++impl Vault {
++    /// Writes every live entry as a Markdown file with YAML front matter,
++    /// and every attachment as a decrypted file in `assets/`.
++    ///
++    /// `out_dir` must be missing or empty — the same rule as creating a
++    /// vault — so an export can never overwrite the user's files.
++    /// Links in the text are rewritten: `attachment:<id>` becomes
++    /// `assets/<id>-<name>`, so the export opens in any Markdown reader.
++    pub fn export_markdown(&self, out_dir: &Path) -> Result<ExportReport> {
++        prepare_out_dir(out_dir)?;
++        let mut report = ExportReport {
++            entries: 0,
++            attachments: 0,
++            dir: out_dir.to_path_buf(),
++        };
++
++        // Summaries come paged; the full text is then loaded entry by entry.
++        let mut ids: Vec<String> = Vec::new();
++        let mut after = None;
++        loop {
++            let page = self.list_entries(&ListQuery {
++                limit: 200,
++                after: after.clone(),
++                tag: None,
++            })?;
++            ids.extend(page.items.iter().map(|item| item.id.clone()));
++            match page.next {
++                Some(cursor) => after = Some(cursor),
++                None => break,
++            }
++        }
++
++        for id in &ids {
++            let entry = self.get_entry(id)?;
++            let attachments = self.list_attachments(id)?;
++
++            let mut body = entry.body_md.clone();
++            for att in &attachments {
++                let file_name = format!("{}-{}", att.id, att.name);
++                let assets = out_dir.join("assets");
++                fs::create_dir_all(&assets)?;
++                fs::write(assets.join(&file_name), self.read_attachment(&att.id)?)?;
++                body = body.replace(
++                    &format!("attachment:{}", att.id),
++                    &format!("assets/{file_name}"),
++                );
++                report.attachments += 1;
++            }
++
++            let year_dir = out_dir.join(&entry.entry_date[..4]);
++            fs::create_dir_all(&year_dir)?;
++            let short_id = &entry.id[..8];
++            let file = year_dir.join(format!(
++                "{}-{}-{short_id}.md",
++                entry.entry_date,
++                slug(entry.title.as_deref())
++            ));
++            fs::write(&file, render_entry(&entry, &body))?;
++            report.entries += 1;
++        }
++        Ok(report)
++    }
++}
++
++fn prepare_out_dir(dir: &Path) -> Result<()> {
++    if dir.exists() {
++        let has_content = fs::read_dir(dir)?
++            .filter_map(|entry| entry.ok())
++            .any(|entry| entry.file_name() != ".DS_Store");
++        if has_content {
++            return Err(Error::FolderNotEmpty);
++        }
++    } else {
++        fs::create_dir_all(dir)?;
++    }
++    Ok(())
++}
++
++/// One exported file: front matter, then the entry text as stored.
++fn render_entry(entry: &crate::entries::Entry, body: &str) -> String {
++    let mut out = String::from("---\n");
++    out.push_str(&format!("id: {}\n", entry.id));
++    if let Some(title) = &entry.title {
++        out.push_str(&format!("title: {}\n", yaml_string(title)));
++    }
++    out.push_str(&format!("created: {}\n", iso_utc(entry.created_at)));
++    out.push_str(&format!("updated: {}\n", iso_utc(entry.updated_at)));
++    if entry.tags.is_empty() {
++        out.push_str("tags: []\n");
++    } else {
++        let tags: Vec<String> = entry.tags.iter().map(|t| yaml_string(t)).collect();
++        out.push_str(&format!("tags: [{}]\n", tags.join(", ")));
++    }
++    if let Some(mood) = entry.mood {
++        out.push_str(&format!("mood: {mood}\n"));
++    }
++    out.push_str("---\n\n");
++    out.push_str(body);
++    if !body.ends_with('\n') {
++        out.push('\n');
++    }
++    out
++}
++
++/// A YAML double-quoted string: backslash and quote are escaped, control
++/// characters cannot appear (titles and tags were checked on the way in,
++/// but a title is free text, so newlines are folded to spaces).
++fn yaml_string(text: &str) -> String {
++    let mut out = String::from("\"");
++    for ch in text.chars() {
++        match ch {
++            '"' => out.push_str("\\\""),
++            '\\' => out.push_str("\\\\"),
++            '\n' | '\r' => out.push(' '),
++            ch => out.push(ch),
++        }
++    }
++    out.push('"');
++    out
++}
++
++/// A file-name version of the title: letters and digits (any alphabet) are
++/// kept and lowered, everything else becomes one dash. At most 40 chars.
++fn slug(title: Option<&str>) -> String {
++    let mut out = String::new();
++    let mut last_was_dash = true; // also trims a leading dash
++    for ch in title.unwrap_or("").chars().flat_map(|c| c.to_lowercase()) {
++        if ch.is_alphanumeric() {
++            out.push(ch);
++            last_was_dash = false;
++        } else if !last_was_dash {
++            out.push('-');
++            last_was_dash = true;
++        }
++        if out.chars().count() >= 40 {
++            break;
++        }
++    }
++    let trimmed = out.trim_end_matches('-');
++    if trimmed.is_empty() {
++        "entry".to_string()
++    } else {
++        trimmed.to_string()
++    }
++}
++
++/// Milliseconds since 1970 -> `2026-10-13T07:31:03Z` (UTC).
++/// No date crate: the civil calendar math below is the standard
++/// days-from-epoch conversion, checked by the tests.
++pub(crate) fn iso_utc(ms: i64) -> String {
++    let days = ms.div_euclid(86_400_000);
++    let day_ms = ms.rem_euclid(86_400_000);
++    let (y, m, d) = civil_from_days(days);
++    format!(
++        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
++        day_ms / 3_600_000,
++        day_ms / 60_000 % 60,
++        day_ms / 1_000 % 60
++    )
++}
++
++/// (year, month, day) for a count of days since 1970-01-01.
++/// Howard Hinnant's `civil_from_days` algorithm.
++fn civil_from_days(z: i64) -> (i64, u32, u32) {
++    let z = z + 719_468;
++    let era = z.div_euclid(146_097);
++    let doe = z.rem_euclid(146_097); // day of era, [0, 146096]
++    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // year of era, [0, 399]
++    let y = yoe + era * 400;
++    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of year, [0, 365]
++    let mp = (5 * doy + 2) / 153; // month index, [0, 11]
++    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
++    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
++    (if m <= 2 { y + 1 } else { y }, m, d)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::crypto::KdfParams;
++    use crate::entries::EntryDraft;
++    use tempfile::TempDir;
++
++    fn fast() -> KdfParams {
++        KdfParams {
++            m_kib: 8,
++            t: 1,
++            p: 1,
++        }
++    }
++
++    fn new_vault() -> (TempDir, Vault) {
++        let tmp = TempDir::new().unwrap();
++        let (vault, _recovery) =
++            Vault::create(&tmp.path().join("v"), "pass phrase", fast()).unwrap();
++        (tmp, vault)
++    }
++
++    fn draft(date: &str, title: &str, body: &str) -> EntryDraft {
++        EntryDraft {
++            entry_date: date.into(),
++            title: Some(title.into()),
++            body_md: body.into(),
++            ..Default::default()
++        }
++    }
++
++    #[test]
++    fn iso_dates_are_right() {
++        assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
++        assert_eq!(iso_utc(86_400_000), "1970-01-02T00:00:00Z");
++        assert_eq!(iso_utc(951_782_400_000), "2000-02-29T00:00:00Z"); // leap day
++        assert_eq!(iso_utc(1_762_000_000_000), "2025-11-01T12:26:40Z");
++        assert_eq!(iso_utc(-1), "1969-12-31T23:59:59Z");
++    }
++
++    #[test]
++    fn slugs_are_file_name_safe() {
++        assert_eq!(slug(Some("Мой День!")), "мой-день");
++        assert_eq!(slug(Some("  Hello,  World ")), "hello-world");
++        assert_eq!(slug(Some("!!!")), "entry");
++        assert_eq!(slug(None), "entry");
++        assert_eq!(slug(Some(&"а".repeat(100))).chars().count(), 40);
++    }
++
++    #[test]
++    fn an_export_has_front_matter_text_and_assets() {
++        let (_tmp, mut vault) = new_vault();
++        let mut d = draft(
++            "2026-10-11",
++            "Воскресенье",
++            "Фото дня: ![утро](attachment:PLACEHOLDER)",
++        );
++        let entry = vault.create_entry(&d).unwrap();
++        let att = vault
++            .add_attachment(&entry.id, "morning.jpg", "image/jpeg", b"jpeg bytes")
++            .unwrap();
++        // Put the real attachment id into the text, as the editor would.
++        d.body_md = d.body_md.replace("PLACEHOLDER", &att.id);
++        d.tags = vec!["идеи".into()];
++        let entry = vault.update_entry(&entry.id, &d).unwrap();
++
++        let out = _tmp.path().join("export");
++        let report = vault.export_markdown(&out).unwrap();
++        assert_eq!((report.entries, report.attachments), (1, 1));
++
++        let file = out
++            .join("2026")
++            .join(format!(
++                "2026-10-11-воскресенье-{}.md",
++                &entry.id[..8]
++            ));
++        let text = fs::read_to_string(&file).unwrap();
++        assert!(text.starts_with("---\n"));
++        assert!(text.contains(&format!("id: {}", entry.id)));
++        assert!(text.contains("title: \"Воскресенье\""));
++        assert!(text.contains("tags: [\"идеи\"]"));
++        assert!(text.contains("created: 20")); // an ISO date, not a number
++        // The link now points at the exported file…
++        let asset_name = format!("{}-morning.jpg", att.id);
++        assert!(text.contains(&format!("![утро](assets/{asset_name})")));
++        assert!(!text.contains("attachment:"));
++        // …and the asset is the decrypted content.
++        assert_eq!(fs::read(out.join("assets").join(asset_name)).unwrap(), b"jpeg bytes");
++    }
++
++    #[test]
++    fn deleted_entries_are_not_exported() {
++        let (_tmp, mut vault) = new_vault();
++        let keep = vault.create_entry(&draft("2026-10-01", "keep", "k")).unwrap();
++        let gone = vault.create_entry(&draft("2026-10-02", "gone", "g")).unwrap();
++        vault.delete_entry(&gone.id).unwrap();
++
++        let out = _tmp.path().join("export");
++        let report = vault.export_markdown(&out).unwrap();
++        assert_eq!(report.entries, 1);
++        let names: Vec<String> = fs::read_dir(out.join("2026"))
++            .unwrap()
++            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
++            .collect();
++        assert_eq!(names.len(), 1);
++        assert!(names[0].contains(&keep.id[..8]));
++    }
++
++    #[test]
++    fn export_refuses_a_folder_that_is_not_empty() {
++        let (_tmp, vault) = new_vault();
++        let out = _tmp.path().join("export");
++        fs::create_dir_all(&out).unwrap();
++        fs::write(out.join("mine.txt"), b"precious").unwrap();
++        assert!(matches!(
++            vault.export_markdown(&out),
++            Err(Error::FolderNotEmpty)
++        ));
++        assert_eq!(fs::read(out.join("mine.txt")).unwrap(), b"precious");
++    }
++
++    #[test]
++    fn an_empty_vault_exports_to_an_empty_folder() {
++        let (_tmp, vault) = new_vault();
++        let out = _tmp.path().join("export");
++        let report = vault.export_markdown(&out).unwrap();
++        assert_eq!((report.entries, report.attachments), (0, 0));
++        assert!(out.exists());
++    }
++}
+diff --git a/crates/soirvu-core/src/lib.rs b/crates/soirvu-core/src/lib.rs
+index 4848382..5a8e88c 100644
+--- a/crates/soirvu-core/src/lib.rs
++++ b/crates/soirvu-core/src/lib.rs
+@@ -2,9 +2,11 @@ pub mod attachments;
+ pub mod crypto;
+ pub mod entries;
+ pub mod error;
++pub mod export;
+ pub mod folder;
+ pub mod storage;
+ pub mod vault;
++pub mod verify;
+ 
+ pub use error::{Error, Result};
+ pub use folder::Vault;
+diff --git a/crates/soirvu-core/src/verify.rs b/crates/soirvu-core/src/verify.rs
+new file mode 100644
+index 0000000..eedb4c0
+--- /dev/null
++++ b/crates/soirvu-core/src/verify.rs
+@@ -0,0 +1,201 @@
++//! Vault verification: is everything that should be there really there,
++//! and does it all still decrypt?
++//!
++//! Used by `soirvu-cli verify` and meant for a future "check my vault"
++//! button. It reads a lot and writes nothing. Problems are collected, not
++//! stopped at: a damaged vault should give the full list in one run.
++
++use crate::attachments::blob_path;
++use crate::error::Result;
++use crate::folder::Vault;
++
++/// The result of checking a vault. `problems` empty means healthy.
++/// Problem texts name ids, never diary content.
++#[derive(Debug, Clone, Default, PartialEq, Eq)]
++pub struct VerifyReport {
++    pub entries: i64,
++    pub tombstones: i64,
++    pub attachments: i64,
++    pub attachment_bytes: i64,
++    pub problems: Vec<String>,
++}
++
++impl VerifyReport {
++    pub fn ok(&self) -> bool {
++        self.problems.is_empty()
++    }
++}
++
++impl Vault {
++    /// Checks, in order:
++    /// 1. the database itself (`integrity_check`, `cipher_integrity_check`);
++    /// 2. the search index against the entry table (FTS5 `integrity-check`);
++    /// 3. every live attachment: its blob file exists and `read_attachment`
++    ///    verifies every chunk and the stored SHA-256.
++    pub fn verify(&self) -> Result<VerifyReport> {
++        let conn = self.db.connection();
++        let mut report = VerifyReport {
++            entries: conn.query_row(
++                "SELECT count(*) FROM entry WHERE deleted_at IS NULL",
++                [],
++                |r| r.get(0),
++            )?,
++            tombstones: conn.query_row(
++                "SELECT count(*) FROM entry WHERE deleted_at IS NOT NULL",
++                [],
++                |r| r.get(0),
++            )?,
++            attachments: conn.query_row(
++                "SELECT count(*) FROM attachment WHERE deleted_at IS NULL",
++                [],
++                |r| r.get(0),
++            )?,
++            attachment_bytes: conn
++                .query_row(
++                    "SELECT sum(size) FROM attachment WHERE deleted_at IS NULL",
++                    [],
++                    |r| r.get::<_, Option<i64>>(0),
++                )?
++                .unwrap_or(0),
++            problems: Vec::new(),
++        };
++
++        // 1. Database pages.
++        for pragma in ["integrity_check", "cipher_integrity_check"] {
++            let mut stmt = conn.prepare(&format!("PRAGMA {pragma}"))?;
++            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
++            for row in rows {
++                let text = row?;
++                // A healthy database answers "ok" (integrity_check) or
++                // nothing at all (cipher_integrity_check). Anything else
++                // is a problem line.
++                if text != "ok" {
++                    report.problems.push(format!("{pragma}: {text}"));
++                }
++            }
++        }
++
++        // 2. Search index.
++        if conn
++            .execute(
++                "INSERT INTO entry_fts(entry_fts, rank) VALUES ('integrity-check', 1)",
++                [],
++            )
++            .is_err()
++        {
++            report
++                .problems
++                .push("the search index does not match the entry table".to_string());
++        }
++
++        // 3. Attachments.
++        let ids: Vec<String> = {
++            let mut stmt =
++                conn.prepare("SELECT id FROM attachment WHERE deleted_at IS NULL ORDER BY id")?;
++            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
++            rows.collect::<rusqlite::Result<Vec<_>>>()?
++        };
++        for id in &ids {
++            if !blob_path(self.dir(), id).exists() {
++                report
++                    .problems
++                    .push(format!("attachment {id}: blob file is missing"));
++            } else if let Err(e) = self.read_attachment(id) {
++                report.problems.push(e.to_string());
++            }
++        }
++        Ok(report)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::crypto::KdfParams;
++    use crate::entries::EntryDraft;
++    use std::fs;
++    use tempfile::TempDir;
++
++    fn fast() -> KdfParams {
++        KdfParams {
++            m_kib: 8,
++            t: 1,
++            p: 1,
++        }
++    }
++
++    fn vault_with_attachment() -> (TempDir, Vault, String) {
++        let tmp = TempDir::new().unwrap();
++        let (mut vault, _recovery) =
++            Vault::create(&tmp.path().join("v"), "pass phrase", fast()).unwrap();
++        let entry = vault
++            .create_entry(&EntryDraft {
++                entry_date: "2026-10-13".into(),
++                title: Some("День".into()),
++                body_md: "про книгу".into(),
++                ..Default::default()
++            })
++            .unwrap();
++        let att = vault
++            .add_attachment(&entry.id, "a.bin", "application/octet-stream", b"content")
++            .unwrap();
++        (tmp, vault, att.id)
++    }
++
++    #[test]
++    fn a_healthy_vault_verifies_clean() {
++        let (_tmp, mut vault, _att_id) = vault_with_attachment();
++        let gone = vault
++            .create_entry(&EntryDraft {
++                entry_date: "2026-10-12".into(),
++                body_md: "gone".into(),
++                ..Default::default()
++            })
++            .unwrap();
++        vault.delete_entry(&gone.id).unwrap();
++
++        let report = vault.verify().unwrap();
++        assert!(report.ok(), "problems: {:?}", report.problems);
++        assert_eq!(report.entries, 1);
++        assert_eq!(report.tombstones, 1);
++        assert_eq!(report.attachments, 1);
++        assert_eq!(report.attachment_bytes, 7);
++    }
++
++    #[test]
++    fn a_tampered_blob_is_reported_not_hidden() {
++        let (_tmp, vault, att_id) = vault_with_attachment();
++        let path = blob_path(vault.dir(), &att_id);
++        let mut bytes = fs::read(&path).unwrap();
++        let last = bytes.len() - 1;
++        bytes[last] ^= 0x01;
++        fs::write(&path, bytes).unwrap();
++
++        let report = vault.verify().unwrap();
++        assert!(!report.ok());
++        assert_eq!(report.problems.len(), 1);
++        assert!(report.problems[0].contains(&att_id), "{:?}", report.problems);
++        // The counts are still reported alongside the problem.
++        assert_eq!(report.attachments, 1);
++    }
++
++    #[test]
++    fn a_missing_blob_is_reported() {
++        let (_tmp, vault, att_id) = vault_with_attachment();
++        fs::remove_file(blob_path(vault.dir(), &att_id)).unwrap();
++
++        let report = vault.verify().unwrap();
++        assert!(!report.ok());
++        assert_eq!(report.problems.len(), 1);
++        assert!(report.problems[0].contains("missing"), "{:?}", report.problems);
++    }
++
++    #[test]
++    fn an_empty_vault_verifies_clean() {
++        let tmp = TempDir::new().unwrap();
++        let (vault, _recovery) = Vault::create(&tmp.path().join("v"), "pass phrase", fast()).unwrap();
++        let report = vault.verify().unwrap();
++        assert!(report.ok(), "problems: {:?}", report.problems);
++        assert_eq!((report.entries, report.attachments), (0, 0));
++    }
++}
