@@ -342,6 +342,94 @@ impl Vault {
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
+
+    /// Renames a tag on every live entry that uses it, and returns how many entries
+    /// that was.
+    ///
+    /// - Only the capitalization or spelling of the same tag may change freely
+    ///   («работа» to «Работа»). Any other new name must not belong to a different
+    ///   tag that is in use; that would silently merge two tags, so it is refused
+    ///   with `TagExists` and the caller has to call `merge_tags` on purpose.
+    /// - The tag set belongs to the entry, so each changed entry gets a new `rev`,
+    ///   `updated_at`, `device_id` and its own `lseq`, exactly like `update_entry`.
+    ///   Without this, sync would never learn about the change. Tombstoned
+    ///   entries have no tags and are not touched.
+    /// - Renaming a tag to the name it already has changes nothing and returns 0.
+    /// - A tag that no live entry uses does not exist as far as this method is
+    ///   concerned (`TagNotFound`), and a leftover row of such a tag never blocks
+    ///   a new name.
+    pub fn rename_tag(&mut self, from: &str, to: &str) -> Result<usize> {
+        let (_, from_key) = normalize_tag(from)?;
+        let (to_name, to_key) = normalize_tag(to)?;
+        let device = self.device_id.clone();
+
+        let tx = self.db.conn_mut().transaction()?;
+        let source = find_used_tag(&tx, &from_key)?.ok_or(Error::TagNotFound)?;
+        if to_key == from_key {
+            if to_name == source.name {
+                return Ok(0);
+            }
+        } else {
+            if find_used_tag(&tx, &to_key)?.is_some() {
+                return Err(Error::TagExists);
+            }
+            // The name may still be held by the row of a tag nobody uses any more
+            // (no entry, live or tombstoned, links to it), which is invisible to
+            // callers. Remove it so that the unique key is free.
+            tx.execute("DELETE FROM tag WHERE name_key = ?1", [&to_key])?;
+        }
+        tx.execute(
+            "UPDATE tag SET name = ?1, name_key = ?2 WHERE id = ?3",
+            params![to_name, to_key, source.id],
+        )?;
+        let rids = live_entries_with_tag(&tx, source.id)?;
+        bump_entries(&tx, &rids, &device)?;
+        tx.commit()?;
+        Ok(rids.len())
+    }
+
+    /// Replaces the tag `from` by the tag `into` on every live entry that has
+    /// `from`, deletes `from`, and returns how many entries that was.
+    ///
+    /// - Both tags must be in use (`TagNotFound` otherwise) and must be different
+    ///   tags (`InvalidInput` otherwise: «Работа» and «работа» are one tag).
+    /// - `into` keeps its own spelling.
+    /// - An entry that already has both ends up with `into` once. Its tag set
+    ///   still changed (it lost `from`), so it is counted and gets a new revision
+    ///   like all the others: see `rename_tag` for what that means.
+    pub fn merge_tags(&mut self, from: &str, into: &str) -> Result<usize> {
+        let (_, from_key) = normalize_tag(from)?;
+        let (_, into_key) = normalize_tag(into)?;
+        if from_key == into_key {
+            return Err(Error::InvalidInput(
+                "a tag cannot be merged into itself".into(),
+            ));
+        }
+        let device = self.device_id.clone();
+
+        let tx = self.db.conn_mut().transaction()?;
+        let source = find_used_tag(&tx, &from_key)?.ok_or(Error::TagNotFound)?;
+        let target = find_used_tag(&tx, &into_key)?.ok_or(Error::TagNotFound)?;
+        let rids = live_entries_with_tag(&tx, source.id)?;
+
+        // Entries that have both tags only lose `from`; the others get `into` in
+        // its place. Doing the first step first keeps the primary key
+        // (entry_rid, tag_id) from ever seeing a duplicate.
+        tx.execute(
+            "DELETE FROM entry_tag
+              WHERE tag_id = ?1
+                AND entry_rid IN (SELECT entry_rid FROM entry_tag WHERE tag_id = ?2)",
+            params![source.id, target.id],
+        )?;
+        tx.execute(
+            "UPDATE entry_tag SET tag_id = ?2 WHERE tag_id = ?1",
+            params![source.id, target.id],
+        )?;
+        tx.execute("DELETE FROM tag WHERE id = ?1", [source.id])?;
+        bump_entries(&tx, &rids, &device)?;
+        tx.commit()?;
+        Ok(rids.len())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +487,69 @@ fn next_lseq(tx: &Transaction) -> Result<i64> {
         [],
         |row| row.get(0),
     )?)
+}
+
+/// A tag as the public API sees it.
+struct UsedTag {
+    id: i64,
+    name: String,
+}
+
+/// Finds a tag by its key, but only if at least one live entry uses it. A tag
+/// nobody uses stays in the table (see `list_tags`) yet does not exist for callers.
+fn find_used_tag(tx: &Transaction, key: &str) -> Result<Option<UsedTag>> {
+    let found = tx.query_row(
+        "SELECT t.id, t.name FROM tag t
+          WHERE t.name_key = ?1
+            AND EXISTS (SELECT 1 FROM entry_tag et JOIN entry e ON e.rid = et.entry_rid
+                         WHERE et.tag_id = t.id AND e.deleted_at IS NULL)",
+        [key],
+        |row| {
+            Ok(UsedTag {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        },
+    );
+    match found {
+        Ok(tag) => Ok(Some(tag)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(other) => Err(other.into()),
+    }
+}
+
+/// Row ids of the live entries that carry this tag, in creation order, so that
+/// the change counter is assigned in a predictable order.
+fn live_entries_with_tag(tx: &Transaction, tag_id: i64) -> Result<Vec<i64>> {
+    let mut stmt = tx.prepare(
+        "SELECT e.rid FROM entry_tag et JOIN entry e ON e.rid = et.entry_rid
+          WHERE et.tag_id = ?1 AND e.deleted_at IS NULL
+          ORDER BY e.rid",
+    )?;
+    let rids = stmt
+        .query_map([tag_id], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<i64>>>()?;
+    Ok(rids)
+}
+
+/// Records "this entry changed" for entries whose tag set was changed by a
+/// tag-wide operation: new `rev`, `updated_at` (never backwards), `device_id`,
+/// and a change counter of its own for each entry, so that a reader paging by
+/// `lseq` can never split a group of entries that share one value.
+/// Title, text and mood are not touched, so the search index is not either.
+fn bump_entries(tx: &Transaction, rids: &[i64], device: &str) -> Result<()> {
+    let now = now_ms();
+    for rid in rids {
+        let lseq = next_lseq(tx)?;
+        tx.execute(
+            "UPDATE entry
+                SET updated_at = max(?1, updated_at + 1), rev = rev + 1,
+                    device_id = ?2, lseq = ?3
+              WHERE rid = ?4 AND deleted_at IS NULL",
+            params![now, device, lseq, rid],
+        )?;
+    }
+    Ok(())
 }
 
 /// Makes the entry's tag set exactly `tags`, creating tags that do not exist yet.
@@ -1162,5 +1313,511 @@ mod tests {
         );
         // Only the 10 untouched entries still contain «книгу».
         assert_eq!(vault.search("книгу", 200).unwrap().len(), 10);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tag rename and merge
+    // -----------------------------------------------------------------------
+
+    type RowMeta = (i64, i64, i64, String, Option<i64>);
+
+    /// (rev, updated_at, lseq, device_id, deleted_at) straight from the table,
+    /// so that tombstones can be inspected too.
+    fn row_meta(vault: &Vault, id: &str) -> RowMeta {
+        vault
+            .database()
+            .connection()
+            .query_row(
+                "SELECT rev, updated_at, lseq, device_id, deleted_at FROM entry WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap()
+    }
+
+    /// Every name in the tag table, used or not, ordered by key.
+    fn tag_rows(vault: &Vault) -> Vec<String> {
+        let conn = vault.database().connection();
+        let mut stmt = conn
+            .prepare("SELECT name FROM tag ORDER BY name_key")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<String>>>()
+            .unwrap()
+    }
+
+    fn tag_filter(name: &str) -> ListQuery {
+        ListQuery {
+            tag: Some(name.into()),
+            ..Default::default()
+        }
+    }
+
+    fn tc(name: &str, entries: i64) -> TagCount {
+        TagCount {
+            name: name.into(),
+            entries,
+        }
+    }
+
+    #[test]
+    fn renaming_a_tag_changes_it_on_every_entry_that_uses_it() {
+        let (_tmp, mut vault) = new_vault();
+        let a = vault
+            .create_entry(&tagged(draft("2026-10-01", "a", "a"), &["Работа", "идеи"]))
+            .unwrap();
+        let b = vault
+            .create_entry(&tagged(draft("2026-10-02", "b", "b"), &["работа"]))
+            .unwrap();
+        let c = vault
+            .create_entry(&tagged(draft("2026-10-03", "c", "c"), &["идеи"]))
+            .unwrap();
+
+        // The old name is found ignoring case, the new one is trimmed.
+        assert_eq!(vault.rename_tag("РАБОТА", "  Дело ").unwrap(), 2);
+
+        assert_eq!(vault.get_entry(&a.id).unwrap().tags, ["Дело", "идеи"]);
+        assert_eq!(vault.get_entry(&b.id).unwrap().tags, ["Дело"]);
+        assert_eq!(vault.get_entry(&c.id).unwrap().tags, ["идеи"]);
+        assert_eq!(vault.list_tags().unwrap(), [tc("Дело", 2), tc("идеи", 2)]);
+        assert_eq!(tag_rows(&vault), ["Дело", "идеи"]);
+        assert_eq!(
+            vault.list_entries(&tag_filter("дело")).unwrap().items.len(),
+            2
+        );
+        assert!(
+            vault
+                .list_entries(&tag_filter("работа"))
+                .unwrap()
+                .items
+                .is_empty()
+        );
+
+        // Nothing but the tag changed.
+        let a_now = vault.get_entry(&a.id).unwrap();
+        assert_eq!(a_now.title, a.title);
+        assert_eq!(a_now.body_md, a.body_md);
+        assert_eq!(a_now.entry_date, a.entry_date);
+        assert_eq!(a_now.created_at, a.created_at);
+    }
+
+    #[test]
+    fn a_rename_makes_a_new_revision_of_exactly_the_entries_it_changes() {
+        let (_tmp, mut vault) = new_vault();
+        let a = vault
+            .create_entry(&tagged(draft("2026-10-01", "a", "a"), &["x"]))
+            .unwrap();
+        let b = vault
+            .create_entry(&tagged(draft("2026-10-02", "b", "b"), &["x"]))
+            .unwrap();
+        let c = vault.create_entry(&draft("2026-10-03", "c", "c")).unwrap();
+        let d = vault
+            .create_entry(&tagged(draft("2026-10-04", "d", "d"), &["y"]))
+            .unwrap();
+        let before: Vec<RowMeta> = [&a, &b, &c, &d]
+            .iter()
+            .map(|e| row_meta(&vault, &e.id))
+            .collect();
+        let counter = lseq(&vault);
+
+        assert_eq!(vault.rename_tag("x", "z").unwrap(), 2);
+
+        for (entry, old) in [(&a, &before[0]), (&b, &before[1])] {
+            let now = row_meta(&vault, &entry.id);
+            assert_eq!(now.0, old.0 + 1, "rev");
+            assert!(now.1 > old.1, "updated_at must move forward");
+            assert_eq!(now.3, vault.device_id);
+            assert!(now.2 > counter, "lseq must be newer than any earlier write");
+            assert_eq!(now.4, None);
+        }
+        // Each entry has its own change number, and the counter moved once per entry.
+        let (la, lb) = (row_meta(&vault, &a.id).2, row_meta(&vault, &b.id).2);
+        assert_ne!(la, lb);
+        assert_eq!(lseq(&vault), counter + 2);
+        assert_eq!(la.max(lb), counter + 2);
+
+        // Entries without the tag are exactly as they were.
+        assert_eq!(row_meta(&vault, &c.id), before[2]);
+        assert_eq!(row_meta(&vault, &d.id), before[3]);
+    }
+
+    #[test]
+    fn a_rename_that_only_changes_the_capitalization_is_allowed() {
+        let (_tmp, mut vault) = new_vault();
+        let a = vault
+            .create_entry(&tagged(draft("2026-10-01", "a", "a"), &["работа"]))
+            .unwrap();
+        let b = vault
+            .create_entry(&tagged(draft("2026-10-02", "b", "b"), &["работа"]))
+            .unwrap();
+        let counter = lseq(&vault);
+
+        assert_eq!(vault.rename_tag("работа", "Работа").unwrap(), 2);
+        assert_eq!(vault.get_entry(&a.id).unwrap().tags, ["Работа"]);
+        assert_eq!(vault.get_entry(&b.id).unwrap().tags, ["Работа"]);
+        assert_eq!(vault.list_tags().unwrap(), [tc("Работа", 2)]);
+        assert_eq!(tag_rows(&vault), ["Работа"]); // renamed in place, no second tag
+        // The new spelling is a change other devices must see.
+        assert_eq!(row_meta(&vault, &a.id).0, 2);
+        assert_eq!(row_meta(&vault, &b.id).0, 2);
+        assert_eq!(lseq(&vault), counter + 2);
+
+        // Saying the same thing again, in whatever case the old name is typed, is a no-op.
+        let meta = row_meta(&vault, &a.id);
+        assert_eq!(vault.rename_tag("РАБОТА", " Работа ").unwrap(), 0);
+        assert_eq!(row_meta(&vault, &a.id), meta);
+        assert_eq!(lseq(&vault), counter + 2);
+    }
+
+    #[test]
+    fn a_rename_onto_another_tag_in_use_is_refused_and_changes_nothing() {
+        let (_tmp, mut vault) = new_vault();
+        let a = vault
+            .create_entry(&tagged(draft("2026-10-01", "a", "a"), &["alpha"]))
+            .unwrap();
+        let b = vault
+            .create_entry(&tagged(draft("2026-10-02", "b", "b"), &["Beta"]))
+            .unwrap();
+        let counter = lseq(&vault);
+        let (meta_a, meta_b) = (row_meta(&vault, &a.id), row_meta(&vault, &b.id));
+
+        for target in ["Beta", "beta", " BETA "] {
+            assert!(
+                matches!(vault.rename_tag("alpha", target), Err(Error::TagExists)),
+                "target {target:?}"
+            );
+        }
+        assert_eq!(lseq(&vault), counter);
+        assert_eq!(row_meta(&vault, &a.id), meta_a);
+        assert_eq!(row_meta(&vault, &b.id), meta_b);
+        assert_eq!(tag_rows(&vault), ["alpha", "Beta"]);
+        assert_eq!(vault.get_entry(&a.id).unwrap().tags, ["alpha"]);
+    }
+
+    #[test]
+    fn a_tag_nobody_uses_cannot_be_renamed_and_does_not_block_a_name() {
+        let (_tmp, mut vault) = new_vault();
+        let a = vault
+            .create_entry(&tagged(draft("2026-10-01", "a", "a"), &["old"]))
+            .unwrap();
+        let b = vault
+            .create_entry(&tagged(draft("2026-10-02", "b", "b"), &["y"]))
+            .unwrap();
+        // Removing the tag from its only entry leaves an unused row behind (§4).
+        vault
+            .update_entry(&a.id, &draft("2026-10-01", "a", "a"))
+            .unwrap();
+        assert_eq!(tag_rows(&vault), ["old", "y"]);
+
+        assert!(matches!(
+            vault.rename_tag("old", "other"),
+            Err(Error::TagNotFound)
+        ));
+        assert!(matches!(
+            vault.merge_tags("old", "y"),
+            Err(Error::TagNotFound)
+        ));
+        assert!(matches!(
+            vault.merge_tags("y", "old"),
+            Err(Error::TagNotFound)
+        ));
+        assert_eq!(tag_rows(&vault), ["old", "y"]);
+
+        // The invisible leftover does not stand in the way of the name.
+        assert_eq!(vault.rename_tag("y", "OLD").unwrap(), 1);
+        assert_eq!(vault.get_entry(&b.id).unwrap().tags, ["OLD"]);
+        assert_eq!(tag_rows(&vault), ["OLD"]);
+    }
+
+    #[test]
+    fn unknown_and_invalid_tag_names_are_refused_and_change_nothing() {
+        let (_tmp, mut vault) = new_vault();
+        let a = vault
+            .create_entry(&tagged(draft("2026-10-01", "a", "a"), &["x"]))
+            .unwrap();
+        vault
+            .create_entry(&tagged(draft("2026-10-02", "b", "b"), &["y"]))
+            .unwrap();
+        let counter = lseq(&vault);
+        let meta = row_meta(&vault, &a.id);
+
+        assert!(matches!(
+            vault.rename_tag("nope", "z"),
+            Err(Error::TagNotFound)
+        ));
+        assert!(matches!(
+            vault.merge_tags("nope", "x"),
+            Err(Error::TagNotFound)
+        ));
+        assert!(matches!(
+            vault.merge_tags("x", "nope"),
+            Err(Error::TagNotFound)
+        ));
+        // «Работа» and «работа» are one tag, so it cannot be merged into itself.
+        for same in ["x", "X", "  x "] {
+            assert!(
+                matches!(vault.merge_tags("x", same), Err(Error::InvalidInput(_))),
+                "{same:?}"
+            );
+        }
+        let too_long = "x".repeat(65);
+        for bad in ["", "   ", "a\nb", too_long.as_str()] {
+            assert!(matches!(
+                vault.rename_tag("x", bad),
+                Err(Error::InvalidInput(_))
+            ));
+            assert!(matches!(
+                vault.rename_tag(bad, "z"),
+                Err(Error::InvalidInput(_))
+            ));
+            assert!(matches!(
+                vault.merge_tags("x", bad),
+                Err(Error::InvalidInput(_))
+            ));
+            assert!(matches!(
+                vault.merge_tags(bad, "x"),
+                Err(Error::InvalidInput(_))
+            ));
+        }
+        assert_eq!(lseq(&vault), counter);
+        assert_eq!(row_meta(&vault, &a.id), meta);
+        assert_eq!(tag_rows(&vault), ["x", "y"]);
+    }
+
+    #[test]
+    fn merging_moves_the_entries_and_removes_the_old_tag() {
+        let (_tmp, mut vault) = new_vault();
+        let a = vault
+            .create_entry(&tagged(draft("2026-10-01", "a", "a"), &["old"]))
+            .unwrap();
+        let b = vault
+            .create_entry(&tagged(draft("2026-10-02", "b", "b"), &["old", "Keep"]))
+            .unwrap();
+        let c = vault
+            .create_entry(&tagged(draft("2026-10-03", "c", "c"), &["Keep"]))
+            .unwrap();
+        let d = vault.create_entry(&draft("2026-10-04", "d", "d")).unwrap();
+        let meta_c = row_meta(&vault, &c.id);
+        let meta_d = row_meta(&vault, &d.id);
+        let counter = lseq(&vault);
+
+        assert_eq!(vault.merge_tags("OLD", "keep").unwrap(), 2);
+
+        // The target keeps its own spelling; the entry that had both has it once.
+        assert_eq!(vault.get_entry(&a.id).unwrap().tags, ["Keep"]);
+        assert_eq!(vault.get_entry(&b.id).unwrap().tags, ["Keep"]);
+        assert_eq!(vault.get_entry(&c.id).unwrap().tags, ["Keep"]);
+        assert_eq!(vault.list_tags().unwrap(), [tc("Keep", 3)]);
+        assert_eq!(tag_rows(&vault), ["Keep"]); // the old tag is gone for good
+        assert!(
+            vault
+                .list_entries(&tag_filter("old"))
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        assert_eq!(
+            vault.list_entries(&tag_filter("keep")).unwrap().items.len(),
+            3
+        );
+
+        // Both changed entries are new revisions, including the one that already had `Keep`:
+        // its tag set shrank.
+        assert_eq!(row_meta(&vault, &a.id).0, 2);
+        assert_eq!(row_meta(&vault, &b.id).0, 2);
+        let (la, lb) = (row_meta(&vault, &a.id).2, row_meta(&vault, &b.id).2);
+        assert_ne!(la, lb);
+        assert!(la > counter && lb > counter);
+        assert_eq!(lseq(&vault), counter + 2);
+        // The others were not touched.
+        assert_eq!(row_meta(&vault, &c.id), meta_c);
+        assert_eq!(row_meta(&vault, &d.id), meta_d);
+    }
+
+    #[test]
+    fn tombstoned_entries_are_never_touched_by_rename_or_merge() {
+        let (_tmp, mut vault) = new_vault();
+        let a = vault
+            .create_entry(&tagged(draft("2026-10-01", "a", "a"), &["t"]))
+            .unwrap();
+        let b = vault
+            .create_entry(&tagged(draft("2026-10-02", "секрет", "тайна"), &["t", "u"]))
+            .unwrap();
+        let c = vault
+            .create_entry(&tagged(draft("2026-10-03", "c", "c"), &["keep"]))
+            .unwrap();
+        vault.delete_entry(&b.id).unwrap();
+        let dead = row_meta(&vault, &b.id);
+        assert!(dead.4.is_some());
+        let counter = lseq(&vault);
+
+        // `u` was only ever used by the deleted entry, so the name is free.
+        assert_eq!(vault.rename_tag("t", "u").unwrap(), 1);
+        assert_eq!(row_meta(&vault, &b.id), dead);
+        assert_eq!(lseq(&vault), counter + 1);
+        assert_eq!(vault.get_entry(&a.id).unwrap().tags, ["u"]);
+
+        assert_eq!(vault.merge_tags("u", "keep").unwrap(), 1);
+        assert_eq!(row_meta(&vault, &b.id), dead);
+        assert_eq!(lseq(&vault), counter + 2);
+        assert_eq!(vault.list_tags().unwrap(), [tc("keep", 2)]);
+        assert_eq!(vault.get_entry(&c.id).unwrap().tags, ["keep"]);
+
+        // Still a scrubbed tombstone: no text, no tag links.
+        let (title, body, links): (Option<String>, Option<String>, i64) = vault
+            .database()
+            .connection()
+            .query_row(
+                "SELECT title, body_md, (SELECT count(*) FROM entry_tag WHERE entry_rid = entry.rid)
+                   FROM entry WHERE id = ?1",
+                [&b.id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((title, body, links), (None, None, 0));
+        assert!(matches!(vault.get_entry(&b.id), Err(Error::EntryNotFound)));
+    }
+
+    #[test]
+    fn a_tag_used_only_by_a_deleted_entry_does_not_exist_for_rename_or_merge() {
+        let (_tmp, mut vault) = new_vault();
+        vault
+            .create_entry(&tagged(draft("2026-10-01", "a", "a"), &["x"]))
+            .unwrap();
+        let b = vault
+            .create_entry(&tagged(draft("2026-10-02", "b", "b"), &["gone"]))
+            .unwrap();
+        vault.delete_entry(&b.id).unwrap();
+        let counter = lseq(&vault);
+
+        assert!(matches!(
+            vault.rename_tag("gone", "z"),
+            Err(Error::TagNotFound)
+        ));
+        assert!(matches!(
+            vault.merge_tags("gone", "x"),
+            Err(Error::TagNotFound)
+        ));
+        assert!(matches!(
+            vault.merge_tags("x", "gone"),
+            Err(Error::TagNotFound)
+        ));
+        assert_eq!(lseq(&vault), counter);
+    }
+
+    /// Tombstoning removes an entry's tag links, so a link from a tombstone should
+    /// never exist. If one ever appears (a bug, or a future merge from another
+    /// device), rename and merge must still treat the tombstone as not there.
+    #[test]
+    fn a_stray_tag_link_on_a_tombstone_is_ignored() {
+        let (_tmp, mut vault) = new_vault();
+        let a = vault
+            .create_entry(&tagged(draft("2026-10-01", "a", "a"), &["t"]))
+            .unwrap();
+        let b = vault
+            .create_entry(&tagged(draft("2026-10-02", "b", "b"), &["t", "only-dead"]))
+            .unwrap();
+        vault.delete_entry(&b.id).unwrap();
+        vault
+            .database()
+            .connection()
+            .execute(
+                "INSERT INTO entry_tag (entry_rid, tag_id)
+                 SELECT e.rid, t.id FROM entry e, tag t WHERE e.id = ?1",
+                [&b.id],
+            )
+            .unwrap();
+        let dead = row_meta(&vault, &b.id);
+        let counter = lseq(&vault);
+
+        // A tag whose only link comes from the tombstone is not in use.
+        assert!(matches!(
+            vault.rename_tag("only-dead", "z"),
+            Err(Error::TagNotFound)
+        ));
+        assert!(matches!(
+            vault.merge_tags("only-dead", "t"),
+            Err(Error::TagNotFound)
+        ));
+        // And the tombstone is not bumped along with the live entry.
+        assert_eq!(vault.rename_tag("t", "u").unwrap(), 1);
+        assert_eq!(row_meta(&vault, &b.id), dead);
+        assert_eq!(lseq(&vault), counter + 1);
+        assert_eq!(vault.get_entry(&a.id).unwrap().tags, ["u"]);
+    }
+
+    #[test]
+    fn a_rename_never_moves_updated_at_backwards() {
+        let (_tmp, mut vault) = new_vault();
+        let a = vault
+            .create_entry(&tagged(draft("2026-10-01", "a", "a"), &["x"]))
+            .unwrap();
+        // A clock that was once far ahead.
+        let future = now_ms() + 86_400_000;
+        vault
+            .database()
+            .connection()
+            .execute(
+                "UPDATE entry SET updated_at = ?1 WHERE id = ?2",
+                params![future, a.id],
+            )
+            .unwrap();
+
+        vault.rename_tag("x", "y").unwrap();
+        assert_eq!(row_meta(&vault, &a.id).1, future + 1);
+    }
+
+    #[test]
+    fn renaming_and_merging_leave_the_text_and_the_search_index_alone() {
+        let (_tmp, mut vault) = new_vault();
+        let a = vault
+            .create_entry(&tagged(
+                draft("2026-10-01", "Вечер", "Читала книгу."),
+                &["old"],
+            ))
+            .unwrap();
+        let b = vault
+            .create_entry(&tagged(
+                draft("2026-10-02", "Утро", "Купила книги."),
+                &["old", "other"],
+            ))
+            .unwrap();
+
+        vault.rename_tag("old", "new").unwrap();
+        vault.merge_tags("new", "other").unwrap();
+
+        for before in [&a, &b] {
+            let now = vault.get_entry(&before.id).unwrap();
+            assert_eq!(now.title, before.title);
+            assert_eq!(now.body_md, before.body_md);
+        }
+        // Newest first, both still found.
+        assert_eq!(ids(&vault.search("книг", 10).unwrap()), [&b.id, &a.id]);
+        assert_search_index_is_consistent(&vault);
+    }
+
+    #[test]
+    fn renamed_and_merged_tags_survive_locking_and_reopening() {
+        let (tmp, mut vault) = new_vault();
+        let a = vault
+            .create_entry(&tagged(draft("2026-10-01", "a", "a"), &["a1"]))
+            .unwrap();
+        let b = vault
+            .create_entry(&tagged(draft("2026-10-02", "b", "b"), &["b1", "c1"]))
+            .unwrap();
+        vault.rename_tag("a1", "A2").unwrap();
+        vault.merge_tags("b1", "c1").unwrap();
+        let (a_now, b_now) = (
+            vault.get_entry(&a.id).unwrap(),
+            vault.get_entry(&b.id).unwrap(),
+        );
+        assert_eq!((a_now.rev, b_now.rev), (2, 2));
+        vault.lock();
+
+        let reopened = Vault::open_with_passphrase(&tmp.path().join("v"), "pass phrase").unwrap();
+        assert_eq!(reopened.get_entry(&a.id).unwrap(), a_now);
+        assert_eq!(reopened.get_entry(&b.id).unwrap(), b_now);
+        assert_eq!(reopened.list_tags().unwrap(), [tc("A2", 1), tc("c1", 1)]);
     }
 }

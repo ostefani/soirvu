@@ -30,6 +30,11 @@ pub enum Error {
     /// Something the caller supplied is not acceptable (bad date, bad tag...).
     /// The message never contains diary text.
     InvalidInput(String),
+    /// No tag with this name is used by a live entry.
+    TagNotFound,
+    /// A rename would give a tag the name of a different tag that is in use.
+    /// The caller has to choose `merge_tags` on purpose.
+    TagExists,
     /// A search query has no word of at least 3 characters.
     QueryTooShort,
     /// The operating system could not give us random bytes.
@@ -53,6 +58,8 @@ impl fmt::Display for Error {
             Error::Database(e) => write!(f, "database error: {e}"),
             Error::EntryNotFound => write!(f, "entry not found"),
             Error::InvalidInput(s) => write!(f, "invalid input: {s}"),
+            Error::TagNotFound => write!(f, "tag not found"),
+            Error::TagExists => write!(f, "a tag with that name already exists"),
             Error::QueryTooShort => write!(f, "search words need at least 3 characters"),
             Error::Random(s) => write!(f, "random number generator failed: {s}"),
             Error::Json(e) => write!(f, "header JSON error: {e}"),
