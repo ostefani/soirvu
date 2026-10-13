@@ -27,6 +27,11 @@ pub enum Error {
     Database(rusqlite::Error),
     /// No (live) entry has this id.
     EntryNotFound,
+    /// No (live) attachment has this id.
+    AttachmentNotFound,
+    /// An attachment blob is missing, truncated, extended or tampered with.
+    /// The message names the attachment id, never any content.
+    CorruptAttachment(String),
     /// Something the caller supplied is not acceptable (bad date, bad tag...).
     /// The message never contains diary text.
     InvalidInput(String),
@@ -57,6 +62,8 @@ impl fmt::Display for Error {
             Error::Io(e) => write!(f, "file error: {e}"),
             Error::Database(e) => write!(f, "database error: {e}"),
             Error::EntryNotFound => write!(f, "entry not found"),
+            Error::AttachmentNotFound => write!(f, "attachment not found"),
+            Error::CorruptAttachment(s) => write!(f, "corrupt attachment: {s}"),
             Error::InvalidInput(s) => write!(f, "invalid input: {s}"),
             Error::TagNotFound => write!(f, "tag not found"),
             Error::TagExists => write!(f, "a tag with that name already exists"),

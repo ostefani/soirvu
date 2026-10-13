@@ -86,7 +86,23 @@ END;
 INSERT INTO meta (key, value) VALUES ('lseq', '0');
 ";
 
-const MIGRATIONS: &[&str] = &[MIGRATION_1_META, MIGRATION_2_ENTRIES];
+const MIGRATION_3_ATTACHMENTS: &str = "
+CREATE TABLE attachment (
+  rid        INTEGER PRIMARY KEY,
+  id         TEXT NOT NULL UNIQUE,
+  entry_id   TEXT NOT NULL REFERENCES entry(id),
+  name       TEXT NOT NULL,
+  mime       TEXT NOT NULL,
+  size       INTEGER NOT NULL,
+  sha256     BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  lseq       INTEGER NOT NULL
+);
+CREATE INDEX attachment_entry_idx ON attachment(entry_id) WHERE deleted_at IS NULL;
+";
+
+const MIGRATIONS: &[&str] = &[MIGRATION_1_META, MIGRATION_2_ENTRIES, MIGRATION_3_ATTACHMENTS];
 
 /// The schema version this build of the app understands.
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
@@ -303,7 +319,15 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let db = Database::create(&tmp.path().join("a.db"), &key(), "vid").unwrap();
         assert_eq!(user_version(&db), SCHEMA_VERSION);
-        for table in ["meta", "device", "entry", "tag", "entry_tag", "entry_fts"] {
+        for table in [
+            "meta",
+            "device",
+            "entry",
+            "tag",
+            "entry_tag",
+            "entry_fts",
+            "attachment",
+        ] {
             assert!(table_exists(&db, table), "missing table {table}");
         }
         assert_eq!(db.meta("vault_id").unwrap().as_deref(), Some("vid"));
@@ -351,6 +375,24 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn a_version_2_database_gains_the_attachment_table() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("a.db");
+        let backups = tmp.path().join("backups");
+
+        // Build a database that stops at version 2, before attachments existed.
+        let old = create_with(&path, &key(), "vid", &MIGRATIONS[..2]).unwrap();
+        assert_eq!(user_version(&old), 2);
+        assert!(!table_exists(&old, "attachment"));
+        drop(old);
+
+        let db = Database::open(&path, &key(), &backups).unwrap();
+        assert_eq!(user_version(&db), SCHEMA_VERSION);
+        assert!(table_exists(&db, "attachment"));
+        assert_eq!(backup_files(&backups).len(), 1); // pre-upgrade backup, as always
     }
 
     #[test]

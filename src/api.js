@@ -1,0 +1,234 @@
+// @ts-check
+// The only module that calls invoke() (§6.1). Every wrapper is a
+// thin, JSDoc-typed call to one Rust command. Errors arrive as
+// stable code strings ("locked", "wrong_passphrase", "tag_exists",
+// "backoff:12", ...) — the UI maps them to its own messages.
+
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+
+/**
+ * @typedef {object} VaultInfo
+ * @property {string} id
+ * @property {string} name
+ * @property {"available" | "missing" | "unlocked"} state
+ */
+
+/**
+ * @typedef {object} Picked
+ * @property {string | null} vault_id Set for mode "open"; null for "create".
+ * @property {string} name
+ */
+
+/**
+ * @typedef {object} Entry
+ * @property {string} id
+ * @property {string} entry_date "YYYY-MM-DD"
+ * @property {string | null} title
+ * @property {string} body_md
+ * @property {number | null} mood 1–5
+ * @property {string | null} tz IANA name the date is anchored to
+ * @property {string[]} tags
+ * @property {number} created_at Unix seconds
+ * @property {number} updated_at Unix seconds
+ * @property {number} rev
+ */
+
+/**
+ * @typedef {object} EntrySummary
+ * @property {string} id
+ * @property {string} entry_date
+ * @property {string | null} title
+ * @property {string} excerpt
+ * @property {number | null} mood
+ * @property {string[]} tags
+ * @property {number} updated_at
+ */
+
+/**
+ * @typedef {object} EntryDraft
+ * @property {string | null} id Null creates; a value updates.
+ * @property {string} entry_date
+ * @property {string | null} title
+ * @property {string} body_md
+ * @property {number | null} mood
+ * @property {string | null} tz
+ * @property {string[]} tags
+ */
+
+/**
+ * @typedef {object} SearchHit
+ * @property {string} id
+ * @property {string} entry_date
+ * @property {string | null} title
+ * @property {string} snippet Plain text; \u0001…\u0002 mark the matches.
+ */
+
+/**
+ * @typedef {object} Settings
+ * @property {number} lock_timeout_secs
+ * @property {boolean} strip_exif
+ * @property {{ image_mb: number, pdf_mb: number, audio_mb: number, video_mb: number }} caps
+ */
+
+// ---------------------------------------------------------------------------
+// Vault lifecycle
+
+/** @returns {Promise<VaultInfo[]>} */
+export function vaultList() {
+    return invoke("vault_list");
+}
+
+/**
+ * Opens the native folder picker (Rust-side; the path never
+ * reaches the webview). Mode "open" registers the vault found
+ * there and returns its id; mode "create" only remembers the
+ * folder for vaultCreate().
+ * @param {"open" | "create"} mode
+ * @returns {Promise<Picked | null>} Null when the user cancels.
+ */
+export function vaultPickFolder(mode) {
+    return invoke("vault_pick_folder", { mode });
+}
+
+/**
+ * Creates a vault in the folder picked with mode "create".
+ * @param {string} passphrase
+ * @returns {Promise<{ vault_id: string, recovery_key: string }>}
+ *   The recovery key is shown once and never stored by the app.
+ */
+export function vaultCreate(passphrase) {
+    return invoke("vault_create", { passphrase });
+}
+
+/**
+ * @param {string} vaultId
+ * @param {"passphrase" | "recovery"} kind
+ * @param {string} secret
+ * @returns {Promise<void>} Rejects with "wrong_passphrase" (either
+ *   secret wrong — Rust cannot tell which), "backoff:<secs>" while
+ *   the post-failure wait runs, or "storage" if the folder is gone.
+ */
+export function vaultUnlock(vaultId, kind, secret) {
+    return invoke("vault_unlock", { vaultId, kind, secret });
+}
+
+/** @returns {Promise<void>} */
+export function vaultLock() {
+    return invoke("vault_lock");
+}
+
+/**
+ * Removes a vault from the known list. Files are never touched (§3).
+ * @param {string} vaultId
+ */
+export function vaultForget(vaultId) {
+    return invoke("vault_forget", { vaultId });
+}
+
+/**
+ * Re-points a moved vault: the user picks its new folder and Rust
+ * checks the header's id matches.
+ * @param {string} vaultId
+ * @returns {Promise<boolean>} False when the user cancels.
+ */
+export function vaultRelocate(vaultId) {
+    return invoke("vault_relocate", { vaultId });
+}
+
+// ---------------------------------------------------------------------------
+// Entries, search, tags (all reject with "locked" unless Unlocked)
+
+/**
+ * @param {{ cursor?: string | null, tag?: string | null, limit?: number }} [args]
+ * @returns {Promise<{ entries: EntrySummary[], next_cursor: string | null }>}
+ */
+export function entryList(args = {}) {
+    return invoke("entry_list", {
+        cursor: args.cursor ?? null,
+        tag: args.tag ?? null,
+        limit: args.limit ?? null,
+    });
+}
+
+/**
+ * @param {string} id
+ * @returns {Promise<Entry>}
+ */
+export function entryGet(id) {
+    return invoke("entry_get", { id });
+}
+
+/**
+ * @param {EntryDraft} draft
+ * @returns {Promise<Entry>}
+ */
+export function entrySave(draft) {
+    return invoke("entry_save", { draft });
+}
+
+/** @param {string} id */
+export function entryDelete(id) {
+    return invoke("entry_delete", { id });
+}
+
+/**
+ * @param {string} query At least 3 letters for English, 2 for Russian (§4);
+ *   shorter rejects with "query_too_short".
+ * @returns {Promise<SearchHit[]>}
+ */
+export function search(query) {
+    return invoke("search", { query });
+}
+
+/** @returns {Promise<{ name: string, entries: number }[]>} */
+export function tagList() {
+    return invoke("tag_list");
+}
+
+/**
+ * @returns {Promise<number>} Entries carrying the tag afterwards.
+ *   Rejects with "tag_exists" when the target name is taken — the
+ *   UI then offers tagMerge instead (§6.1).
+ */
+export function tagRename(from, to) {
+    return invoke("tag_rename", { from, to });
+}
+
+/** @returns {Promise<number>} */
+export function tagMerge(from, into) {
+    return invoke("tag_merge", { from, into });
+}
+
+// ---------------------------------------------------------------------------
+// Misc
+
+/**
+ * Opens an https or mailto link in the default browser, after a
+ * native confirmation shown by Rust.
+ * @param {string} url
+ * @returns {Promise<boolean>} False when the user cancels.
+ */
+export function openLink(url) {
+    return invoke("open_link", { url });
+}
+
+/** @returns {Promise<Settings>} */
+export function settingsGet() {
+    return invoke("settings_get");
+}
+
+/** @param {Settings} settings */
+export function settingsSet(settings) {
+    return invoke("settings_set", { settings });
+}
+
+/**
+ * Fires whenever the lock status changes (unlock, manual lock,
+ * idle auto-lock), so the UI never polls.
+ * @param {(payload: { status: string, vault_id: string | null }) => void} cb
+ * @returns {Promise<() => void>} The unlisten function.
+ */
+export function onVaultStatus(cb) {
+    return listen("vault-status", (event) => cb(event.payload));
+}

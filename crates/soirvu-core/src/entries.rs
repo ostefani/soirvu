@@ -201,11 +201,29 @@ impl Vault {
 
     /// Deletes an entry by writing a tombstone: the row stays (so a later sync knows
     /// the entry was deleted) but title, text, mood and tags are erased.
+    /// Its attachments are tombstoned in the same transaction and their blob
+    /// files are removed after the commit, so deleted content does not stay
+    /// readable through the attachment API or on disk.
     pub fn delete_entry(&mut self, id: &str) -> Result<()> {
         let (rid, current) = load(self.db.connection(), id)?;
+        let attachment_ids: Vec<String> = {
+            let mut stmt = self.db.connection().prepare(
+                "SELECT id FROM attachment WHERE entry_id = ?1 AND deleted_at IS NULL",
+            )?;
+            let rows = stmt.query_map([id], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<String>>>()?
+        };
         let now = now_ms().max(current.updated_at + 1);
         let device = self.device_id.clone();
         let tx = self.db.conn_mut().transaction()?;
+        for attachment_id in &attachment_ids {
+            let lseq = next_lseq(&tx)?;
+            tx.execute(
+                "UPDATE attachment SET deleted_at = ?1, lseq = ?2
+                  WHERE id = ?3 AND deleted_at IS NULL",
+                params![now, lseq, attachment_id],
+            )?;
+        }
         let lseq = next_lseq(&tx)?;
         tx.execute("DELETE FROM entry_tag WHERE entry_rid = ?1", [rid])?;
         tx.execute(
@@ -216,6 +234,9 @@ impl Vault {
             params![now, device, lseq, rid],
         )?;
         tx.commit()?;
+        for attachment_id in &attachment_ids {
+            crate::attachments::remove_blob(self.dir(), attachment_id);
+        }
         Ok(())
     }
 
@@ -477,7 +498,7 @@ fn load(conn: &Connection, id: &str) -> Result<(i64, Entry)> {
 }
 
 /// The change counter: one number that goes up by one with every write in this vault.
-fn next_lseq(tx: &Transaction) -> Result<i64> {
+pub(crate) fn next_lseq(tx: &Transaction) -> Result<i64> {
     tx.execute(
         "UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'lseq'",
         [],
