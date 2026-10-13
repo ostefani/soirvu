@@ -1,0 +1,34 @@
+{
+  "attachment": {
+    "entry_id": "01a135c0-a967-769b-b473-ca487e7b80f3",
+    "id": "01a135c0-a969-743d-b99e-8427befda7e6",
+    "mime": "text/plain",
+    "name": "note.txt",
+    "sha256": "486a9db5e4011cb7a7b513e24cc2ede08c91c6ef654572eb42029b97b16bd3a4"
+  },
+  "db_schema_version": 3,
+  "entries": [
+    {
+      "entry_date": "2026-01-02",
+      "id": "01a135c0-a967-769b-b473-ca487e7b80f3",
+      "title": "Golden entry — утро"
+    },
+    {
+      "entry_date": "2026-01-01",
+      "id": "01a135c0-a96b-74ab-a0c0-5b637f0227cd",
+      "title": "Second"
+    }
+  ],
+  "fixture": "golden-v1",
+  "header_format_version": 1,
+  "kdf": {
+    "m_kib": 65536,
+    "p": 1,
+    "t": 3
+  },
+  "note": "Fixture secrets are public on purpose. Never use this passphrase for a real vault.",
+  "passphrase": "golden fixture passphrase",
+  "recovery_key": "UI5H-6YX5-QBIU-FDES-NTDL-5CR2-T7SK-QZCD-4OV7-TUES-RAPE-B7KR-2AAQ",
+  "tombstone_id": "01a135c0-a96c-709d-b640-fd2962712f60",
+  "vault_id": "cbc72480df60e006146b5134e58c1664"
+}

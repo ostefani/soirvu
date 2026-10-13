@@ -1,0 +1,6 @@
+# Golden fixture files are byte-exact snapshots (an encrypted database,
+# encrypted blobs). Git must treat every file here as binary: encoded
+# patches, no line-ending conversion, ever. A blob whose ciphertext
+# happens to contain no NUL byte is otherwise misread as "text" — and
+# raw bytes carried as text do not survive transport unchanged.
+* binary

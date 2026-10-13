@@ -3203,6 +3203,10 @@ dependencies = [
 [[package]]
 name = "soirvu-cli"
 version = "0.1.0"
+dependencies = [
+ "soirvu-core",
+ "tempfile",
+]
 
 [[package]]
 name = "soirvu-core"
