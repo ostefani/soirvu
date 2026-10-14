@@ -1,8 +1,8 @@
 [package]
 name = "soirvu"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Soirvu - an encrypted personal diary"
+authors = ["Olha Stefanishyna"]
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -21,5 +21,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = { version = "1", features = ["sync", "time"] }
+zeroize = "1"
 
 soirvu-core = { path = "../crates/soirvu-core" }
+tauri-plugin-dialog = "2"
+
+[dev-dependencies]
+tempfile = "3"

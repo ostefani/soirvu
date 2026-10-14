@@ -1,36 +1,39 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
-  "productName": "soirvu",
-  "version": "0.1.0",
-  "identifier": "dev.ostefani.soirvu",
-  "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
-    "devUrl": "http://localhost:5173",
-    "frontendDist": "../dist"
-  },
-  "app": {
-    "withGlobalTauri": true,
-    "windows": [
-      {
-        "title": "",
-        "width": 800,
-        "height": 600
-      }
-    ],
-    "security": {
-      "csp": null
+    "$schema": "https://schema.tauri.app/config/2",
+    "productName": "soirvu",
+    "version": "0.1.0",
+    "identifier": "dev.ostefani.soirvu",
+    "build": {
+        "beforeDevCommand": "npm run dev",
+        "beforeBuildCommand": "npm run build",
+        "devUrl": "http://localhost:5173",
+        "frontendDist": "../dist"
+    },
+    "app": {
+        "withGlobalTauri": true,
+        "windows": [
+            {
+                "title": "",
+                "width": 800,
+                "height": 600
+            }
+        ],
+        "security": {
+            "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' soirvu-asset:; media-src soirvu-asset:; connect-src ipc: http://ipc.localhost",
+            "devCsp": "default-src 'self' http://localhost:5173; script-src 'self' http://localhost:5173 'unsafe-inline' 'unsafe-eval'; style-src 'self' http://localhost:5173 'unsafe-inline'; img-src 'self' soirvu-asset: data: blob:; connect-src ipc: http://ipc.localhost http://localhost:5173 ws://localhost:5173"
+        }
+    },
+    "bundle": {
+        "active": true,
+        "targets": "all",
+        "category": "Productivity",
+        "shortDescription": "An encrypted personal diary",
+        "icon": [
+            "icons/32x32.png",
+            "icons/128x128.png",
+            "icons/128x128@2x.png",
+            "icons/icon.icns",
+            "icons/icon.ico"
+        ]
     }
-  },
-  "bundle": {
-    "active": true,
-    "targets": "all",
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
-    ]
-  }
 }

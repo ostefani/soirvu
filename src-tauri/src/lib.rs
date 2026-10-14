@@ -1,13 +1,86 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+//! Soirvu's Tauri shell: a thin bridge between the webview and
+//! soirvu-core. All diary logic lives in the core; this crate owns
+//! the lock state machine, the command surface (§6.1) and the
+//! security configuration (§6.3).
+
+mod commands;
+mod error;
+mod platform;
+mod state;
+
+use std::time::Duration;
+
+use tauri::{Emitter, Manager};
+
+use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![greet])
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            // App config (§3): ~/Library/Application Support/Soirvu/
+            let config_dir = app.path().config_dir()?.join("Soirvu");
+            app.manage(AppState::load(config_dir));
+
+            // The main window is built in code, not in
+            // tauri.conf.json: the navigation guard attaches here,
+            // and this is where the non-persistent data store will
+            // be set once spike 5 confirms the option (§6.3).
+            let window = tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::App("index.html".into()),
+            )
+            .title("Soirvu")
+            .inner_size(1100.0, 760.0)
+            .min_inner_size(720.0, 480.0)
+            .on_navigation(|url| {
+                // Only the app's own pages may load. Anything else
+                // is blocked; content links go through open_link.
+                url.scheme() == "tauri"
+                    || (url.scheme() == "http"
+                        && matches!(url.host_str(), Some("localhost" | "127.0.0.1")))
+            })
+            .build()?;
+            let _ = window.set_focus();
+
+            // Idle auto-lock (§6.2): every 5 s, ask the state; on
+            // expiry, lock and tell the UI.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    let state = handle.state::<AppState>();
+                    if state.idle_expired() {
+                        state.lock();
+                        commands::emit_status(&handle, &state);
+                        let _ = handle.emit("vault-locked", "idle");
+                    }
+                }
+            });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::vault::vault_list,
+            commands::vault::vault_pick_folder,
+            commands::vault::vault_create,
+            commands::vault::vault_unlock,
+            commands::vault::vault_lock,
+            commands::vault::vault_forget,
+            commands::vault::vault_relocate,
+            commands::entries::entry_list,
+            commands::entries::entry_get,
+            commands::entries::entry_save,
+            commands::entries::entry_delete,
+            commands::entries::search,
+            commands::entries::tag_list,
+            commands::entries::tag_rename,
+            commands::entries::tag_merge,
+            commands::misc::open_link,
+            commands::misc::settings_get,
+            commands::misc::settings_set,
+        ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .expect("error while running Soirvu");
 }

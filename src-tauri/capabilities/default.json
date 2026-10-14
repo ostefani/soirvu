@@ -1,7 +1,7 @@
 {
     "$schema": "../gen/schemas/desktop-schema.json",
+    "description": "The main window gets Tauri core defaults only. No plugin permissions: no fs, no shell, no http, no opener, no dialog. The app's own commands are restricted in build.rs via AppManifest.",
     "identifier": "default",
-    "description": "Capability for the main window",
     "windows": [
         "main"
     ],

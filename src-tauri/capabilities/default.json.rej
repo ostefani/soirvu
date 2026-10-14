@@ -1,0 +1,14 @@
+diff a/src-tauri/capabilities/default.json b/src-tauri/capabilities/default.json	(rejected hunks)
+@@ -1,10 +1 @@
+-{
+-  "$schema": "../gen/schemas/desktop-schema.json",
+-  "identifier": "default",
+-  "description": "Capability for the main window",
+-  "windows": ["main"],
+-  "permissions": [
+-    "core:default",
+-    "opener:default"
+-  ]
+-}
++{"$schema":"../gen/schemas/desktop-schema.json","description":"The main window gets Tauri core defaults only. No plugin permissions: no fs, no shell, no http, no opener, no dialog (§6.3). The app's own commands are restricted in build.rs via AppManifest.","identifier":"default","permissions":["core:default"],"windows":["main"]}
+\ No newline at end of file
