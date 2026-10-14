@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-entry-save"
+description = "Enables the entry_save command without any pre-configured scope."
+commands.allow = ["entry_save"]
+
+[[permission]]
+identifier = "deny-entry-save"
+description = "Denies the entry_save command without any pre-configured scope."
+commands.deny = ["entry_save"]

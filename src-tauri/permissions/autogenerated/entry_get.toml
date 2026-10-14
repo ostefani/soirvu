@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-entry-get"
+description = "Enables the entry_get command without any pre-configured scope."
+commands.allow = ["entry_get"]
+
+[[permission]]
+identifier = "deny-entry-get"
+description = "Denies the entry_get command without any pre-configured scope."
+commands.deny = ["entry_get"]

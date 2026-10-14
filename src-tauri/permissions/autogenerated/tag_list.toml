@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tag-list"
+description = "Enables the tag_list command without any pre-configured scope."
+commands.allow = ["tag_list"]
+
+[[permission]]
+identifier = "deny-tag-list"
+description = "Denies the tag_list command without any pre-configured scope."
+commands.deny = ["tag_list"]

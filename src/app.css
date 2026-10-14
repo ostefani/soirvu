@@ -74,3 +74,257 @@ button {
         background-color: #0f0f0f69;
     }
 }
+
+/* --- Soirvu screens (Phase 2 minimal UI) --- */
+
+.center-col {
+    max-width: 26rem;
+    margin: 12vh auto 0;
+    padding: 0 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.center-col label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.9em;
+}
+
+.center-col label.check {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.center-col input[type="checkbox"] {
+    box-shadow: none;
+}
+
+.recovery-key {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 1.25em;
+    letter-spacing: 0.08em;
+    text-align: center;
+    padding: 1rem;
+    border: 1px dashed currentColor;
+    border-radius: 8px;
+    word-break: break-all;
+}
+
+.error {
+    color: #b3261e;
+}
+
+.note {
+    opacity: 0.7;
+    padding: 0.5rem;
+}
+
+button.quiet {
+    box-shadow: none;
+    background: transparent;
+}
+
+button.active {
+    border-color: #396cd8;
+}
+
+.vault-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.vault-row {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.vault-name {
+    flex: 1;
+    text-align: left;
+}
+
+.missing {
+    opacity: 0.6;
+    font-size: 0.85em;
+}
+
+.kind-toggle {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.kind-toggle button {
+    flex: 1;
+}
+
+.diary {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+.diary-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid rgba(127, 127, 127, 0.35);
+}
+
+.vault-label {
+    font-weight: 600;
+}
+
+.diary-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.diary-body aside {
+    width: 19rem;
+    flex-shrink: 0;
+    border-right: 1px solid rgba(127, 127, 127, 0.35);
+    overflow-y: auto;
+}
+
+.diary-body main {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem 1.5rem;
+}
+
+.entry-list {
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.list-top {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.list-top input {
+    flex: 1;
+    min-width: 0;
+}
+
+.tag-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+}
+
+button.chip {
+    padding: 0.15em 0.7em;
+    font-size: 0.85em;
+    border-radius: 999px;
+}
+
+.entries,
+.results {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+button.entry-row,
+button.result {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.1rem;
+    text-align: left;
+    width: 100%;
+}
+
+.entry-date {
+    font-size: 0.8em;
+    opacity: 0.65;
+}
+
+.entry-title {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.entry-mood {
+    font-size: 0.8em;
+    opacity: 0.65;
+}
+
+.result-head {
+    font-weight: 600;
+    font-size: 0.9em;
+}
+
+.snippet {
+    font-size: 0.9em;
+    opacity: 0.85;
+}
+
+.snippet mark {
+    background: #ffe58a;
+    color: inherit;
+}
+
+.editor-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-width: 46rem;
+}
+
+.meta-row {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.title-input {
+    flex: 1;
+    min-width: 0;
+    font-weight: 600;
+}
+
+.tags-input {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.editor-mount {
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    min-height: 40vh;
+}
+
+.editor-mount .ProseMirror {
+    outline: none;
+    min-height: 38vh;
+}
+
+.editor-mount .ProseMirror pre {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 0.9em;
+}
+
+.editor-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.status {
+    font-size: 0.85em;
+    opacity: 0.7;
+}

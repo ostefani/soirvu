@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-entry-list"
+description = "Enables the entry_list command without any pre-configured scope."
+commands.allow = ["entry_list"]
+
+[[permission]]
+identifier = "deny-entry-list"
+description = "Denies the entry_list command without any pre-configured scope."
+commands.deny = ["entry_list"]

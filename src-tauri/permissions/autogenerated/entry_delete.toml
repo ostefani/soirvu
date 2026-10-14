@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-entry-delete"
+description = "Enables the entry_delete command without any pre-configured scope."
+commands.allow = ["entry_delete"]
+
+[[permission]]
+identifier = "deny-entry-delete"
+description = "Denies the entry_delete command without any pre-configured scope."
+commands.deny = ["entry_delete"]

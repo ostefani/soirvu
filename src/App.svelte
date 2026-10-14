@@ -1,46 +1,97 @@
 <script>
-    import { invoke } from '@tauri-apps/api/core';
+    // The shell: which screen shows follows the Rust lock state,
+    // never local guesses. A vault-status event saying anything
+    // but "unlocked" (manual lock, idle lock) tears the diary down
+    // and returns to the lock screen; the editor component's own
+    // cleanup saves its tail first.
+    import { onMount } from "svelte";
+    import * as api from "./api.js";
+    import Onboarding from "./components/Onboarding.svelte";
+    import LockScreen from "./components/LockScreen.svelte";
+    import EntryList from "./components/EntryList.svelte";
+    import EntryEditor from "./components/EntryEditor.svelte";
 
-    let name = $state('');
-    let greetMsg = $state('');
+    let screen = $state("boot"); // boot | welcome | create | locked | diary
+    let vaults = $state([]);
+    let currentVault = $state(null);
+    let selectedId = $state(null);
+    let listEl = $state(null);
 
-    /** @param {SubmitEvent} event */
-    async function greet(event) {
-        event.preventDefault();
-        if (!('__TAURI_INTERNALS__' in window)) {
-            greetMsg = 'Not inside Tauri — run: npm run tauri dev';
-            return;
+    async function refresh() {
+        vaults = await api.vaultList();
+        const open = vaults.find((v) => v.state === "unlocked");
+        if (open) {
+            currentVault = open;
+            screen = "diary";
+        } else if (vaults.length === 0) {
+            screen = "welcome";
+        } else {
+            currentVault = null;
+            screen = "locked";
         }
+    }
 
-        // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-        greetMsg = await invoke('greet', { name });
-        name = '';
+    onMount(async () => {
+        await api.onVaultStatus(async ({ status }) => {
+            if (status !== "unlocked") {
+                selectedId = null;
+                await refresh();
+            }
+        });
+        await refresh();
+    });
+
+    async function openExisting() {
+        const picked = await api.vaultPickFolder("open");
+        if (picked) await refresh();
+    }
+
+    async function lock() {
+        await api.vaultLock();
+        selectedId = null;
+        await refresh();
     }
 </script>
 
-<main class="container">
-    <h1>soirvu</h1>
-
-    <form class="row" onsubmit={greet}>
-        <input bind:value={name} placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
-    </form>
-    <p>{greetMsg}</p>
-</main>
-
-<style>
-    .container {
-        margin: 0;
-        padding-top: 10vh;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        text-align: center;
-    }
-
-    .row {
-        display: flex;
-        justify-content: center;
-        gap: 0.5em;
-    }
-</style>
+{#if screen === "boot"}
+    <p class="note">Starting…</p>
+{:else if screen === "welcome"}
+    <div class="center-col">
+        <h1>Soirvu</h1>
+        <p>An encrypted diary. It lives in a folder you choose; nothing leaves your machine.</p>
+        <button onclick={() => (screen = "create")}>Create a new diary</button>
+        <button class="quiet" onclick={openExisting}>Open an existing diary folder…</button>
+    </div>
+{:else if screen === "create"}
+    <Onboarding onDone={refresh} />
+{:else if screen === "locked"}
+    <LockScreen {vaults} onUnlocked={refresh} onVaultsChanged={refresh} />
+{:else if screen === "diary"}
+    <div class="diary">
+        <header class="diary-head">
+            <span class="vault-label">{currentVault?.name}</span>
+            <button class="quiet" onclick={lock}>Lock</button>
+        </header>
+        <div class="diary-body">
+            <aside>
+                <EntryList bind:this={listEl} selectedId={selectedId} onSelect={(id) => (selectedId = id)} />
+            </aside>
+            <main>
+                {#if selectedId}
+                    {#key selectedId}
+                        <EntryEditor
+                            entryId={selectedId}
+                            onDeleted={() => {
+                                selectedId = null;
+                                listEl?.refresh();
+                            }}
+                            onSaved={() => listEl?.refresh()}
+                        />
+                    {/key}
+                {:else}
+                    <p class="note">Pick an entry, or write a new one.</p>
+                {/if}
+            </main>
+        </div>
+    </div>
+{/if}
