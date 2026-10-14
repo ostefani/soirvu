@@ -59,7 +59,7 @@ import { listen } from "@tauri-apps/api/event";
  * @property {string} id
  * @property {string} entry_date
  * @property {string | null} title
- * @property {string} snippet Plain text; \u0001…\u0002 mark the matches.
+ * @property {string} snippet Plain text; \u0002…\u0003 mark the matches.
  */
 
 /**
@@ -171,8 +171,8 @@ export function entryDelete(id) {
 }
 
 /**
- * @param {string} query At least 3 letters for English, 2 for Russian (§4);
- *   shorter rejects with "query_too_short".
+ * @param {string} query Words under 3 characters are dropped; if none
+ *   remain, rejects with "query_too_short" (§4).
  * @returns {Promise<SearchHit[]>}
  */
 export function search(query) {

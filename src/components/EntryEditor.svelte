@@ -61,6 +61,17 @@
         entryDate = entry.entry_date;
         mood = entry.mood == null ? "" : String(entry.mood);
         tagsText = entry.tags.join(", ");
+    });
+
+    // The editor is created by an effect, not in onMount: the mount
+    // element only exists after the {#if entry} block has rendered,
+    // which happens after onMount's await resolves — mountEl is
+    // still null there. The effect runs once both are set. It must
+    // NOT return a cleanup that destroys the editor: `entry` is
+    // reassigned by every save, which re-runs the effect; the guard
+    // makes those runs no-ops, and onDestroy does the teardown.
+    $effect(() => {
+        if (!entry || !mountEl || editor) return;
         editor = createEditor(mountEl, {
             markdown: entry.body_md,
             onChange: () => markDirty(),
@@ -70,7 +81,6 @@
                 }
             },
         });
-        status = "";
     });
 
     onDestroy(() => {

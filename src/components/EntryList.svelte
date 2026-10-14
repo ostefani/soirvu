@@ -15,11 +15,36 @@
     let results = $state(null); // null = not searching
     let searchNote = $state("");
     let searchTimer = null;
+    let error = $state("");
+
+    // Same short texts as the other screens: codes, never prose
+    // from below.
+    function describeError(e) {
+        switch (String(e)) {
+            case "locked":
+                return "The vault is locked.";
+            case "invalid_input":
+                return "That was not accepted (invalid_input).";
+            case "storage":
+                return "A storage problem (storage).";
+            default:
+                return `Something went wrong (${String(e)}).`;
+        }
+    }
 
     async function load(reset) {
-        const page = await api.entryList(reset ? null : nextCursor, 50, tagFilter);
-        entries = reset ? page.entries : [...entries, ...page.entries];
-        nextCursor = page.next_cursor;
+        try {
+            const page = await api.entryList({
+                cursor: reset ? null : nextCursor,
+                limit: 50,
+                tag: tagFilter,
+            });
+            entries = reset ? page.entries : [...entries, ...page.entries];
+            nextCursor = page.next_cursor;
+            error = "";
+        } catch (e) {
+            error = describeError(e);
+        }
     }
 
     async function loadTags() {
@@ -41,17 +66,21 @@
     }
 
     async function newEntry() {
-        const created = await api.entrySave({
-            id: null,
-            entry_date: today(),
-            title: null,
-            body_md: "",
-            mood: null,
-            tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            tags: [],
-        });
-        await refresh();
-        onSelect(created.id);
+        try {
+            const created = await api.entrySave({
+                id: null,
+                entry_date: today(),
+                title: null,
+                body_md: "",
+                mood: null,
+                tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                tags: [],
+            });
+            await refresh();
+            onSelect(created.id);
+        } catch (e) {
+            error = describeError(e);
+        }
     }
 
     function segments(snippet) {
@@ -81,7 +110,7 @@
                 return;
             }
             try {
-                results = await api.search(q, tagFilter);
+                results = await api.search(q);
                 searchNote = results.length === 0 ? "Nothing found." : "";
             } catch (e) {
                 results = null;
@@ -112,6 +141,8 @@
         />
     </div>
 
+    {#if error}<p class="form-error">{error}</p>{/if}
+
     {#if tags.length}
         <div class="tag-row">
             {#each tags as name}
@@ -122,10 +153,12 @@
         </div>
     {/if}
 
+    {#if searchNote}<p class="note">{searchNote}</p>{/if}
+
     {#if results !== null}
         <div class="results">
-            {#each results as r (r.entry_id)}
-                <button class="result" onclick={() => onSelect(r.entry_id)}>
+            {#each results as r (r.id)}
+                <button class="result" onclick={() => onSelect(r.id)}>
                     <span class="result-head">{r.entry_date} — {r.title ?? "Untitled"}</span>
                     <span class="snippet">
                         {#each segments(r.snippet) as seg}
@@ -134,7 +167,6 @@
                     </span>
                 </button>
             {/each}
-            {#if searchNote}<p class="note">{searchNote}</p>{/if}
         </div>
     {:else}
         <div class="entries">
