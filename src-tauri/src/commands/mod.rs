@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod contract;
+
 pub mod entries;
 pub mod misc;
 pub mod vault;

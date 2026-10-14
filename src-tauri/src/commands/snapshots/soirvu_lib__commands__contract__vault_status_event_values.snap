@@ -1,0 +1,11 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+[
+  "unavailable",
+  "locked",
+  "unlocking",
+  "unlocked",
+  "locking"
+]

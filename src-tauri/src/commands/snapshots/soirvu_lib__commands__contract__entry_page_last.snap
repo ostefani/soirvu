@@ -1,0 +1,8 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+{
+  "entries": [],
+  "next_cursor": null
+}

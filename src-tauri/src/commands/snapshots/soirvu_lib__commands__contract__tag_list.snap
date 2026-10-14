@@ -1,0 +1,14 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+[
+  {
+    "name": "Работа",
+    "entries": 2
+  },
+  {
+    "name": "golden",
+    "entries": 1
+  }
+]

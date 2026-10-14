@@ -1,0 +1,23 @@
+---
+source: src/commands/contract.rs
+expression: "lines.join(\"\\n\")"
+---
+Unlock -> wrong_passphrase
+EmptyPassphrase -> empty_passphrase
+InvalidRecoveryKey -> invalid_recovery_key
+UnsupportedFormat -> unsupported_version
+InvalidHeader -> corrupt
+BadKdfParams -> bad_kdf
+FolderNotEmpty -> folder_not_empty
+VaultMismatch -> vault_mismatch
+Io -> storage
+EntryNotFound -> entry_not_found
+AttachmentNotFound -> attachment_not_found
+CorruptAttachment -> corrupt
+InvalidInput -> invalid_input
+TagNotFound -> tag_not_found
+TagExists -> tag_exists
+QueryTooShort -> query_too_short
+Random -> internal
+Backoff -> backoff:30
+Code -> locked

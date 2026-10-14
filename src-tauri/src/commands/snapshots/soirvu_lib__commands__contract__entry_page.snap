@@ -1,0 +1,29 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+{
+  "entries": [
+    {
+      "id": "entry-1",
+      "entry_date": "2026-01-02",
+      "title": "Test",
+      "excerpt": "Hello, test…",
+      "tags": [
+        "golden"
+      ],
+      "updated_at": 1767229200000
+    },
+    {
+      "id": "entry-2",
+      "entry_date": "2026-01-02",
+      "title": null,
+      "excerpt": "Hello, test…",
+      "tags": [
+        "golden"
+      ],
+      "updated_at": 1767229200000
+    }
+  ],
+  "next_cursor": "2026-01-02|1767225600000|entry-1"
+}

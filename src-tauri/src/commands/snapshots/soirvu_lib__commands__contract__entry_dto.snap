@@ -1,0 +1,19 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+{
+  "id": "entry-1",
+  "entry_date": "2026-01-02",
+  "title": "Morning pages",
+  "body_md": "# Morning\n\nText with **bold**.",
+  "mood": 4,
+  "tz": "Europe/Berlin",
+  "tags": [
+    "golden",
+    "Работа"
+  ],
+  "created_at": 1767225600000,
+  "updated_at": 1767229200000,
+  "rev": 3
+}

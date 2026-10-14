@@ -1,0 +1,18 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+[
+  {
+    "id": "entry-1",
+    "entry_date": "2026-01-02",
+    "title": "Test",
+    "snippet": "…\u0002test\u0003…"
+  },
+  {
+    "id": "entry-2",
+    "entry_date": "2026-01-01",
+    "title": null,
+    "snippet": "plain"
+  }
+]

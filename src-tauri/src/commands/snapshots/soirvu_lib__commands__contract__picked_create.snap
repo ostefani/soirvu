@@ -1,0 +1,8 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+{
+  "vault_id": null,
+  "name": "new_diary"
+}

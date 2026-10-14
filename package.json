@@ -8,7 +8,8 @@
         "dev": "vite",
         "preview": "vite preview",
         "tauri": "tauri",
-        "test": "node --test test/*.test.js"
+        "test": "node --test test/*.test.js",
+        "check": "sh scripts/check-no-html.sh"
     },
     "dependencies": {
         "@tauri-apps/api": "^2",

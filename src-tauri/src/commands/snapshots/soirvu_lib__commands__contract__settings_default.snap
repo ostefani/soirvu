@@ -1,0 +1,14 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+{
+  "lock_timeout_secs": 300,
+  "strip_exif": true,
+  "caps": {
+    "image_mb": 25,
+    "pdf_mb": 100,
+    "audio_mb": 200,
+    "video_mb": 1024
+  }
+}

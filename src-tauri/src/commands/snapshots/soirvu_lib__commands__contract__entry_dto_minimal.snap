@@ -1,0 +1,16 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+{
+  "id": "entry-2",
+  "entry_date": "2026-01-01",
+  "title": null,
+  "body_md": "",
+  "mood": null,
+  "tz": null,
+  "tags": [],
+  "created_at": 1767139200000,
+  "updated_at": 1767139200000,
+  "rev": 1
+}

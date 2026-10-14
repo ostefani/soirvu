@@ -1,0 +1,21 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+[
+  {
+    "id": "0123456789abcdef0123456789abcdef",
+    "name": "test_diar",
+    "state": "available"
+  },
+  {
+    "id": "0123456789abcdef0123456789abcdef",
+    "name": "test_diar",
+    "state": "missing"
+  },
+  {
+    "id": "0123456789abcdef0123456789abcdef",
+    "name": "test_diar",
+    "state": "unlocked"
+  }
+]
