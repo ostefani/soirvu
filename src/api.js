@@ -29,8 +29,8 @@ import { listen } from "@tauri-apps/api/event";
  * @property {number | null} mood 1–5
  * @property {string | null} tz IANA name the date is anchored to
  * @property {string[]} tags
- * @property {number} created_at Unix seconds
- * @property {number} updated_at Unix seconds
+ * @property {number} created_at Unix milliseconds
+ * @property {number} updated_at Unix milliseconds
  * @property {number} rev
  */
 
@@ -40,7 +40,6 @@ import { listen } from "@tauri-apps/api/event";
  * @property {string} entry_date
  * @property {string | null} title
  * @property {string} excerpt
- * @property {number | null} mood
  * @property {string[]} tags
  * @property {number} updated_at
  */
@@ -51,7 +50,6 @@ import { listen } from "@tauri-apps/api/event";
  * @property {string} entry_date
  * @property {string | null} title
  * @property {string} body_md
- * @property {number | null} mood
  * @property {string | null} tz
  * @property {string[]} tags
  */

@@ -2,9 +2,11 @@
 //! through the state's guard: locked → the `locked` code.
 
 use serde::{Deserialize, Serialize};
-use soirvu_core::entries::{Entry, EntryDraft, SearchHit, TagInfo};
+use soirvu_core::entries::{
+    Cursor, Entry, EntryDraft, EntrySummary as CoreSummary, ListQuery, SearchHit, TagCount,
+};
 
-use crate::error::ipc;
+use crate::error::{ipc, AppError};
 use crate::state::AppState;
 use tauri::State;
 
@@ -17,7 +19,7 @@ pub struct EntryDto {
     pub mood: Option<i64>,
     pub tz: Option<String>,
     pub tags: Vec<String>,
-    /// Unix seconds; the UI formats them in the entry's time zone.
+    /// Unix milliseconds; the UI formats them in the entry's time zone.
     pub created_at: i64,
     pub updated_at: i64,
     pub rev: i64,
@@ -47,19 +49,17 @@ pub struct EntrySummary {
     pub entry_date: String,
     pub title: Option<String>,
     pub excerpt: String,
-    pub mood: Option<i64>,
     pub tags: Vec<String>,
     pub updated_at: i64,
 }
 
-impl From<&Entry> for EntrySummary {
-    fn from(e: &Entry) -> Self {
+impl From<&CoreSummary> for EntrySummary {
+    fn from(e: &CoreSummary) -> Self {
         EntrySummary {
             id: e.id.clone(),
             entry_date: e.entry_date.clone(),
             title: e.title.clone(),
-            excerpt: e.body_md.chars().take(140).collect(),
-            mood: e.mood,
+            excerpt: e.preview.clone(),
             tags: e.tags.clone(),
             updated_at: e.updated_at,
         }
@@ -71,6 +71,28 @@ pub struct EntryPage {
     pub entries: Vec<EntrySummary>,
     /// Pass back as `cursor` for the next page; null at the end.
     pub next_cursor: Option<String>,
+}
+
+/// The core's cursor is a (entry_date, created_at, id) triple; across
+/// the IPC boundary it travels as one opaque string.
+fn encode_cursor(cursor: &Cursor) -> String {
+    format!("{}|{}|{}", cursor.entry_date, cursor.created_at, cursor.id)
+}
+
+fn decode_cursor(text: &str) -> Result<Cursor, AppError> {
+    let invalid = || AppError::Code("invalid_input".into());
+    let mut parts = text.splitn(3, '|');
+    let entry_date = parts.next().filter(|s| !s.is_empty()).ok_or_else(invalid)?;
+    let created_at: i64 = parts
+        .next()
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(invalid)?;
+    let id = parts.next().filter(|s| !s.is_empty()).ok_or_else(invalid)?;
+    Ok(Cursor {
+        entry_date: entry_date.to_string(),
+        created_at,
+        id: id.to_string(),
+    })
 }
 
 #[derive(Deserialize)]
@@ -93,27 +115,17 @@ pub fn entry_list(
     limit: Option<u32>,
 ) -> Result<EntryPage, String> {
     let limit = limit.unwrap_or(50).clamp(1, 200) as usize;
+    let after = cursor
+        .as_deref()
+        .map(decode_cursor)
+        .transpose()
+        .map_err(|e| e.to_ipc())?;
     ipc(state.with_vault(|vault| {
-        let all = vault.list_entries(tag.as_deref())?;
-        // Keyset pagination over the core's sort order
-        // (entry_date, created_at, id — all descending): the cursor
-        // is the id of the last entry of the previous page.
-        let start = match &cursor {
-            None => 0,
-            Some(id) => all
-                .iter()
-                .position(|e| &e.id == id)
-                .map(|pos| pos + 1)
-                .unwrap_or(all.len()),
-        };
-        let page: Vec<EntrySummary> =
-            all.iter().skip(start).take(limit).map(EntrySummary::from).collect();
-        let next_cursor = if start + page.len() < all.len() {
-            page.last().map(|e| e.id.clone())
-        } else {
-            None
-        };
-        Ok(EntryPage { entries: page, next_cursor })
+        let page = vault.list_entries(&ListQuery { limit, after, tag })?;
+        Ok(EntryPage {
+            entries: page.items.iter().map(EntrySummary::from).collect(),
+            next_cursor: page.next.as_ref().map(encode_cursor),
+        })
     }))
 }
 
@@ -157,7 +169,7 @@ pub struct HitDto {
     pub id: String,
     pub entry_date: String,
     pub title: Option<String>,
-    /// Plain text with \u{1}…\u{2} markers around the matches; the
+    /// Plain text with \u{2}…\u{3} markers around the matches; the
     /// UI turns them into <mark> elements itself (§6.1) — this is
     /// never HTML.
     pub snippet: String,
@@ -166,7 +178,7 @@ pub struct HitDto {
 impl From<&SearchHit> for HitDto {
     fn from(h: &SearchHit) -> Self {
         HitDto {
-            id: h.entry_id.clone(),
+            id: h.id.clone(),
             entry_date: h.entry_date.clone(),
             title: h.title.clone(),
             snippet: h.snippet.clone(),
@@ -188,9 +200,12 @@ pub struct TagDto {
     pub entries: i64,
 }
 
-impl From<&TagInfo> for TagDto {
-    fn from(t: &TagInfo) -> Self {
-        TagDto { name: t.name.clone(), entries: t.entries }
+impl From<&TagCount> for TagDto {
+    fn from(t: &TagCount) -> Self {
+        TagDto {
+            name: t.name.clone(),
+            entries: t.entries,
+        }
     }
 }
 
@@ -202,20 +217,22 @@ pub fn tag_list(state: State<'_, AppState>) -> Result<Vec<TagDto>, String> {
     }))
 }
 
-/// Rename and merge return the number of entries carrying the tag
-/// afterwards (§6.1).
+/// Rename and merge return how many live entries carried the tag
+/// (for a merge: the entries that had `from`). That is the core's
+/// count, not the size of the target tag afterwards.
 #[tauri::command]
 pub fn tag_rename(state: State<'_, AppState>, from: String, to: String) -> Result<i64, String> {
     ipc(state.with_vault(|vault| {
-        let tag = vault.rename_tag(&from, &to)?;
-        Ok(tag.entries)
+        let count = vault.rename_tag(&from, &to)?;
+        // A diary cannot hold 2^63 entries; saturate rather than wrap.
+        Ok(i64::try_from(count).unwrap_or(i64::MAX))
     }))
 }
 
 #[tauri::command]
 pub fn tag_merge(state: State<'_, AppState>, from: String, into: String) -> Result<i64, String> {
     ipc(state.with_vault(|vault| {
-        let tag = vault.merge_tags(&from, &into)?;
-        Ok(tag.entries)
+        let count = vault.merge_tags(&from, &into)?;
+        Ok(i64::try_from(count).unwrap_or(i64::MAX))
     }))
 }

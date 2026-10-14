@@ -1,7 +1,7 @@
 <script>
     // The entry column: newest first, keyset pages, tag filter,
     // and full-text search. Search snippets arrive with
-    // \u0001/\u0002 highlight markers and are rendered as text
+    // \u0002/\u0003 highlight markers and are rendered as text
     // segments with <mark> — diary text never touches {@html}.
     import * as api from "../api.js";
 
@@ -59,10 +59,10 @@
         let marked = false;
         let buf = "";
         for (const ch of snippet) {
-            if (ch === "\u0001" || ch === "\u0002") {
+            if (ch === "\u0002" || ch === "\u0003") {
                 if (buf) out.push({ text: buf, marked });
                 buf = "";
-                marked = ch === "\u0001";
+                marked = ch === "\u0002";
             } else {
                 buf += ch;
             }
@@ -146,7 +146,7 @@
                 >
                     <span class="entry-date">{entry.entry_date}</span>
                     <span class="entry-title">{entry.title ?? entry.excerpt ?? "Untitled"}</span>
-                    {#if entry.mood}<span class="entry-mood">mood {entry.mood}</span>{/if}
+                    
                 </button>
             {/each}
             {#if entries.length === 0}<p class="note">No entries yet.</p>{/if}

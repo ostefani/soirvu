@@ -6,14 +6,15 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Serialize;
-use soirvu_core::crypto::{calibrate_kdf, RecoveryKey};
+use soirvu_core::crypto::{KdfParams, RecoveryKey};
+use soirvu_core::vault::VaultHeader;
 use soirvu_core::Vault;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::oneshot;
 use zeroize::Zeroize;
 
-use crate::error::ipc;
+use crate::error::{ipc, AppError};
 use crate::state::{AppState, VaultInfo};
 
 #[derive(Serialize)]
@@ -42,6 +43,25 @@ async fn pick_folder(app: &AppHandle) -> Option<PathBuf> {
     }
 }
 
+/// The vault's id, read from its header file. The folder is not
+/// opened and nothing is decrypted. The header is small (about a
+/// kilobyte); the size cap and the regular-file check keep a picked
+/// folder that points at something else (a device, a huge file)
+/// from hanging or exhausting memory. A folder without a readable
+/// header is not a vault.
+fn read_vault_id(path: &std::path::Path) -> Result<String, AppError> {
+    const MAX_HEADER: u64 = 64 * 1024;
+    let not_a_vault = || AppError::Code("not_a_vault".into());
+    let header_path = path.join("vault.header.json");
+    let meta = std::fs::metadata(&header_path).map_err(|_| not_a_vault())?;
+    if !meta.is_file() || meta.len() > MAX_HEADER {
+        return Err(not_a_vault());
+    }
+    let bytes = std::fs::read(&header_path).map_err(|_| not_a_vault())?;
+    let header = VaultHeader::from_json(&bytes)?;
+    Ok(header.vault_id)
+}
+
 fn folder_name(path: &std::path::Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -64,17 +84,32 @@ pub async fn vault_pick_folder(
     };
     match mode.as_str() {
         "open" => {
-            let info = ipc(Vault::header_info(&path).map_err(Into::into))?;
+            let vault_id = read_vault_id(&path).map_err(|e| e.to_ipc())?;
+            // The header is unauthenticated, so a copied folder claims
+            // the same id. If that id is already registered at another
+            // folder that still exists, refuse to repoint it silently;
+            // moving a vault is what vault_relocate is for.
+            if let Ok(old_path) = state.vault_path(&vault_id) {
+                if old_path != path && old_path.join("vault.header.json").exists() {
+                    return Err("vault_mismatch".into());
+                }
+            }
             let name = folder_name(&path);
             state
-                .register(info.vault_id.clone(), name.clone(), path)
+                .register(vault_id.clone(), name.clone(), path)
                 .map_err(|e| e.to_ipc())?;
-            Ok(Some(Picked { vault_id: Some(info.vault_id), name }))
+            Ok(Some(Picked {
+                vault_id: Some(vault_id),
+                name,
+            }))
         }
         "create" => {
             let name = folder_name(&path);
             state.set_pending_create(path);
-            Ok(Some(Picked { vault_id: None, name }))
+            Ok(Some(Picked {
+                vault_id: None,
+                name,
+            }))
         }
         _ => Err("invalid_input".into()),
     }
@@ -86,21 +121,41 @@ pub async fn vault_create(
     state: State<'_, AppState>,
     mut passphrase: String,
 ) -> Result<Created, String> {
-    let result = (|| {
-        let path = state.take_pending_create()?;
-        let kdf = calibrate_kdf(Duration::from_millis(750));
-        let (vault, recovery) = Vault::create(&path, &passphrase, kdf)?;
-        let vault_id = vault.header().vault_id.clone();
-        let name = folder_name(&path);
-        state.register(vault_id.clone(), name, path)?;
-        state.adopt_created(vault, &vault_id);
-        Ok::<_, crate::error::AppError>(Created {
-            vault_id,
-            recovery_key: recovery.to_text(),
-        })
-    })();
+    let path = match state.take_pending_create() {
+        Ok(path) => path,
+        Err(e) => {
+            passphrase.zeroize();
+            return Err(e.to_ipc());
+        }
+    };
+    let name = folder_name(&path);
+    // Calibration plus creation is seconds of CPU (Argon2id): keep
+    // it off the async runtime's threads.
+    let task_path = path.clone();
+    let mut task_passphrase = passphrase.clone();
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        let result = (|| {
+            let kdf = KdfParams::calibrate(Duration::from_millis(750))?;
+            let pair = Vault::create(&task_path, &task_passphrase, kdf)?;
+            Ok::<_, AppError>(pair)
+        })();
+        task_passphrase.zeroize();
+        result
+    })
+    .await;
     passphrase.zeroize();
-    let created = ipc(result)?;
+    let (vault, recovery) = match joined {
+        Ok(Ok(pair)) => pair,
+        Ok(Err(e)) => return Err(e.to_ipc()),
+        Err(_) => return Err("internal".into()),
+    };
+    let vault_id = vault.header().vault_id.clone();
+    ipc(state.register(vault_id.clone(), name, path))?;
+    state.adopt_created(vault, &vault_id);
+    let created = Created {
+        vault_id,
+        recovery_key: recovery.to_text(),
+    };
     super::emit_status(&app, &state);
     Ok(created)
 }
@@ -113,32 +168,50 @@ pub async fn vault_unlock(
     kind: String,
     mut secret: String,
 ) -> Result<(), String> {
-    let result = (|| {
-        let path = state.vault_path(&vault_id)?;
-        state.begin_unlock(&vault_id)?;
-        let opened = match kind.as_str() {
-            "passphrase" => Vault::open_with_passphrase(&path, &secret),
-            "recovery" => {
-                let key = RecoveryKey::from_text(&secret)?;
-                Vault::open_with_recovery(&path, &key)
-            }
-            _ => return Err(crate::error::AppError::Code("invalid_input".into())),
-        };
-        match opened {
-            Ok(vault) => {
-                state.unlock_ok(vault);
-                Ok(())
-            }
-            Err(e) => {
-                state.unlock_failed();
-                Err(e.into())
-            }
+    if kind != "passphrase" && kind != "recovery" {
+        secret.zeroize();
+        return Err("invalid_input".into());
+    }
+    let path = match state.vault_path(&vault_id) {
+        Ok(path) => path,
+        Err(e) => {
+            secret.zeroize();
+            return Err(e.to_ipc());
         }
-    })();
+    };
+    if let Err(e) = state.begin_unlock(&vault_id) {
+        secret.zeroize();
+        return Err(e.to_ipc());
+    }
+    // Opening runs Argon2id (~750 ms): keep it off the async
+    // runtime's threads.
+    let mut task_secret = secret.clone();
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        let opened = match kind.as_str() {
+            "passphrase" => Vault::open_with_passphrase(&path, &task_secret),
+            _ => RecoveryKey::from_text(&task_secret)
+                .and_then(|key| Vault::open_with_recovery(&path, &key)),
+        };
+        task_secret.zeroize();
+        opened
+    })
+    .await;
     secret.zeroize();
-    ipc(result)?;
-    super::emit_status(&app, &state);
-    Ok(())
+    match joined {
+        Ok(Ok(vault)) => {
+            state.unlock_ok(vault);
+            super::emit_status(&app, &state);
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            state.unlock_failed();
+            Err(AppError::from(e).to_ipc())
+        }
+        Err(_) => {
+            state.unlock_failed();
+            Err("internal".into())
+        }
+    }
 }
 
 #[tauri::command]
@@ -162,11 +235,13 @@ pub async fn vault_relocate(
     let Some(path) = pick_folder(&app).await else {
         return Ok(false);
     };
-    let info = ipc(Vault::header_info(&path).map_err(Into::into))?;
-    if info.vault_id != vault_id {
+    let found_id = read_vault_id(&path).map_err(|e| e.to_ipc())?;
+    if found_id != vault_id {
         return Err("vault_mismatch".into());
     }
     let name = folder_name(&path);
-    state.register(vault_id, name, path).map_err(|e| e.to_ipc())?;
+    state
+        .register(vault_id, name, path)
+        .map_err(|e| e.to_ipc())?;
     Ok(true)
 }
