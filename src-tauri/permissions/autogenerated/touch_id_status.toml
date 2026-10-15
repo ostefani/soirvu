@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-touch-id-status"
+description = "Enables the touch_id_status command without any pre-configured scope."
+commands.allow = ["touch_id_status"]
+
+[[permission]]
+identifier = "deny-touch-id-status"
+description = "Denies the touch_id_status command without any pre-configured scope."
+commands.deny = ["touch_id_status"]

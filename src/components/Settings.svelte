@@ -22,6 +22,9 @@
     let secBusy = $state(false);
     let rotated = $state(false);
     let rotating = $state(false);
+    let touchId = $state(null);
+    let tidBusy = $state(false);
+    let tidNote = $state("");
 
     function secError(e) {
         return e === "wrong_passphrase" ? "Wrong current passphrase." : `Something went wrong (${e}).`;
@@ -155,6 +158,45 @@
         }
     }
 
+    async function refreshTouchId() {
+        try {
+            touchId = await api.touchIdStatus(null);
+        } catch {
+            touchId = null;
+        }
+    }
+
+    async function enableTouchId() {
+        tidNote = "";
+        tidBusy = true;
+        try {
+            await api.touchIdEnroll();
+            await refreshTouchId();
+            tidNote = "Touch ID is on for this diary.";
+        } catch (e) {
+            tidNote =
+                e === "touch_id_unavailable"
+                    ? "Touch ID is not available in this build."
+                    : `Something went wrong (${e}).`;
+        } finally {
+            tidBusy = false;
+        }
+    }
+
+    async function disableTouchId() {
+        tidNote = "";
+        tidBusy = true;
+        try {
+            await api.touchIdDisable();
+            await refreshTouchId();
+            tidNote = "Touch ID is off for this diary.";
+        } catch (e) {
+            tidNote = `Something went wrong (${e}).`;
+        } finally {
+            tidBusy = false;
+        }
+    }
+
     async function regenerateRecovery() {
         secNote = "";
         secBusy = true;
@@ -177,6 +219,7 @@
             stripExif = settings.strip_exif;
             clipboardClear = settings.clipboard_clear;
             backupSchedule = settings.backup_schedule;
+            refreshTouchId();
         } catch (e) {
             error = `Something went wrong (${e}).`;
         }
@@ -378,6 +421,32 @@
             Only the diary's header changes — nothing is re-encrypted and the diary stays open.
             Backups made earlier keep the passphrase and recovery key they were made with.
         </p>
+
+        <h3>Touch ID</h3>
+        {#if touchId && !touchId.capable}
+            <p class="note">
+                Touch ID needs this app signed with a development profile that carries the
+                keychain entitlement. This build is not signed that way, so Touch ID is
+                unavailable — the passphrase and recovery key work as always.
+            </p>
+        {:else if touchId?.enrolled}
+            <p class="note">This diary can be unlocked with Touch ID on this Mac.</p>
+            <div class="row">
+                <button class="quiet" onclick={disableTouchId} disabled={tidBusy}>
+                    Turn off Touch ID
+                </button>
+            </div>
+        {:else if touchId}
+            <p class="note">
+                Unlock this diary with your fingerprint instead of typing the passphrase.
+                The passphrase and recovery key keep working — Touch ID is one more key,
+                never the only one.
+            </p>
+            <div class="row">
+                <button onclick={enableTouchId} disabled={tidBusy}>Turn on Touch ID</button>
+            </div>
+        {/if}
+        {#if tidNote}<p class="note">{tidNote}</p>{/if}
 
         <h3>Export</h3>
         <p class="note">

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Serialize;
-use soirvu_core::crypto::{KdfParams, RecoveryKey};
+use soirvu_core::crypto::{DeviceSecret, KdfParams, RecoveryKey};
 use soirvu_core::vault::VaultHeader;
 use soirvu_core::Vault;
 use tauri::{AppHandle, State};
@@ -495,6 +495,132 @@ mod tests {
 
 /// What a finished fork hands back: the copy's new identity
 /// and its NEW recovery key (shown once, like at creation).
+/// Touch ID at the lock screen and in Settings (Phase 8):
+/// `capable` is a property of this build's signature (the
+/// keychain entitlement — spike 6), `enrolled` of the vault
+/// (its header carries a device slot). The UI shows the
+/// Touch ID button only when both are true, and a signing
+/// note instead of the controls when capable is false.
+#[derive(Serialize)]
+pub struct TouchIdStatus {
+    pub capable: bool,
+    pub enrolled: bool,
+}
+
+#[tauri::command]
+pub fn touch_id_status(
+    state: State<'_, AppState>,
+    vault_id: Option<String>,
+) -> Result<TouchIdStatus, String> {
+    let capable = crate::keychain::capable();
+    let enrolled = match &vault_id {
+        // The lock screen asks about the selected vault: its
+        // header file says whether a device slot exists.
+        Some(id) => state
+            .vault_path(id)
+            .ok()
+            .and_then(|path| std::fs::read(path.join("vault.header.json")).ok())
+            .and_then(|bytes| VaultHeader::from_json(&bytes).ok())
+            .map(|header| header.has_device_slot())
+            .unwrap_or(false),
+        // Settings asks about the open vault.
+        None => state
+            .with_vault(|vault| Ok(vault.has_device_slot()))
+            .unwrap_or(false),
+    };
+    Ok(TouchIdStatus { capable, enrolled })
+}
+
+enum TouchUnlockError {
+    Keychain(crate::keychain::KeychainError),
+    Core(soirvu_core::Error),
+}
+
+/// Unlocks with Touch ID (Phase 8): the keychain read runs
+/// on a blocking thread because the fingerprint prompt waits
+/// there. A dismissed prompt aborts the unlock without
+/// feeding the §6.2 backoff.
+#[tauri::command]
+pub async fn vault_unlock_touch_id(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    vault_id: String,
+) -> Result<(), String> {
+    let path = match state.vault_path(&vault_id) {
+        Ok(path) => path,
+        Err(e) => return Err(e.to_ipc()),
+    };
+    if let Err(e) = state.begin_unlock(&vault_id) {
+        return Err(e.to_ipc());
+    }
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        let bytes = crate::keychain::read(&vault_id).map_err(TouchUnlockError::Keychain)?;
+        let secret = DeviceSecret::from_bytes(&bytes).map_err(TouchUnlockError::Core)?;
+        Vault::open_with_device(&path, &secret).map_err(TouchUnlockError::Core)
+    })
+    .await;
+    match joined {
+        Ok(Ok(vault)) => {
+            state.unlock_ok(vault);
+            super::emit_status(&app, &state);
+            Ok(())
+        }
+        Ok(Err(TouchUnlockError::Keychain(crate::keychain::KeychainError::Cancelled))) => {
+            state.unlock_aborted();
+            Err("touch_id_cancelled".into())
+        }
+        Ok(Err(TouchUnlockError::Keychain(e))) => {
+            state.unlock_failed();
+            Err(match e {
+                crate::keychain::KeychainError::NotFound
+                | crate::keychain::KeychainError::Unavailable => "touch_id_unavailable".into(),
+                _ => "storage".into(),
+            })
+        }
+        Ok(Err(TouchUnlockError::Core(e))) => {
+            state.unlock_failed();
+            Err(AppError::from(e).to_ipc())
+        }
+        Err(_) => {
+            state.unlock_failed();
+            Err("storage".into())
+        }
+    }
+}
+
+/// Enrolls the open vault for Touch ID: the core mints the
+/// device secret and re-wraps the header, then the secret
+/// goes into the keychain. If the keychain store fails, the
+/// header slot is removed again — a slot without its secret
+/// would only pretend to work.
+#[tauri::command]
+pub fn touch_id_enroll(state: State<'_, AppState>) -> Result<(), String> {
+    ipc(state.with_vault(|vault| {
+        if !crate::keychain::capable() {
+            return Err(AppError::Code("touch_id_unavailable".into()));
+        }
+        let vault_id = vault.header().vault_id.clone();
+        let secret = vault.enroll_device()?;
+        if crate::keychain::store(&vault_id, secret.as_bytes()).is_err() {
+            let _ = vault.remove_device();
+            return Err(AppError::Code("touch_id_unavailable".into()));
+        }
+        Ok(())
+    }))
+}
+
+/// Removes the open vault's Touch ID enrollment: the header
+/// slot goes, and the keychain item with it.
+#[tauri::command]
+pub fn touch_id_disable(state: State<'_, AppState>) -> Result<(), String> {
+    ipc(state.with_vault(|vault| {
+        let vault_id = vault.header().vault_id.clone();
+        vault.remove_device()?;
+        let _ = crate::keychain::delete(&vault_id);
+        Ok(())
+    }))
+}
+
 #[derive(Serialize)]
 pub struct Forked {
     pub vault_id: String,

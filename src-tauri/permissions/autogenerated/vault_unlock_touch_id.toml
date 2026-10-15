@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vault-unlock-touch-id"
+description = "Enables the vault_unlock_touch_id command without any pre-configured scope."
+commands.allow = ["vault_unlock_touch_id"]
+
+[[permission]]
+identifier = "deny-vault-unlock-touch-id"
+description = "Denies the vault_unlock_touch_id command without any pre-configured scope."
+commands.deny = ["vault_unlock_touch_id"]

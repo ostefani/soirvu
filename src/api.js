@@ -116,6 +116,39 @@ export function vaultUnlock(vaultId, kind, secret) {
     return invoke("vault_unlock", { vaultId, kind, secret });
 }
 
+/**
+ * Touch ID for a vault (Phase 8). Pass a vault id (the lock
+ * screen asks about the selected diary) or null (Settings
+ * asks about the open one). `capable` is a property of this
+ * build's signature; `enrolled` of the diary.
+ * @returns {Promise<{capable: boolean, enrolled: boolean}>}
+ */
+export function touchIdStatus(vaultId) {
+    return invoke("touch_id_status", { vaultId });
+}
+
+/**
+ * Unlocks with the fingerprint prompt. Rejects with
+ * "touch_id_cancelled" when the prompt is dismissed (not a
+ * failed attempt), "touch_id_unavailable" when the diary has
+ * no live device slot in this build, "wrong_passphrase"-style
+ * codes never occur here.
+ * @returns {Promise<void>}
+ */
+export function vaultUnlockTouchId(vaultId) {
+    return invoke("vault_unlock_touch_id", { vaultId });
+}
+
+/** @returns {Promise<void>} Rejects with "touch_id_unavailable". */
+export function touchIdEnroll() {
+    return invoke("touch_id_enroll");
+}
+
+/** @returns {Promise<void>} */
+export function touchIdDisable() {
+    return invoke("touch_id_disable");
+}
+
 /** @returns {Promise<void>} */
 export function vaultLock() {
     return invoke("vault_lock");

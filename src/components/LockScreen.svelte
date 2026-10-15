@@ -20,6 +20,7 @@
     let forkError = $state("");
     let forkBusy = $state(false);
     let note = $state("");
+    let touchId = $state(null);
 
     const FS_WARNINGS = {
         cloud_sync:
@@ -43,6 +44,7 @@
                 storage: "The vault folder is not available right now.",
                 vault_not_found: "This vault is no longer in the list.",
                 vault_mismatch: "That folder holds a different vault.",
+                touch_id_unavailable: "Touch ID is not available for this diary right now.",
                 destination_not_empty: "That folder is not empty. Pick an empty folder for the restored diary.",
                 corrupt: "The vault looks damaged. The CLI can check it: soirvu-cli verify.",
             }[e] || `Something went wrong (${e}).`
@@ -59,6 +61,36 @@
             onUnlocked(selected);
         } catch (e) {
             error = describeError(e);
+        } finally {
+            busy = false;
+        }
+    }
+
+    // Touch ID is asked about per selected diary: the button
+    // exists only when this build can use it AND the diary is
+    // enrolled (her rule: never show a dead option).
+    $effect(() => {
+        const id = selected?.id;
+        touchId = null;
+        if (!id) return;
+        api.touchIdStatus(id).then(
+            (status) => {
+                if (selected?.id === id) touchId = status;
+            },
+            () => {},
+        );
+    });
+
+    async function unlockTouchId() {
+        if (!selected) return;
+        busy = true;
+        error = "";
+        try {
+            await api.vaultUnlockTouchId(selected.id);
+            onUnlocked(selected);
+        } catch (e) {
+            // A dismissed prompt is not an error to report.
+            if (e !== "touch_id_cancelled") error = describeError(e);
         } finally {
             busy = false;
         }
@@ -169,6 +201,9 @@
             onkeydown={(e) => e.key === "Enter" && unlock()}
         />
         <button onclick={unlock} disabled={busy || !secret}>Unlock</button>
+        {#if touchId?.capable && touchId?.enrolled}
+            <button onclick={unlockTouchId} disabled={busy}>Unlock with Touch ID</button>
+        {/if}
     {/if}
 
     {#if forkKey}

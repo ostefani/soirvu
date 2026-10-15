@@ -6,6 +6,7 @@
 mod backup;
 mod commands;
 mod error;
+mod keychain;
 #[cfg(target_os = "macos")]
 mod macos_lock;
 mod platform;
@@ -159,6 +160,10 @@ pub fn run() {
             commands::vault::vault_change_passphrase,
             commands::vault::vault_regenerate_recovery,
             commands::vault::vault_rotate_master_key,
+            commands::vault::vault_unlock_touch_id,
+            commands::vault::touch_id_status,
+            commands::vault::touch_id_enroll,
+            commands::vault::touch_id_disable,
             commands::entries::entry_list,
             commands::entries::calendar_days,
             commands::entries::on_this_day,

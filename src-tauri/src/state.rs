@@ -381,6 +381,14 @@ impl AppState {
         let _ = self.save_config(&inner);
     }
 
+    /// Back to Locked WITHOUT counting a failure: the user
+    /// cancelled (a dismissed Touch ID prompt is not a wrong
+    /// guess, and the §6.2 backoff is for guesses).
+    pub fn unlock_aborted(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.status = Status::Locked;
+    }
+
     pub fn unlock_failed(&self) {
         let mut inner = self.inner.lock().unwrap();
         inner.status = Status::Locked;

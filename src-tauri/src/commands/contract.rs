@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use super::attachments::{AttachmentAdded, AttachmentInfo};
 use super::entries::{CalendarDay, EntryDto, EntryPage, EntrySummary, HitDto, SaveDraft, TagDto};
-use super::vault::{Created, Forked, Picked};
+use super::vault::{Created, Forked, Picked, TouchIdStatus};
 use crate::error::AppError;
 use crate::state::{Settings, Status, VaultInfo};
 
@@ -161,6 +161,17 @@ fn forked_shape() {
         &Forked {
             vault_id: "a54c38f6a54c38f6a54c38f6a54c38f6".into(),
             recovery_key: "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ-2345-567".into(),
+        },
+    );
+}
+
+#[test]
+fn touch_id_status_shape() {
+    snap(
+        "touch_id_status",
+        &TouchIdStatus {
+            capable: true,
+            enrolled: false,
         },
     );
 }
