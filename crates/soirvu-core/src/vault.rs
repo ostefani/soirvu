@@ -8,8 +8,8 @@ use data_encoding::HEXLOWER;
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::{
-    KdfParams, MasterKey, NONCE_LEN, RecoveryKey, SALT_LEN, WRAPPED_LEN, derive_kek, random_bytes,
-    unwrap_key, wrap_key,
+    DeviceSecret, KdfParams, MasterKey, NONCE_LEN, RecoveryKey, SALT_LEN, WRAPPED_LEN, derive_kek,
+    random_bytes, unwrap_key, wrap_key,
 };
 use crate::error::{Error, Result};
 
@@ -40,6 +40,12 @@ pub enum Slot {
     },
     /// Master key encrypted under a key derived from the recovery key.
     Recovery { nonce: String, wrapped_key: String },
+    /// Master key encrypted under a key derived from the device
+    /// secret (Phase 8): the secret lives in the OS keychain
+    /// behind biometrics, so this slot opens only on this
+    /// device, with a fingerprint. Added in Phase 8 — headers
+    /// written before it simply have no such slot.
+    Device { nonce: String, wrapped_key: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +69,7 @@ fn passphrase_description(kdf: &KdfParams) -> String {
 }
 
 const RECOVERY_DESCRIPTION: &str = "recovery";
+const DEVICE_DESCRIPTION: &str = "device";
 
 /// Hex text -> exactly N bytes.
 fn decode_fixed<const N: usize>(text: &str, field: &str) -> Result<[u8; N]> {
@@ -251,9 +258,43 @@ impl VaultHeader {
                     decode_fixed::<NONCE_LEN>(nonce, "nonce")?;
                     decode_fixed::<WRAPPED_LEN>(wrapped_key, "wrapped_key")?;
                 }
+                Slot::Device { nonce, wrapped_key } => {
+                    decode_fixed::<NONCE_LEN>(nonce, "nonce")?;
+                    decode_fixed::<WRAPPED_LEN>(wrapped_key, "wrapped_key")?;
+                }
             }
         }
         Ok(())
+    }
+
+    /// Whether this header has a device (Touch ID) slot.
+    pub fn has_device_slot(&self) -> bool {
+        self.slots.iter().any(|slot| matches!(slot, Slot::Device { .. }))
+    }
+
+    /// This header with a device slot added (or replaced): a
+    /// fresh device secret wraps the same master key. The
+    /// caller stores the secret in the OS keychain; losing it
+    /// later only retires this slot.
+    pub fn with_device_slot(&self, master: &MasterKey) -> Result<(VaultHeader, DeviceSecret)> {
+        let secret = DeviceSecret::generate()?;
+        let slot_aad = aad(FORMAT_VERSION, SUITE, &self.vault_id, DEVICE_DESCRIPTION);
+        let (nonce, wrapped) = wrap_key(&secret.kek(), master.key(), &slot_aad)?;
+        let mut header = self.clone();
+        header.slots.retain(|slot| !matches!(slot, Slot::Device { .. }));
+        header.slots.push(Slot::Device {
+            nonce: HEXLOWER.encode(&nonce),
+            wrapped_key: HEXLOWER.encode(&wrapped),
+        });
+        Ok((header, secret))
+    }
+
+    /// This header with any device slot removed. The other
+    /// slots are untouched.
+    pub fn without_device_slot(&self) -> VaultHeader {
+        let mut header = self.clone();
+        header.slots.retain(|slot| !matches!(slot, Slot::Device { .. }));
+        header
     }
 
     /// Opens the vault with the passphrase.
@@ -272,6 +313,27 @@ impl VaultHeader {
                 );
                 let kek = derive_kek(passphrase, &salt, kdf)?;
                 if let Ok(key) = unwrap_key(&kek, &nonce, &wrapped, &slot_aad) {
+                    return Ok(MasterKey::from_key(key));
+                }
+            }
+        }
+        Err(Error::Unlock)
+    }
+
+    /// Opens the vault with the device secret.
+    pub fn unlock_with_device(&self, secret: &DeviceSecret) -> Result<MasterKey> {
+        self.validate()?;
+        for slot in &self.slots {
+            if let Slot::Device { nonce, wrapped_key } = slot {
+                let nonce = decode_fixed::<NONCE_LEN>(nonce, "nonce")?;
+                let wrapped = decode_fixed::<WRAPPED_LEN>(wrapped_key, "wrapped_key")?;
+                let slot_aad = aad(
+                    self.format_version,
+                    &self.suite,
+                    &self.vault_id,
+                    DEVICE_DESCRIPTION,
+                );
+                if let Ok(key) = unwrap_key(&secret.kek(), &nonce, &wrapped, &slot_aad) {
                     return Ok(MasterKey::from_key(key));
                 }
             }
@@ -484,5 +546,43 @@ mod tests {
         let (header, _recovery, master) = VaultHeader::create(decomposed, fast()).unwrap();
         let opened = header.unlock_with_passphrase(composed).unwrap();
         assert!(opened.as_bytes() == master.as_bytes());
+    }
+}
+// Device-slot tests live at file level: the header API they
+// exercise is the same one the folder tests use end to end.
+#[cfg(test)]
+mod device_tests {
+    use super::*;
+
+    fn fast() -> KdfParams {
+        KdfParams { m_kib: 8, t: 1, p: 1 }
+    }
+
+    #[test]
+    fn device_slot_opens_and_removes() {
+        let (header, _recovery, master) =
+            VaultHeader::create("pass phrase", fast()).expect("create");
+        assert!(!header.has_device_slot());
+        let (with_device, secret) = header.with_device_slot(&master).expect("enroll");
+        assert!(with_device.has_device_slot());
+        // JSON round trip keeps the slot.
+        let parsed = VaultHeader::from_json(&with_device.to_json().unwrap()).unwrap();
+        let opened = parsed.unlock_with_device(&secret).expect("device opens");
+        assert_eq!(opened.key(), master.key());
+        // A different secret does not open.
+        let other = DeviceSecret::generate().unwrap();
+        assert!(matches!(parsed.unlock_with_device(&other), Err(Error::Unlock)));
+        // Passphrase still opens; removing the slot retires the secret.
+        assert!(parsed.unlock_with_passphrase("pass phrase").is_ok());
+        let removed = parsed.without_device_slot();
+        assert!(!removed.has_device_slot());
+        assert!(matches!(removed.unlock_with_device(&secret), Err(Error::Unlock)));
+        // Re-enrolling replaces: the old secret dies.
+        let (again, secret2) = parsed.with_device_slot(&master).expect("re-enroll");
+        assert!(matches!(again.unlock_with_device(&secret), Err(Error::Unlock)));
+        assert!(again.unlock_with_device(&secret2).is_ok());
+        // Bytes round trip (the keychain stores exactly these).
+        let rebuilt = DeviceSecret::from_bytes(secret2.as_bytes()).unwrap();
+        assert!(again.unlock_with_device(&rebuilt).is_ok());
     }
 }

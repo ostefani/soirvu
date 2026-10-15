@@ -30,6 +30,7 @@ pub type Key = Zeroizing<[u8; KEY_LEN]>;
 const LABEL_DB: &str = "soirvu/v1/db";
 const LABEL_ATTACHMENTS: &str = "soirvu/v1/attachments";
 const LABEL_RECOVERY_KEK: &str = "soirvu/v1/kek/recovery";
+const LABEL_DEVICE_KEK: &str = "soirvu/v1/kek/device";
 
 // ---------------------------------------------------------------------------
 // Limits for Argon2id settings read from a header.
@@ -238,6 +239,39 @@ fn unlock_bytes(key: &Key) {
 
 #[cfg(not(unix))]
 fn unlock_bytes(_key: &Key) {}
+
+/// 256 random bits held by the device keychain (Phase 8):
+/// the Touch ID slot's credential. The secret itself never
+/// leaves the keychain; what the header stores is the master
+/// key wrapped under a key derived from it. If the keychain
+/// item is gone (profile expired, biometry re-enrolled), the
+/// slot is simply dead and the other slots still open.
+pub struct DeviceSecret(Key);
+
+impl DeviceSecret {
+    pub fn generate() -> Result<Self> {
+        Ok(DeviceSecret(random_key()?))
+    }
+
+    /// Rebuilds the secret from the bytes the keychain stored.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != KEY_LEN {
+            return Err(Error::Unlock);
+        }
+        let mut raw = [0u8; KEY_LEN];
+        raw.copy_from_slice(bytes);
+        Ok(DeviceSecret(Zeroizing::new(raw)))
+    }
+
+    /// The raw bytes, for the caller to put in the keychain.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0[..]
+    }
+
+    pub(crate) fn kek(&self) -> Key {
+        derive_subkey(&self.0, LABEL_DEVICE_KEK)
+    }
+}
 
 /// 256 random bits shown to the user once, as a fallback to the passphrase.
 pub struct RecoveryKey(Key);

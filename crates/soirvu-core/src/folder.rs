@@ -8,7 +8,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use crate::crypto::{KdfParams, Key, MasterKey, RecoveryKey};
+use crate::crypto::{DeviceSecret, KdfParams, Key, MasterKey, RecoveryKey};
 use crate::error::{Error, Result};
 use crate::storage::Database;
 use crate::vault::VaultHeader;
@@ -55,6 +55,17 @@ impl Vault {
     pub fn open_with_recovery(dir: &Path, recovery: &RecoveryKey) -> Result<Vault> {
         let header = read_header(dir)?;
         let master = header.unlock_with_recovery(recovery)?;
+        finish_open(dir, header, master)
+    }
+
+    /// Opens the vault with the device secret (Phase 8). The
+    /// caller fetched the secret from the OS keychain, which
+    /// is where the biometrics were checked — the core only
+    /// sees bytes, and a wrong or orphaned secret is
+    /// Error::Unlock, like any other bad credential.
+    pub fn open_with_device(dir: &Path, secret: &DeviceSecret) -> Result<Vault> {
+        let header = read_header(dir)?;
+        let master = header.unlock_with_device(secret)?;
         finish_open(dir, header, master)
     }
 
@@ -154,6 +165,36 @@ impl Vault {
         write_atomic(&self.dir.join(HEADER_FILE), &header.to_json()?)?;
         self.header = header;
         Ok(())
+    }
+
+    /// Enrolls (or re-enrolls) the device slot (Phase 8): a
+    /// fresh device secret is generated, the header gains the
+    /// slot, and the secret is returned for the caller to
+    /// store in the OS keychain. If the keychain store fails,
+    /// the caller removes the slot again with remove_device —
+    /// a slot whose secret was never stored opens nothing.
+    pub fn enroll_device(&mut self) -> Result<DeviceSecret> {
+        let (header, secret) = self.header.with_device_slot(&self.master)?;
+        write_atomic(&self.dir.join(HEADER_FILE), &header.to_json()?)?;
+        self.header = header;
+        Ok(secret)
+    }
+
+    /// Removes the device slot, if any. The keychain item is
+    /// the caller's to delete; a leftover item points at a
+    /// slot that no longer exists and opens nothing.
+    pub fn remove_device(&mut self) -> Result<()> {
+        if !self.header.has_device_slot() {
+            return Ok(());
+        }
+        let header = self.header.without_device_slot();
+        write_atomic(&self.dir.join(HEADER_FILE), &header.to_json()?)?;
+        self.header = header;
+        Ok(())
+    }
+
+    pub fn has_device_slot(&self) -> bool {
+        self.header.has_device_slot()
     }
 
     /// Replaces the recovery key with a fresh one, shown once
