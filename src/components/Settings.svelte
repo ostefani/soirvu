@@ -20,6 +20,7 @@
     let newRecoveryKey = $state("");
     let secBusy = $state(false);
     let rotated = $state(false);
+    let rotating = $state(false);
 
     function secError(e) {
         return e === "wrong_passphrase" ? "Wrong current passphrase." : `Something went wrong (${e}).`;
@@ -45,6 +46,7 @@
     async function rotateMasterKey() {
         secNote = "";
         secBusy = true;
+        rotating = true;
         try {
             const key = await api.vaultRotateMasterKey(curPass);
             if (key === null) {
@@ -59,6 +61,7 @@
             secNote = secError(e);
         } finally {
             secBusy = false;
+            rotating = false;
         }
     }
 
@@ -264,6 +267,13 @@
                 <button onclick={() => api.vaultLock()}>Done — go to the lock screen</button>
             {/if}
         </div>
+
+        {#if rotating}
+            <p class="note">
+                Changing the master key… a fresh copy of the diary is being built and checked.
+                This can take a while for a large diary — don't close the app.
+            </p>
+        {/if}
 
         {#if newRecoveryKey}
             <p>Your new recovery key: <code>{newRecoveryKey}</code></p>
