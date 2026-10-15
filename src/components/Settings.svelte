@@ -30,7 +30,7 @@
         secBusy = true;
         try {
             await api.vaultChangePassphrase(curPass, newPass);
-            curPass = "";
+            curPass = newPass;
             newPass = "";
             newPass2 = "";
             secNote = "Passphrase changed. The diary stays open — the new passphrase applies at the next unlock.";

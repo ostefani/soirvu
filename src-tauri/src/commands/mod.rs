@@ -19,7 +19,22 @@ use crate::state::AppState;
 pub fn reload_main_window(app: &AppHandle) {
     use tauri::Manager;
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.reload();
+        // Reload ONLY the app document, never the whole window.
+        // Under the isolation pattern the window's top document
+        // is the isolation driver and the app lives in its
+        // iframe; window.reload() restarts the driver too, and
+        // after such a restart the app's invokes die in the web
+        // view ("Fetch API cannot load ipc://localhost/… due to
+        // access control checks"). Reloading the iframe's
+        // document discards the editor, undo history and JS
+        // heap exactly as §9 asks, and leaves the ipc plumbing
+        // as it was at startup. Without an iframe (no driver),
+        // the top document IS the app and reloads itself.
+        let _ = window.eval(
+            "const f = document.querySelector('iframe'); \
+             if (f && f.contentWindow) { f.contentWindow.location.reload(); } \
+             else { window.location.reload(); }",
+        );
     }
 }
 
