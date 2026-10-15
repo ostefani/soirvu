@@ -19,6 +19,8 @@
         "allow-entry-get",
         "allow-entry-save",
         "allow-entry-delete",
+        "allow-calendar-days",
+        "allow-on-this-day",
         "allow-search",
         "allow-tag-list",
         "allow-tag-rename",

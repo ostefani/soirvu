@@ -13,6 +13,7 @@ fn main() {
         "vault_fork_import",
         "entry_list",
         "calendar_days",
+        "on_this_day",
         "entry_get",
         "entry_save",
         "entry_delete",

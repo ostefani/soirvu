@@ -158,6 +158,7 @@ pub fn run() {
             commands::vault::vault_fork_import,
             commands::entries::entry_list,
             commands::entries::calendar_days,
+            commands::entries::on_this_day,
             commands::entries::entry_get,
             commands::entries::entry_save,
             commands::entries::entry_delete,

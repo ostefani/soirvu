@@ -107,6 +107,7 @@ pub struct SaveDraft {
     pub tags: Vec<String>,
 }
 
+
 #[tauri::command]
 pub fn entry_list(
     state: State<'_, AppState>,
@@ -130,6 +131,7 @@ pub fn entry_list(
     }))
 }
 
+
 #[tauri::command]
 pub fn entry_get(state: State<'_, AppState>, id: String) -> Result<EntryDto, String> {
     ipc(state.with_vault(|vault| {
@@ -137,6 +139,7 @@ pub fn entry_get(state: State<'_, AppState>, id: String) -> Result<EntryDto, Str
         Ok(EntryDto::from(&entry))
     }))
 }
+
 
 #[tauri::command]
 pub fn entry_save(state: State<'_, AppState>, draft: SaveDraft) -> Result<EntryDto, String> {
@@ -156,6 +159,7 @@ pub fn entry_save(state: State<'_, AppState>, draft: SaveDraft) -> Result<EntryD
         Ok(EntryDto::from(&entry))
     }))
 }
+
 
 #[tauri::command]
 pub fn entry_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
@@ -187,6 +191,7 @@ impl From<&SearchHit> for HitDto {
     }
 }
 
+
 #[tauri::command]
 pub fn search(state: State<'_, AppState>, query: String) -> Result<Vec<HitDto>, String> {
     ipc(state.with_vault(|vault| {
@@ -210,6 +215,7 @@ impl From<&TagCount> for TagDto {
     }
 }
 
+
 /// One day's live-entry count, for the calendar (§13 Phase 6).
 #[derive(Serialize)]
 pub struct CalendarDay {
@@ -226,6 +232,18 @@ impl From<&soirvu_core::entries::DayCount> for CalendarDay {
     }
 }
 
+
+#[tauri::command]
+pub fn on_this_day(
+    state: State<'_, AppState>,
+    date: String,
+) -> Result<Vec<EntrySummary>, String> {
+    ipc(state.with_vault(|vault| {
+        let hits = vault.on_this_day(&date)?;
+        Ok(hits.iter().map(EntrySummary::from).collect())
+    }))
+}
+
 #[tauri::command]
 pub fn calendar_days(
     state: State<'_, AppState>,
@@ -238,6 +256,7 @@ pub fn calendar_days(
     }))
 }
 
+
 #[tauri::command]
 pub fn tag_list(state: State<'_, AppState>) -> Result<Vec<TagDto>, String> {
     ipc(state.with_vault(|vault| {
@@ -249,6 +268,7 @@ pub fn tag_list(state: State<'_, AppState>) -> Result<Vec<TagDto>, String> {
 /// Rename and merge return how many live entries carried the tag
 /// (for a merge: the entries that had `from`). That is the core's
 /// count, not the size of the target tag afterwards.
+
 #[tauri::command]
 pub fn tag_rename(state: State<'_, AppState>, from: String, to: String) -> Result<i64, String> {
     ipc(state.with_vault(|vault| {
@@ -257,6 +277,7 @@ pub fn tag_rename(state: State<'_, AppState>, from: String, to: String) -> Resul
         Ok(i64::try_from(count).unwrap_or(i64::MAX))
     }))
 }
+
 
 #[tauri::command]
 pub fn tag_merge(state: State<'_, AppState>, from: String, into: String) -> Result<i64, String> {

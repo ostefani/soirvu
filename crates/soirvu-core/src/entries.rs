@@ -337,6 +337,38 @@ impl Vault {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Entries written on this month-and-day in earlier years —
+    /// the "on this day" memory lane. `date` is the reference
+    /// day (YYYY-MM-DD); only strictly earlier entries match,
+    /// newest year first.
+    pub fn on_this_day(&self, date: &str) -> Result<Vec<EntrySummary>> {
+        let mut stmt = self.db.connection().prepare(
+            "SELECT e.id, e.entry_date, e.created_at, e.updated_at, e.title,
+                    substr(e.body_md, 1, ?2),
+                    (SELECT group_concat(t.name, char(31))
+                       FROM entry_tag et JOIN tag t ON t.id = et.tag_id
+                      WHERE et.entry_rid = e.rid)
+               FROM entry e
+              WHERE e.deleted_at IS NULL
+                AND substr(e.entry_date, 6, 5) = substr(?1, 6, 5)
+                AND e.entry_date < ?1
+              ORDER BY e.entry_date DESC, e.created_at DESC, e.id DESC",
+        )?;
+        let rows = stmt.query_map(params![date, PREVIEW_CHARS as i64], |row| {
+            let tags: Option<String> = row.get(6)?;
+            Ok(EntrySummary {
+                id: row.get(0)?,
+                entry_date: row.get(1)?,
+                created_at: row.get(2)?,
+                updated_at: row.get(3)?,
+                title: row.get(4)?,
+                preview: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                tags: split_tags(tags),
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// Finds entries containing every word of `query` (words of 3 or more characters;
     /// shorter words are ignored). Matching is by substring and ignores case, so
     /// «книг» finds «Книгу», «книги» and «книга». Newest entries come first.
@@ -1203,6 +1235,27 @@ mod tests {
         }
         assert!(vault.create_entry(&draft("1900-02-29", "a", "a")).is_err()); // 1900 was not a leap year
     }
+
+    #[test]
+    fn on_this_day_reaches_back_years_not_sideways() {
+        let (_tmp, mut vault) = new_vault();
+        for (date, title) in [
+            ("2023-10-15", "deleted"),
+            ("2024-10-15", "two years back"),
+            ("2025-10-15", "last year"),
+            ("2025-10-16", "wrong day"),
+            ("2026-10-15", "today itself"),
+        ] {
+            let saved = vault.create_entry(&draft(date, title, "text")).unwrap();
+            if title == "deleted" {
+                vault.delete_entry(&saved.id).unwrap();
+            }
+        }
+        let hits = vault.on_this_day("2026-10-15").unwrap();
+        let titles: Vec<&str> = hits.iter().map(|h| h.title.as_deref().unwrap_or("")).collect();
+        assert_eq!(titles, ["last year", "two years back"]);
+    }
+
 
     #[test]
     fn days_count_live_entries_and_the_list_filters_by_date() {

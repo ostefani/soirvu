@@ -178,6 +178,15 @@ export function calendarDays(from, to) {
 }
 
 /**
+ * Entries from this month-and-day in earlier years.
+ * @param {string} date Today, YYYY-MM-DD.
+ * @returns {Promise<EntrySummary[]>}
+ */
+export function onThisDay(date) {
+    return invoke('on_this_day', { date });
+}
+
+/**
  * @param {string} id
  * @returns {Promise<Entry>}
  */
