@@ -178,6 +178,19 @@ fn export_outcome_shape() {
 }
 
 #[test]
+fn import_outcome_shape() {
+    snap(
+        "import_outcome",
+        &crate::commands::misc::ImportOutcome {
+            entries: 12,
+            attachments: 3,
+            skipped_entries: 1,
+            skipped_attachments: 2,
+        },
+    );
+}
+
+#[test]
 fn calendar_day_shape() {
     snap(
         "calendar_day",

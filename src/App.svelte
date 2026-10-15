@@ -139,7 +139,13 @@
             </aside>
             <main>
                 {#if showSettings}
-                    <Settings onBack={() => (showSettings = false)} />
+                    <Settings
+                        onBack={() => (showSettings = false)}
+                        onImported={() => {
+                            listEl?.refresh();
+                            calVersion++;
+                        }}
+                    />
                 {:else if selectedId}
                     {#key selectedId}
                         <EntryEditor

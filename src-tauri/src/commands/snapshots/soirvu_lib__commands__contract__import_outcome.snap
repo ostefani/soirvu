@@ -1,0 +1,10 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+{
+  "entries": 12,
+  "attachments": 3,
+  "skippedEntries": 1,
+  "skippedAttachments": 2
+}

@@ -6,7 +6,7 @@
     import { listen } from "@tauri-apps/api/event";
     import * as api from "../api.js";
 
-    let { onBack } = $props();
+    let { onBack, onImported } = $props();
 
     let settings = $state(null);
     let timeoutMin = $state(5);
@@ -114,6 +114,44 @@
             expNote = expError(e);
         } finally {
             expBusy = false;
+        }
+    }
+
+    let impBusy = $state(false);
+    let impNote = $state('');
+
+    async function runImport(which) {
+        impNote = '';
+        impBusy = true;
+        try {
+            const outcome =
+                which === 'json' ? await api.importJson() : await api.importMarkdown();
+            if (outcome) {
+                impNote =
+                    'Imported ' +
+                    outcome.entries +
+                    ' entries and ' +
+                    outcome.attachments +
+                    ' attachments.';
+                if (outcome.skippedEntries > 0 || outcome.skippedAttachments > 0) {
+                    impNote +=
+                        ' Skipped ' +
+                        outcome.skippedEntries +
+                        ' entries and ' +
+                        outcome.skippedAttachments +
+                        ' attachments (already present or unreadable).';
+                }
+                if (outcome.entries > 0) {
+                    onImported?.();
+                }
+            }
+        } catch (e) {
+            impNote =
+                String(e) === 'locked'
+                    ? 'The diary is locked.'
+                    : 'Something went wrong (' + String(e) + ').';
+        } finally {
+            impBusy = false;
         }
     }
 
@@ -363,6 +401,22 @@
             ids, deleted entries — and is made for importing back into Soirvu.
         </p>
         {#if expNote}<p class="note">{expNote}</p>{/if}
+
+        <h3>Import</h3>
+        <p class="note">
+            Import adds entries to this diary — nothing is overwritten or merged.
+            A Markdown folder can be a Soirvu export or notes from another app.
+            A JSON file must be a Soirvu export; entries whose id already exists are skipped.
+        </p>
+        <div class="row">
+            <button onclick={() => runImport('markdown')} disabled={impBusy}>
+                Import Markdown folder…
+            </button>
+            <button onclick={() => runImport('json')} disabled={impBusy}>
+                Import JSON file…
+            </button>
+        </div>
+        {#if impNote}<p class="note">{impNote}</p>{/if}
     {:else if !error}
         <p class="note">Loading…</p>
     {/if}

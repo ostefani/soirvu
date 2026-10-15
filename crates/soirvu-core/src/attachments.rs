@@ -154,6 +154,50 @@ impl Vault {
         commit
     }
 
+    /// Inserts an attachment with a caller-chosen id, size,
+    /// hash and timestamps — the import path (§8). The caller
+    /// has checked the id is free and, for live attachments,
+    /// that `data` really hashes to `sha256`. `data` is None
+    /// for tombstones (their blobs are gone). The entry's own
+    /// timestamps are the caller's business here — importing
+    /// restores the entry as it was, so nothing is bumped.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn insert_attachment_exact(
+        &mut self,
+        id: &str,
+        entry_id: &str,
+        name: &str,
+        mime: &str,
+        size: i64,
+        sha256: &[u8],
+        created_at: i64,
+        deleted_at: Option<i64>,
+        data: Option<&[u8]>,
+    ) -> Result<()> {
+        let name = validate_name(name)?;
+        let mime = validate_mime(mime)?;
+        if let Some(bytes) = data {
+            let key = blob_key(&self.attachment_key(), id);
+            write_blob(self.dir(), id, &key, &mut io::Cursor::new(bytes))?;
+        }
+        let commit = (|| -> Result<()> {
+            let tx = self.db.conn_mut().transaction()?;
+            let lseq = next_lseq(&tx)?;
+            tx.execute(
+                "INSERT INTO attachment
+                   (id, entry_id, name, mime, size, sha256, created_at, deleted_at, lseq)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![id, entry_id, name, mime, size, sha256, created_at, deleted_at, lseq],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })();
+        if commit.is_err() && data.is_some() {
+            remove_blob(self.dir(), id);
+        }
+        commit
+    }
+
     /// Metadata for one live attachment. A tombstoned or unknown id is
     /// `AttachmentNotFound`.
     pub fn get_attachment(&self, id: &str) -> Result<Attachment> {

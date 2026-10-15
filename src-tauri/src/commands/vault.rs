@@ -52,6 +52,17 @@ pub(crate) async fn pick_folder(app: &AppHandle) -> Option<PathBuf> {
     }
 }
 
+pub(crate) async fn pick_file(app: &AppHandle) -> Option<PathBuf> {
+    let (tx, rx) = oneshot::channel();
+    app.dialog().file().pick_file(move |result| {
+        let _ = tx.send(result);
+    });
+    match rx.await {
+        Ok(Some(tauri_plugin_dialog::FilePath::Path(path))) => Some(path),
+        _ => None,
+    }
+}
+
 /// The vault's id, read from its header file. The folder is not
 /// opened and nothing is decrypted. The header is small (about a
 /// kilobyte); the size cap and the regular-file check keep a picked

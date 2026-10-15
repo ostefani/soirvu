@@ -161,6 +161,51 @@ impl Vault {
         self.get_entry(&id)
     }
 
+    /// Inserts an entry with a caller-chosen id and timestamps —
+    /// the import path (§8). The caller has checked the id is
+    /// free. A `deleted_at` entry is stored scrubbed, exactly
+    /// like a locally deleted one: body NULL, no search text.
+    pub(crate) fn insert_entry_exact(
+        &mut self,
+        id: &str,
+        draft: &EntryDraft,
+        created_at: i64,
+        updated_at: i64,
+        deleted_at: Option<i64>,
+    ) -> Result<()> {
+        validate_draft(draft)?;
+        let tags = normalize_tags(&draft.tags)?;
+        let device = self.device_id.clone();
+        let tx = self.db.conn_mut().transaction()?;
+        let lseq = next_lseq(&tx)?;
+        tx.execute(
+            "INSERT INTO entry
+               (id, entry_date, created_at, updated_at, rev, device_id, lseq, title, body_md, mood, tz, deleted_at)
+             VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                id,
+                draft.entry_date,
+                created_at,
+                updated_at,
+                device,
+                lseq,
+                draft.title,
+                if deleted_at.is_some() {
+                    None
+                } else {
+                    Some(&draft.body_md)
+                },
+                draft.mood,
+                draft.tz,
+                deleted_at
+            ],
+        )?;
+        let rid = tx.last_insert_rowid();
+        write_tags(&tx, rid, &tags)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn get_entry(&self, id: &str) -> Result<Entry> {
         load(self.db.connection(), id).map(|(_, entry)| entry)
     }

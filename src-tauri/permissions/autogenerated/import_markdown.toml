@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-markdown"
+description = "Enables the import_markdown command without any pre-configured scope."
+commands.allow = ["import_markdown"]
+
+[[permission]]
+identifier = "deny-import-markdown"
+description = "Denies the import_markdown command without any pre-configured scope."
+commands.deny = ["import_markdown"]

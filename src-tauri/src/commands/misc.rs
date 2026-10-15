@@ -221,3 +221,55 @@ pub async fn export_json(
 ) -> Result<Option<ExportOutcome>, String> {
     run_export(app, state, passphrase, true).await
 }
+
+/// What an import did (§8): counts only — paths never cross
+/// the boundary here either.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportOutcome {
+    pub entries: usize,
+    pub attachments: usize,
+    pub skipped_entries: usize,
+    pub skipped_attachments: usize,
+}
+
+impl From<soirvu_core::import::ImportReport> for ImportOutcome {
+    fn from(report: soirvu_core::import::ImportReport) -> Self {
+        ImportOutcome {
+            entries: report.entries,
+            attachments: report.attachments,
+            skipped_entries: report.skipped_entries,
+            skipped_attachments: report.skipped_attachments,
+        }
+    }
+}
+
+/// §8: import a folder of Markdown files (front matter
+/// optional) into the open diary. Only adds — see the core
+/// import module for the id rules.
+#[tauri::command]
+pub async fn import_markdown(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<ImportOutcome>, String> {
+    let Some(dir) = crate::commands::vault::pick_folder(&app).await else {
+        return Ok(None);
+    };
+    let report = ipc(state.with_vault(|vault| Ok(vault.import_markdown(&dir)?)))?;
+    Ok(Some(report.into()))
+}
+
+/// §8: import a Soirvu JSON export into the open diary.
+/// Entries and attachments keep their ids; ids already taken
+/// are skipped, never overwritten.
+#[tauri::command]
+pub async fn import_json(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<ImportOutcome>, String> {
+    let Some(file) = crate::commands::vault::pick_file(&app).await else {
+        return Ok(None);
+    };
+    let report = ipc(state.with_vault(|vault| Ok(vault.import_json(&file)?)))?;
+    Ok(Some(report.into()))
+}

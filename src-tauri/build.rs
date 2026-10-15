@@ -29,6 +29,8 @@ fn main() {
         "backup_now",
         "export_markdown",
         "export_json",
+        "import_markdown",
+        "import_json",
         "settings_get",
         "settings_set",
         "settings_pick_backup_dir",

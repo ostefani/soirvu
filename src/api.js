@@ -195,6 +195,19 @@ export function exportJson(passphrase) {
     return invoke('export_json', { passphrase });
 }
 
+/**
+ * §8 imports. Both resolve with { entries, attachments,
+ * skippedEntries, skippedAttachments }, or null when the
+ * user cancels the pick.
+ */
+export function importMarkdown() {
+    return invoke('import_markdown');
+}
+
+export function importJson() {
+    return invoke('import_json');
+}
+
 export function vaultRotateMasterKey(currentPassphrase) {
     return invoke('vault_rotate_master_key', { currentPassphrase });
 }
