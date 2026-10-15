@@ -328,6 +328,15 @@ export function attachmentImport(entryId) {
 }
 
 /**
+ * Copies the open vault to the backup location now (§13
+ * Phase 6). Resolves with the new folder's display name.
+ * @returns {Promise<string>}
+ */
+export function backupNow() {
+    return invoke('backup_now', {});
+}
+
+/**
  * Reports a copy made in the diary (§9 clipboard clearing).
  * Rust checks the setting and schedules the clear.
  * @returns {Promise<void>}

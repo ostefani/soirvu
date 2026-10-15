@@ -63,6 +63,17 @@ impl Vault {
         drop(self);
     }
 
+    /// Flushes the WAL into the main database file, so the
+    /// vault folder can be copied file by file (backups, §13).
+    /// The copy is as new as this checkpoint; the live database
+    /// keeps working afterwards.
+    pub fn checkpoint(&self) -> Result<()> {
+        self.db
+            .connection()
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+        Ok(())
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
     }

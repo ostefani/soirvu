@@ -11,6 +11,7 @@
     let timeoutMin = $state(5);
     let stripExif = $state(true);
     let clipboardClear = $state(false);
+    let backupSchedule = $state("off");
     let error = $state("");
     let note = $state("");
 
@@ -20,6 +21,7 @@
             timeoutMin = Math.max(1, Math.round(settings.lock_timeout_secs / 60));
             stripExif = settings.strip_exif;
             clipboardClear = settings.clipboard_clear;
+            backupSchedule = settings.backup_schedule;
         } catch (e) {
             error = `Something went wrong (${e}).`;
         }
@@ -59,6 +61,32 @@
             note = "Saved.";
         } catch (e) {
             error = `Something went wrong (${e}).`;
+        }
+    }
+
+    async function saveSchedule() {
+        error = "";
+        note = "";
+        try {
+            await api.settingsSet({ ...settings, backup_schedule: backupSchedule });
+            settings = await api.settingsGet();
+            note = "Saved.";
+        } catch (e) {
+            error = `Something went wrong (${e}).`;
+        }
+    }
+
+    async function backUpNow() {
+        error = "";
+        note = "";
+        try {
+            const name = await api.backupNow();
+            note = `Backed up to ${name}.`;
+        } catch (e) {
+            error =
+                e === "backup_unavailable"
+                    ? "The backup folder is not available."
+                    : `Something went wrong (${e}).`;
         }
     }
 
@@ -109,7 +137,7 @@
             {#if settings.backup_location}
                 <strong>{settings.backup_location}</strong>
             {:else}
-                <span class="note">not set — backups stay in each vault's own backups folder</span>
+                <span class="note">not set</span>
             {/if}
         </p>
         <div class="row">
@@ -118,6 +146,23 @@
                 <button class="quiet" onclick={clearBackup}>Clear</button>
             {/if}
         </div>
+
+        <label>
+            Automatic backups
+            <select bind:value={backupSchedule} onchange={saveSchedule}>
+                <option value="off">Off</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+            </select>
+        </label>
+
+        <div class="row">
+            <button onclick={backUpNow} disabled={!settings.backup_location}>Back up now</button>
+        </div>
+        <p class="note">
+            A backup is an encrypted copy of this vault (the newest 7 are kept). To restore one,
+            choose its folder from the lock screen.
+        </p>
     {:else if !error}
         <p class="note">Loading…</p>
     {/if}

@@ -58,6 +58,17 @@ impl Default for Caps {
     }
 }
 
+/// The scheduled-backup rule (§13 Phase 6): the open vault is
+/// copied to the backup location at most this often.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupSchedule {
+    #[default]
+    Off,
+    Daily,
+    Weekly,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub lock_timeout_secs: u64,
@@ -66,6 +77,9 @@ pub struct Settings {
     /// (only if nothing else has been copied since).
     #[serde(default)]
     pub clipboard_clear: bool,
+    /// How often the open vault backs itself up (§13 Phase 6).
+    #[serde(default)]
+    pub backup_schedule: BackupSchedule,
     pub caps: Caps,
     /// Display name of the backup folder (never a path — paths
     /// stay in Rust). Derived from AppConfig::backup_dir whenever
@@ -77,7 +91,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { lock_timeout_secs: 300, strip_exif: true, clipboard_clear: false, caps: Caps::default(), backup_location: None }
+        Settings { lock_timeout_secs: 300, strip_exif: true, clipboard_clear: false, backup_schedule: BackupSchedule::Off, caps: Caps::default(), backup_location: None }
     }
 }
 
@@ -204,6 +218,16 @@ impl AppState {
 
     /// Stores (or clears) the backup folder chosen through the
     /// native picker. Only Rust ever sees the path.
+    /// The backup folder the user picked (a path: Rust only).
+    pub fn backup_dir(&self) -> Option<PathBuf> {
+        self.inner.lock().unwrap().config.backup_dir.clone()
+    }
+
+    /// The scheduled-backup rule from the settings.
+    pub fn backup_schedule(&self) -> BackupSchedule {
+        self.inner.lock().unwrap().config.settings.backup_schedule
+    }
+
     pub fn set_backup_dir(&self, dir: Option<PathBuf>) -> AppResult<()> {
         let mut inner = self.inner.lock().unwrap();
         inner.config.backup_dir = dir;

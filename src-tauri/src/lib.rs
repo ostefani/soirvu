@@ -3,6 +3,7 @@
 //! the lock state machine, the command surface (§6.1) and the
 //! security configuration (§6.3).
 
+mod backup;
 mod commands;
 mod error;
 #[cfg(target_os = "macos")]
@@ -117,8 +118,11 @@ pub fn run() {
             // expiry, lock and tell the UI.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                let mut ticks: u64 = 0;
+                let mut was_unlocked = false;
                 loop {
                     tokio::time::sleep(Duration::from_secs(5)).await;
+                    ticks += 1;
                     let state = handle.state::<AppState>();
                     if state.idle_expired() {
                         state.lock();
@@ -132,6 +136,13 @@ pub fn run() {
                         commands::emit_status(&handle, &state);
                         commands::reload_main_window(&handle);
                     }
+                    // §13: scheduled backups — once when a vault
+                    // opens, then every five minutes while open.
+                    let unlocked = state.status() == state::Status::Unlocked;
+                    if (unlocked && !was_unlocked) || ticks % 60 == 0 {
+                        crate::backup::maybe_scheduled(&state);
+                    }
+                    was_unlocked = unlocked;
                 }
             });
             Ok(())
@@ -145,7 +156,6 @@ pub fn run() {
             commands::vault::vault_forget,
             commands::vault::vault_relocate,
             commands::entries::entry_list,
-            commands::entries::calendar_days,
             commands::entries::entry_get,
             commands::entries::entry_save,
             commands::entries::entry_delete,
@@ -155,6 +165,7 @@ pub fn run() {
             commands::entries::tag_merge,
             commands::misc::open_link,
             commands::misc::clipboard_note_copy,
+            commands::misc::backup_now,
             commands::misc::settings_get,
             commands::misc::settings_set,
             commands::misc::settings_pick_backup_dir,

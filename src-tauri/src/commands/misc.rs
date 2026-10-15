@@ -92,3 +92,12 @@ pub fn clipboard_note_copy(state: State<'_, AppState>) -> Result<(), String> {
     });
     Ok(())
 }
+
+
+/// §13 Phase 6: copy the open vault to the backup location
+/// now, whatever the schedule says. Returns the new folder's
+/// display name; the path never crosses the boundary.
+#[tauri::command]
+pub fn backup_now(state: State<'_, AppState>) -> Result<String, String> {
+    ipc(crate::backup::make_backup(&state))
+}
