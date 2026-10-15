@@ -110,7 +110,6 @@
         </header>
         <div class="diary-body">
             <aside>
-                <Calendar selectedDate={listDate} onSelect={(d) => (listDate = d)} version={calVersion} />
                 <EntryList
                     bind:this={listEl}
                     selectedId={selectedId}
@@ -126,6 +125,7 @@
                     {#key selectedId}
                         <EntryEditor
                             entryId={selectedId}
+                            onBack={() => (selectedId = null)}
                             onDeleted={() => {
                                 selectedId = null;
                                 listEl?.refresh();
@@ -138,7 +138,10 @@
                         />
                     {/key}
                 {:else}
-                    <p class="note">Pick an entry, or write a new one.</p>
+                    <div class="calendar-home">
+                        <Calendar large selectedDate={listDate} onSelect={(d) => (listDate = d)} version={calVersion} />
+                        <p class="note">Pick a day to see its entries in the list — or pick a recent entry on the left.</p>
+                    </div>
                 {/if}
             </main>
         </div>

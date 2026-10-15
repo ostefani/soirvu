@@ -5,7 +5,7 @@
     // it; clicking it again clears the filter.
     import * as api from '../api.js';
 
-    let { selectedDate = null, onSelect, version = 0 } = $props();
+    let { selectedDate = null, onSelect, version = 0, large = false } = $props();
 
     const now = new Date();
     let year = $state(now.getFullYear());
@@ -63,7 +63,7 @@
     }
 </script>
 
-<div class="calendar">
+<div class="calendar" class:large>
     <div class="cal-head">
         <button class="quiet" onclick={() => step(-1)} aria-label="Previous month">‹</button>
         <span class="cal-title">{MONTH_NAMES[month]} {year}</span>
@@ -96,7 +96,25 @@
 <style>
     .calendar {
         padding: 0.5rem 0.75rem 0.75rem;
-        border-bottom: 1px solid #e4d9cf;
+    }
+
+    .calendar.large {
+        max-width: 620px;
+        margin: 0 auto;
+        padding: 1rem 1.25rem 1.25rem;
+    }
+
+    .calendar.large .cal-title {
+        font-size: 1.15rem;
+    }
+
+    .calendar.large .cal-day {
+        font-size: 1rem;
+        padding: 0.55rem 0;
+    }
+
+    .calendar.large .cal-weekday {
+        font-size: 0.8rem;
     }
 
     .cal-head {

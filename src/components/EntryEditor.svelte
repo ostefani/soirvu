@@ -9,7 +9,7 @@
     import { createEditor } from '../editor/index.js';
     import EditorToolbar from './EditorToolbar.svelte';
 
-    let { entryId, onDeleted, onSaved } = $props();
+    let { entryId, onDeleted, onSaved, onBack } = $props();
 
     let entry = $state(null);
     let title = $state('');
@@ -187,6 +187,9 @@
 
 {#if entry}
     <div class="editor-pane">
+        <div class="back-row">
+            <button class="quiet" onclick={() => onBack?.()}>‹ Back</button>
+        </div>
         <div class="meta-row">
             <input class="title-input" placeholder="Title" bind:value={title} oninput={markDirty} />
             <input type="date" bind:value={entryDate} onchange={markDirty} />
