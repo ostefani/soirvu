@@ -125,7 +125,6 @@ pub trait LockEvents: Send {
     /// Calls `on_lock` (on the main thread) when the OS says the
     /// session is no longer private.
     fn start(&mut self, on_lock: Box<dyn Fn(LockReason) + Send + Sync>) -> Result<(), String>;
-    fn stop(&mut self) {}
 }
 
 /// The platform's lock-signal source.
