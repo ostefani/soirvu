@@ -195,3 +195,18 @@ export function toolbarCommands(schema) {
         },
     };
 }
+
+/** Flips the checked state of the task item at `itemPos` (a
+ *  document position just before the list_item node). Used by
+ *  the view when the item's checkbox is clicked. */
+export function toggleTaskAt(state, dispatch, itemPos) {
+    const item = state.doc.nodeAt(itemPos);
+    if (!item || item.type.name !== "list_item") return false;
+    if (item.attrs.checked === null || item.attrs.checked === undefined) return false;
+    const tr = state.tr();
+    tr.replaceWith(itemPos, itemPos + item.nodeSize, [
+        item.type.create({ ...item.attrs, checked: !item.attrs.checked }, item.content, item.marks),
+    ]);
+    if (dispatch) dispatch(tr);
+    return true;
+}

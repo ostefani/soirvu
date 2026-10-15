@@ -136,3 +136,81 @@
 {:else}
     <p class="note">Opening…</p>
 {/if}
+
+<style>
+    /* Spaces render as typed: with the default white-space a
+       trailing space collapses until the next letter lands, so
+       typing looks like spaces are being eaten. break-spaces
+       (pre-wrap as the older-engine fallback) keeps every space
+       visible, which is what a text editor owes the typist. */
+    :global(.editor-mount.ProseMirror) {
+        white-space: pre-wrap;
+        white-space: break-spaces;
+    }
+
+    /* Editor content styles. The editor's DOM is rendered by
+       editor/view.js, not by Svelte, so these rules are :global
+       but fenced under .editor-mount — this component is their
+       owner. Without them a task item looks like a bullet and
+       inline code looks like a code block: the document keeps
+       them distinct (li[data-checked], <code> vs <pre>), only
+       the presentation was missing. */
+    .editor-mount :global(li[data-checked]) {
+        list-style: none;
+        position: relative;
+    }
+
+    /* Absolute, not inline: the item's content is a block <p>,
+       so an inline box would sit on its own line above the text.
+       The gutter left of the item is where the box belongs —
+       and where the view listens for toggle clicks. */
+    .editor-mount :global(li[data-checked]::before) {
+        position: absolute;
+        left: -1.45em;
+        top: 0.08em;
+        font-size: 1.05em;
+        line-height: 1;
+    }
+
+    .editor-mount :global(li[data-checked="false"]::before) {
+        content: "☐";
+    }
+
+    .editor-mount :global(li[data-checked="true"]::before) {
+        content: "☑";
+    }
+
+    .editor-mount :global(li[data-checked="true"]) {
+        color: rgba(0, 0, 0, 0.55);
+    }
+
+    .editor-mount :global(code) {
+        background: rgba(0, 0, 0, 0.06);
+        border-radius: 4px;
+        padding: 0.1em 0.3em;
+        font-size: 0.9em;
+    }
+
+    .editor-mount :global(pre) {
+        background: rgba(0, 0, 0, 0.06);
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        overflow-x: auto;
+    }
+
+    .editor-mount :global(pre code) {
+        background: transparent;
+        padding: 0;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        .editor-mount :global(code),
+        .editor-mount :global(pre) {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .editor-mount :global(li[data-checked="true"]) {
+            color: rgba(255, 255, 255, 0.55);
+        }
+    }
+</style>

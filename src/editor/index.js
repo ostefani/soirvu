@@ -15,7 +15,7 @@ import { EditorView } from "./view.js";
 import { historyPlugin } from "./history.js";
 import { inputRulesPlugin, keymapPlugin } from "./rules.js";
 import { deleteSelectionIn, insertTextIn } from "./commands.js";
-import { selectionInfo, toolbarCommands } from "./toolbar.js";
+import { selectionInfo, toolbarCommands, toggleTaskAt } from "./toolbar.js";
 import { schema } from "./schema.js";
 import { parseMarkdown, serializeMarkdown } from "./markdown.js";
 
@@ -33,6 +33,20 @@ function looksLikeMarkdown(text) {
  *  the schema — only the clipboard's text/plain is ever read. */
 export function makePasteHandler() {
     return (text, state, dispatch) => {
+        // Inside a code or raw block the clipboard is literal
+        // text: no Markdown parsing, no block surgery — the
+        // block holds text and the paste must stay text,
+        // newlines included.
+        const sel = state.selection;
+        if (sel.type === "text") {
+            const parent = state.doc.resolve(sel.from).parent;
+            if (parent.type === state.schema.nodes.code_block || parent.type === state.schema.nodes.raw_block) {
+                const tr = state.tr();
+                insertTextIn(tr, state, text);
+                dispatch(tr);
+                return;
+            }
+        }
         if (looksLikeMarkdown(text)) {
             const frag = parseMarkdown(text).content;
             const tr = state.tr();
@@ -131,6 +145,9 @@ export function createEditor(el, options = {}) {
             if (onSelectionChange) onSelectionChange();
         },
         editable: () => !readonly,
+        onTaskToggle: (itemPos) => {
+            toggleTaskAt(view.state, (tr) => view.dispatch(tr), itemPos);
+        },
         handleClickOn: (href) => {
             if (onOpenLink && href) onOpenLink(href);
         },

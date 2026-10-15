@@ -68,6 +68,7 @@ export class EditorView {
         this.dispatchTransaction = options.dispatchTransaction;
         this.editable = options.editable || (() => true);
         this.handleClickOn = options.handleClickOn || null;
+        this.onTaskToggle = options.onTaskToggle || null;
         this.onPasteText = options.onPasteText || null;
         this.composing = false;
         this.compositionBlockPos = null;
@@ -598,6 +599,18 @@ export class EditorView {
     }
 
     onClick(e) {
+        // A task item's checkbox lives in the gutter left of its
+        // text (EntryEditor's CSS draws it there). A click in the
+        // gutter toggles the item; a click on the text just edits.
+        const item = e.target.closest ? e.target.closest("li[data-checked]") : null;
+        if (item && this.dom.contains(item) && item._pos !== undefined && this.onTaskToggle) {
+            const text = item.querySelector("p") || item;
+            if (e.clientX < text.getBoundingClientRect().left - 2) {
+                e.preventDefault();
+                this.onTaskToggle(item._pos);
+                return;
+            }
+        }
         const link = e.target.closest ? e.target.closest("a[href]") : null;
         if (link && this.dom.contains(link)) {
             e.preventDefault();

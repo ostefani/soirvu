@@ -414,8 +414,13 @@ export function splitListItem(state, dispatch) {
                 afterBlocks.push(child);
             }
         });
+        // The next item starts fresh: a task splits into an
+        // unchecked task (the list stays a task list), anything
+        // else keeps its attrs as they were.
         const itemAttrs = { ...it.attrs };
-        delete itemAttrs.checked;
+        if (itemAttrs.checked !== null && itemAttrs.checked !== undefined) {
+            itemAttrs.checked = false;
+        }
         const item1 = it.type.create(it.attrs, Fragment.fromArray(beforeBlocks));
         const item2 = it.type.create(itemAttrs, Fragment.fromArray(afterBlocks));
         tr.replaceWith(itemStart, itemStart + it.nodeSize, [item1, item2]);
