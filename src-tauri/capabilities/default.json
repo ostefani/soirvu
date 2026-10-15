@@ -17,6 +17,7 @@
     "allow-vault-fork-import",
     "allow-vault-change-passphrase",
     "allow-vault-regenerate-recovery",
+    "allow-vault-rotate-master-key",
         "allow-entry-list",
         "allow-entry-get",
         "allow-entry-save",

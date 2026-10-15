@@ -172,6 +172,19 @@ export function vaultRegenerateRecovery(currentPassphrase) {
     return invoke('vault_regenerate_recovery', { currentPassphrase });
 }
 
+/**
+ * Changes the open vault's master key by fresh-vault
+ * migration; the passphrase stays the same. Ends locked
+ * (silently) so the caller can show the key first.
+ * @param {string} currentPassphrase
+ * @returns {Promise<string | null>} The NEW recovery key,
+ *   shown once — or null when the user cancels the native
+ *   confirmation.
+ */
+export function vaultRotateMasterKey(currentPassphrase) {
+    return invoke('vault_rotate_master_key', { currentPassphrase });
+}
+
 // ---------------------------------------------------------------------------
 // Entries, search, tags (all reject with "locked" unless Unlocked)
 

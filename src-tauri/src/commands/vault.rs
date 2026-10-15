@@ -557,3 +557,107 @@ pub fn vault_regenerate_recovery(
     current.zeroize();
     ipc(result)
 }
+
+
+
+/// The rotation's folder arithmetic: (source, staging, old).
+/// The staging and old folders are siblings — same volume,
+/// so the swaps are renames, never copies.
+fn rotation_paths(state: &AppState) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), AppError> {
+    let id = state
+        .current_id()
+        .ok_or_else(|| AppError::Code("locked".into()))?;
+    let src = state.vault_path(&id)?;
+    let parent = src
+        .parent()
+        .ok_or_else(|| AppError::Code("storage".into()))?
+        .to_path_buf();
+    let folder = src
+        .file_name()
+        .ok_or_else(|| AppError::Code("storage".into()))?
+        .to_string_lossy()
+        .into_owned();
+    Ok((
+        src.clone(),
+        parent.join(format!(".{folder}.rotating")),
+        parent.join(format!(".{folder}.pre-rotation")),
+    ))
+}
+
+/// Native confirmation before rotation: it replaces every
+/// key this diary has, and old backups keep the old master —
+/// the user hears both before anything moves.
+async fn confirm_rotate(app: &AppHandle) -> bool {
+    let (tx, rx) = oneshot::channel();
+    app.dialog()
+        .message(format!("Change the master key?\n\nSoirvu builds a fresh copy of this diary under a new master key, checks it, and replaces the old one. Your passphrase stays the same and you will get a NEW recovery key.\n\nBackups made earlier keep the old master key — delete them if the old key may have leaked."))
+        .title("Soirvu")
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Change master key".into(),
+            "Cancel".into(),
+        ))
+        .show(move |confirmed| {
+            let _ = tx.send(confirmed);
+        });
+    rx.await.unwrap_or(false)
+}
+
+/// Changes the open vault's master key by fresh-vault
+/// migration (§9, §13 Phase 6). Returns the NEW recovery key
+/// text (shown once), or None when the user cancels. The
+/// vault ends LOCKED but silently — no status event, no
+/// reload — so the Settings screen can show the key; its
+/// Done button calls vault_lock, which locks "again" (a
+/// no-op inside), emits and reloads as usual.
+#[tauri::command]
+pub async fn vault_rotate_master_key(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    current_passphrase: String,
+) -> Result<Option<String>, String> {
+    if !confirm_rotate(&app).await {
+        return Ok(None);
+    }
+    let (src, staging, old) = rotation_paths(&state).map_err(|e| e.to_ipc())?;
+    if staging.exists() {
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+    // The heavy part (Argon2id, the export, every blob) runs
+    // off the async runtime's threads, on a standalone handle.
+    let mut task_passphrase = current_passphrase.clone();
+    let task_src = src.clone();
+    let task_staging = staging.clone();
+    let joined = tauri::async_runtime::spawn_blocking(move || -> Result<String, AppError> {
+        let result = (|| {
+            let vault = Vault::open_with_passphrase(&task_src, &task_passphrase)?;
+            let kdf = KdfParams::calibrate(Duration::from_millis(750))?;
+            let recovery = vault.rotate_master_key(&task_staging, &task_passphrase, kdf)?;
+            drop(vault);
+            Ok(recovery.to_text())
+        })();
+        task_passphrase.zeroize();
+        result
+    })
+    .await;
+    let mut passphrase = current_passphrase;
+    passphrase.zeroize();
+    let recovery_text = joined
+        .map_err(|_| "storage".to_string())?
+        .map_err(|e| e.to_ipc())?;
+
+    // From here the original is replaced: lock silently, swap
+    // the folders (rolling back if the second rename fails),
+    // and delete the old master for good.
+    state.lock();
+    if old.exists() {
+        let _ = std::fs::remove_dir_all(&old);
+    }
+    std::fs::rename(&src, &old).map_err(|_| "storage".to_string())?;
+    if std::fs::rename(&staging, &src).is_err() {
+        let _ = std::fs::rename(&old, &src);
+        return Err("storage".into());
+    }
+    let _ = std::fs::remove_dir_all(&old);
+    Ok(Some(recovery_text))
+}

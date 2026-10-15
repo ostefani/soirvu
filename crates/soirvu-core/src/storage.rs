@@ -294,6 +294,51 @@ fn silence_sqlite_log() {
 /// `PRAGMA key` must be the first statement on a connection.
 /// The `x'...'` form hands SQLCipher the raw 32-byte key, so it does not run its
 /// own (slower) password-to-key step; Argon2id already did the slow part.
+impl Database {
+    /// Copies this whole database into a new file encrypted
+    /// under `key`, via SQLCipher's export: schema and data —
+    /// entries, tags, attachment chunks, meta — re-encrypted
+    /// page by page under the new key. The rotation engine.
+    pub fn export_encrypted(&self, dest: &Path, key: &Key) -> Result<()> {
+        // The caller's connection may have been opened without
+        // the CREATE flag (an opened vault is read-write only),
+        // and SQLite will not let such a connection create the
+        // attached file. Materialize the destination first, with
+        // its own short-lived connection under the new key.
+        {
+            let pre = Connection::open_with_flags(
+                dest,
+                OpenFlags::SQLITE_OPEN_READ_WRITE
+                    | OpenFlags::SQLITE_OPEN_CREATE
+                    | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )?;
+            apply_key(&pre, key)?;
+            pre.execute_batch(
+                "CREATE TABLE IF NOT EXISTS _soirvu_export (x); DROP TABLE _soirvu_export;",
+            )?;
+        }
+        let hex = Zeroizing::new(HEXLOWER.encode(&key[..]));
+        let path = dest.to_string_lossy().replace('\'', "''");
+        let sql = Zeroizing::new(format!(
+            "ATTACH DATABASE '{path}' AS rotated KEY \"x'{}'\"; SELECT sqlcipher_export('rotated'); DETACH DATABASE rotated;",
+            hex.as_str()
+        ));
+        // The export carries schema and data but not the
+        // user_version stamp; copy it across or the result
+        // reads as a database with no schema.
+        let version: i64 =
+            self.connection().query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        self.connection().execute_batch(&sql)?;
+        let dest_conn = Connection::open_with_flags(
+            dest,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        apply_key(&dest_conn, key)?;
+        dest_conn.execute_batch(&format!("PRAGMA user_version = {version};"))?;
+        Ok(())
+    }
+}
+
 fn apply_key(conn: &Connection, key: &Key) -> Result<()> {
     let hex = Zeroizing::new(HEXLOWER.encode(&key[..]));
     let sql = Zeroizing::new(format!("PRAGMA key = \"x'{}'\";", hex.as_str()));

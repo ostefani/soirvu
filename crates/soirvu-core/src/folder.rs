@@ -5,7 +5,7 @@
 //!   └── soirvu.db           encrypted SQLite database (plus -wal / -shm while open)
 
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::crypto::{KdfParams, Key, MasterKey, RecoveryKey};
@@ -72,6 +72,59 @@ impl Vault {
             .connection()
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
         Ok(())
+    }
+
+    /// Rotates the master key by migration (§9): builds a
+    /// complete copy of this vault in `dest_dir` under a FRESH
+    /// master key — same vault id, same passphrase, a NEW
+    /// recovery key (returned, to be shown once) — and verifies
+    /// the copy opens and holds the same entries and
+    /// attachments before returning. This vault is not
+    /// modified; the caller swaps the folders and deletes
+    /// this one. The passphrase is verified first: it is the
+    /// re-auth proof, and the copy's passphrase slot is
+    /// wrapped from it.
+    pub fn rotate_master_key(
+        &self,
+        dest_dir: &Path,
+        passphrase: &str,
+        kdf: KdfParams,
+    ) -> Result<RecoveryKey> {
+        self.header.unlock_with_passphrase(passphrase)?;
+        let (header, recovery, master) =
+            VaultHeader::create_with_id(&self.header.vault_id, passphrase, kdf)?;
+        prepare_folder(dest_dir)?;
+        self.db.export_encrypted(&dest_dir.join(DB_FILE), &master.db_key())?;
+        write_atomic(&dest_dir.join(HEADER_FILE), &header.to_json()?)?;
+        // The blobs are files, not database pages: re-encrypt
+        // every live one under the new master, keeping its id
+        // (entries reference attachments by id, and the
+        // metadata rows just crossed over in the export).
+        let ids: Vec<String> = {
+            let conn = self.db.connection();
+            let mut stmt = conn.prepare("SELECT id FROM attachment WHERE deleted_at IS NULL")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for id in &ids {
+            let size = self.get_attachment(id)?.size as u64;
+            let mut reader = AttachmentReader { vault: self, id, pos: 0, len: size };
+            let key = crate::attachments::blob_key(&master.attachment_key(), id);
+            crate::attachments::write_blob(dest_dir, id, &key, &mut reader)?;
+        }
+        let copy = Vault::open_with_passphrase(dest_dir, passphrase)?;
+        let rows = |db: &Database, table: &str| -> Result<i64> {
+            Ok(db
+                .connection()
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))?)
+        };
+        if rows(&self.db, "entry")? != rows(&copy.db, "entry")?
+            || rows(&self.db, "attachment")? != rows(&copy.db, "attachment")?
+        {
+            return Err(Error::Database(rusqlite::Error::InvalidQuery));
+        }
+        copy.lock();
+        Ok(recovery)
     }
 
     /// Changes the passphrase. The current passphrase is
@@ -212,6 +265,32 @@ fn finish_open(dir: &Path, header: VaultHeader, master: MasterKey) -> Result<Vau
 /// Writes a file so that a crash leaves either the old complete file or the
 /// new complete file, never a half-written one: write to a temporary name,
 /// force it to disk, then rename it over the target.
+/// Plaintext of one attachment as a Read stream, in ranged
+/// reads — rotation feeds it to the blob writer under the
+/// new master key without holding the file in memory.
+struct AttachmentReader<'a> {
+    vault: &'a Vault,
+    id: &'a str,
+    pos: u64,
+    len: u64,
+}
+
+impl Read for AttachmentReader<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos >= self.len || out.is_empty() {
+            return Ok(0);
+        }
+        let want = (self.len - self.pos).min(out.len() as u64);
+        let data = self
+            .vault
+            .read_attachment_range(self.id, self.pos..self.pos + want)
+            .map_err(std::io::Error::other)?;
+        out[..data.len()].copy_from_slice(&data);
+        self.pos += data.len() as u64;
+        Ok(data.len())
+    }
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension("json.tmp");
     let mut file = File::create(&tmp)?;
@@ -267,6 +346,42 @@ mod tests {
         haystack
             .windows(needle.len())
             .any(|window| window == needle)
+    }
+
+    #[test]
+    fn master_key_rotation_migrates_everything() {
+        let (tmp, mut vault, old_recovery) = new_vault_with_note();
+        let vault_id = vault.header().vault_id.clone();
+        let saved = vault
+            .create_entry(&crate::entries::EntryDraft {
+                entry_date: "2026-10-15".into(),
+                title: Some("rotation day".into()),
+                body_md: "rotate me".into(),
+                mood: None,
+                tz: None,
+                tags: vec![],
+            })
+            .unwrap();
+        let att = vault
+            .add_attachment(&saved.id, "note.txt", "text/plain", b"hello rotation")
+            .unwrap();
+
+        let dest = tmp.path().join("rotated");
+        let new_recovery = vault.rotate_master_key(&dest, PASSPHRASE, fast()).unwrap();
+        vault.lock();
+
+        // The copy: same diary, same passphrase, everything in it.
+        let mut copy = Vault::open_with_passphrase(&dest, PASSPHRASE).unwrap();
+        assert_eq!(copy.header().vault_id, vault_id);
+        assert_eq!(read_note(&copy), CANARY);
+        assert_eq!(copy.read_attachment(&att.id).unwrap(), b"hello rotation");
+        copy.lock();
+        // ...under a NEW master: the old recovery key is dead,
+        // the new one works.
+        assert!(Vault::open_with_recovery(&dest, &old_recovery).is_err());
+        assert!(Vault::open_with_recovery(&dest, &new_recovery).is_ok());
+        // The original is untouched and still opens the old way.
+        assert!(Vault::open_with_recovery(&tmp.path().join("v"), &old_recovery).is_ok());
     }
 
     #[test]

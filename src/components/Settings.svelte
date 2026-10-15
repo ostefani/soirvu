@@ -19,6 +19,7 @@
     let secNote = $state("");
     let newRecoveryKey = $state("");
     let secBusy = $state(false);
+    let rotated = $state(false);
 
     function secError(e) {
         return e === "wrong_passphrase" ? "Wrong current passphrase." : `Something went wrong (${e}).`;
@@ -34,6 +35,26 @@
             newPass = "";
             newPass2 = "";
             secNote = "Passphrase changed. The diary stays open — the new passphrase applies at the next unlock.";
+        } catch (e) {
+            secNote = secError(e);
+        } finally {
+            secBusy = false;
+        }
+    }
+
+    async function rotateMasterKey() {
+        secNote = "";
+        secBusy = true;
+        try {
+            const key = await api.vaultRotateMasterKey(curPass);
+            if (key === null) {
+                secNote = "Master key unchanged.";
+            } else {
+                newRecoveryKey = key;
+                rotated = true;
+                secNote =
+                    "Master key changed — and the diary is now locked. Save the new recovery key, then unlock with your passphrase (it did not change).";
+            }
         } catch (e) {
             secNote = secError(e);
         } finally {
@@ -233,6 +254,15 @@
             <button class="quiet" onclick={regenerateRecovery} disabled={secBusy || !curPass}>
                 Regenerate recovery key
             </button>
+        </div>
+
+        <div class="row">
+            <button class="quiet" onclick={rotateMasterKey} disabled={secBusy || !curPass}>
+                Change master key…
+            </button>
+            {#if rotated}
+                <button onclick={() => api.vaultLock()}>Done — go to the lock screen</button>
+            {/if}
         </div>
 
         {#if newRecoveryKey}

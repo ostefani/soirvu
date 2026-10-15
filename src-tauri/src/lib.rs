@@ -158,6 +158,7 @@ pub fn run() {
             commands::vault::vault_fork_import,
             commands::vault::vault_change_passphrase,
             commands::vault::vault_regenerate_recovery,
+            commands::vault::vault_rotate_master_key,
             commands::entries::entry_list,
             commands::entries::calendar_days,
             commands::entries::on_this_day,

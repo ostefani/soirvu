@@ -86,9 +86,26 @@ impl VaultHeader {
         }
         kdf.check()?;
 
+        let vault_id = HEXLOWER.encode(&random_bytes::<VAULT_ID_LEN>()?);
+        Self::create_with_id(&vault_id, passphrase, kdf)
+    }
+
+    /// Like create(), but for a known vault id — master-key
+    /// rotation keeps the diary's identity while everything
+    /// else (master, slots, recovery key) is minted fresh.
+    pub fn create_with_id(
+        vault_id: &str,
+        passphrase: &str,
+        kdf: KdfParams,
+    ) -> Result<(VaultHeader, RecoveryKey, MasterKey)> {
+        if passphrase.is_empty() {
+            return Err(Error::EmptyPassphrase);
+        }
+        kdf.check()?;
+
         let master = MasterKey::generate()?;
         let recovery = RecoveryKey::generate()?;
-        let vault_id = HEXLOWER.encode(&random_bytes::<VAULT_ID_LEN>()?);
+        let vault_id = vault_id.to_string();
 
         // Passphrase slot.
         let salt = random_bytes::<SALT_LEN>()?;

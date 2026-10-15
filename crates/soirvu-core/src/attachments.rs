@@ -331,7 +331,7 @@ pub(crate) fn remove_blob(dir: &Path, id: &str) {
 
 /// Encrypts everything from `reader` into the blob file for `id`.
 /// Returns the plaintext size and its SHA-256 (raw bytes).
-fn write_blob(dir: &Path, id: &str, key: &Key, reader: &mut impl Read) -> Result<(i64, [u8; 32])> {
+pub(crate) fn write_blob(dir: &Path, id: &str, key: &Key, reader: &mut impl Read) -> Result<(i64, [u8; 32])> {
     let final_path = blob_path(dir, id);
     if let Some(parent) = final_path.parent() {
         fs::create_dir_all(parent)?;
@@ -478,7 +478,7 @@ fn chunk_aad(id: &str, counter: u32) -> Vec<u8> {
 }
 
 /// Per-blob key (DESIGN §5): `HKDF(attachment_key, info = attachment_id)`.
-fn blob_key(attachment_key: &Key, id: &str) -> Key {
+pub(crate) fn blob_key(attachment_key: &Key, id: &str) -> Key {
     let hkdf = Hkdf::<Sha256>::new(None, &attachment_key[..]);
     let mut out = Zeroizing::new([0u8; 32]);
     hkdf.expand(id.as_bytes(), &mut *out)

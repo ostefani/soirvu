@@ -13,6 +13,7 @@ fn main() {
         "vault_fork_import",
         "vault_change_passphrase",
         "vault_regenerate_recovery",
+        "vault_rotate_master_key",
         "entry_list",
         "calendar_days",
         "on_this_day",

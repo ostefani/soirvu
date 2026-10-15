@@ -30,9 +30,13 @@ pub fn reload_main_window(app: &AppHandle) {
         // heap exactly as §9 asks, and leaves the ipc plumbing
         // as it was at startup. Without an iframe (no driver),
         // the top document IS the app and reloads itself.
+        // Reloading is done from the DRIVER side — reassigning
+        // the iframe's src — because the app frame is sandboxed
+        // cross-origin: touching its contentWindow.location
+        // throws a SecurityError and nothing reloads at all.
         let _ = window.eval(
             "const f = document.querySelector('iframe'); \
-             if (f && f.contentWindow) { f.contentWindow.location.reload(); } \
+             if (f) { f.setAttribute('src', f.getAttribute('src')); } \
              else { window.location.reload(); }",
         );
     }
