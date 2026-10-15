@@ -619,6 +619,12 @@ pub async fn vault_rotate_master_key(
     if !confirm_rotate(&app).await {
         return Ok(None);
     }
+    // The decision is made and the work starts now — the UI
+    // shows its progress indicator on this event, never
+    // before (a spinner behind the confirmation dialog would
+    // claim work that does not exist yet).
+    use tauri::Emitter;
+    let _ = app.emit("rotation-started", ());
     let (src, staging, old) = rotation_paths(&state).map_err(|e| e.to_ipc())?;
     if staging.exists() {
         let _ = std::fs::remove_dir_all(&staging);

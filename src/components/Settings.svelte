@@ -3,6 +3,7 @@
     // location. The backup folder is picked through Rust — the
     // UI only ever sees its display name, never the path (§3).
     import { onMount } from "svelte";
+    import { listen } from "@tauri-apps/api/event";
     import * as api from "../api.js";
 
     let { onBack } = $props();
@@ -46,7 +47,12 @@
     async function rotateMasterKey() {
         secNote = "";
         secBusy = true;
-        rotating = true;
+        // The spinner starts on the bridge's rotation-started
+        // event — after the native confirmation, when the work
+        // actually begins — not on this click.
+        const unlisten = await listen("rotation-started", () => {
+            rotating = true;
+        });
         try {
             const key = await api.vaultRotateMasterKey(curPass);
             if (key === null) {
@@ -60,6 +66,7 @@
         } catch (e) {
             secNote = secError(e);
         } finally {
+            unlisten();
             secBusy = false;
             rotating = false;
         }
@@ -269,9 +276,12 @@
         </div>
 
         {#if rotating}
-            <p class="note">
-                Changing the master key… a fresh copy of the diary is being built and checked.
-                This can take a while for a large diary — don't close the app.
+            <p class="note progress">
+                <span class="spinner"></span>
+                <span>
+                    Changing the master key… a fresh copy of the diary is being built and checked.
+                    This can take a while for a large diary — don't close the app.
+                </span>
             </p>
         {/if}
 
@@ -313,5 +323,26 @@
     .settings .row {
         display: flex;
         gap: 0.4rem;
+    }
+    .progress {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .spinner {
+        width: 0.9em;
+        height: 0.9em;
+        flex: none;
+        border: 2px solid currentColor;
+        border-top-color: transparent;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
     }
 </style>

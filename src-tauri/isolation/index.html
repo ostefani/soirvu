@@ -66,7 +66,7 @@
                 "plugin:event|listen",
                 "plugin:event|unlisten",
             ]);
-            const KNOWN_EVENTS = new Set(["vault-status"]);
+            const KNOWN_EVENTS = new Set(["vault-status", "rotation-started"]);
 
             // Invoke arguments are always a plain object (a string
             // map), never an array or a primitive. No prototype
