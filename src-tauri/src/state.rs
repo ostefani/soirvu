@@ -121,7 +121,6 @@ struct Inner {
 pub struct Upload {
     pub entry_id: String,
     pub name: String,
-    pub mime_hint: Option<String>,
     pub bytes: Vec<u8>,
 }
 
@@ -328,7 +327,9 @@ impl AppState {
         &self,
         entry_id: String,
         name: String,
-        mime_hint: Option<String>,
+        // Advisory only (§6.1): the type is sniffed at finish,
+        // never taken from the hint, so it is not stored.
+        _mime_hint: Option<String>,
     ) -> AppResult<String> {
         let mut inner = self.inner.lock().unwrap();
         if inner.vault.is_none() {
@@ -338,7 +339,7 @@ impl AppState {
         let id = format!("upload-{}", inner.upload_seq);
         inner.uploads.insert(
             id.clone(),
-            Upload { entry_id, name, mime_hint, bytes: Vec::new() },
+            Upload { entry_id, name, bytes: Vec::new() },
         );
         Ok(id)
     }

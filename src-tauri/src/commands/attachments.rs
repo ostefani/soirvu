@@ -546,34 +546,7 @@ fn strip_webp(bytes: &[u8]) -> Option<Vec<u8>> {
 }
 
 // ---------------------------------------------------------------------------
-// Base64 (the chunk argument; standard alphabet, padding required)
-
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-pub fn encode_base64(data: &[u8]) -> String {
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for group in data.chunks(3) {
-        let b = [
-            group[0],
-            *group.get(1).unwrap_or(&0),
-            *group.get(2).unwrap_or(&0),
-        ];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
-        out.push(B64[(n >> 18) as usize & 63] as char);
-        out.push(B64[(n >> 12) as usize & 63] as char);
-        out.push(if group.len() > 1 {
-            B64[(n >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        out.push(if group.len() > 2 {
-            B64[n as usize & 63] as char
-        } else {
-            '='
-        });
-    }
-    out
-}
+// Base64 decode (the chunk argument; standard alphabet, padded)
 
 pub fn decode_base64(text: &str) -> Result<Vec<u8>, ()> {
     let clean: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();

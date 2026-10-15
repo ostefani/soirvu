@@ -216,7 +216,7 @@ export function createEditor(el, options = {}) {
                     attachmentId: added.id,
                     name: added.name || "Attachment",
                 });
-                const $from = state.selection.$from;
+                const $from = state.selection.$from(state.doc);
                 const after = $from.depth >= 1 ? $from.after(1) : $from.pos;
                 tr.insert(after, [block, nodes.paragraph.create()]);
                 tr.setSelection(new TextSelection(after + block.nodeSize + 1));
