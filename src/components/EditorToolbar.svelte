@@ -47,6 +47,15 @@
         onclick={() => run('code')}
         title="Inline code (Ctrl+E)">&lt;/&gt;</button
     >
+    {#if info?.block === 'code_block'}
+        <input
+            class="tb-lang"
+            type="text"
+            placeholder="language"
+            value={info.codeLang || ''}
+            onchange={(e) => editor?.exec('setCodeLanguage', e.currentTarget.value)}
+        />
+    {/if}
     <span class="tb-sep"></span>
     <button
         type="button"
@@ -195,5 +204,14 @@
         align-self: stretch;
         margin: 3px 3px;
         background: #e2e2e2;
+    }
+    .tb-lang {
+        height: 24px;
+        width: 7em;
+        padding: 0 6px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        font-size: 13px;
+        box-shadow: none;
     }
 </style>

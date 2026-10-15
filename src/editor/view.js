@@ -316,6 +316,7 @@ export class EditorView {
         handle.contentEditable = "false";
         handle.style.display = "none";
         handle.addEventListener("mousedown", (e) => this.onDragStart(e));
+        handle.addEventListener("mouseleave", () => this.hideDragHandle());
         document.body.appendChild(handle);
         const line = document.createElement("div");
         line.className = "block-drop-line";
@@ -602,7 +603,11 @@ export class EditorView {
             paste: (e) => this.onPaste(e),
             mousedown: (e) => this.onMouseDown(e),
             mousemove: (e) => this.onHoverBlock(e),
-            mouseleave: () => this.hideDragHandle(),
+            mouseleave: (e) => {
+                // Moving onto the handle itself is not leaving:
+                // it sits outside the editor, in the gutter.
+                if (e.relatedTarget !== this.dragHandle) this.hideDragHandle();
+            },
             click: (e) => this.onClick(e),
             drop: (e) => this.onDrop(e),
             dragover: (e) => e.preventDefault(),

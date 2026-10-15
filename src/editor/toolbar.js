@@ -13,7 +13,7 @@ import {
     toggleMark,
     wrapBlocks,
 } from "./commands.js";
-import { selectionNear } from "./state.js";
+import { TextSelection, selectionNear } from "./state.js";
 import {
     addColumnCommand,
     addRowCommand,
@@ -42,6 +42,7 @@ export function selectionInfo(state) {
         quote: false,
         list: null,
         inTable: false,
+        codeLang: null,
     };
     if (sel.type !== "text") return info;
     const { marks, nodes } = state.schema;
@@ -56,6 +57,7 @@ export function selectionInfo(state) {
         info.headingLevel = parent.attrs.level;
     } else if (parent.type === nodes.code_block) {
         info.block = "code_block";
+        info.codeLang = parent.attrs.params || "";
     } else if (parent.type === nodes.paragraph) {
         info.block = "paragraph";
     }
@@ -172,6 +174,7 @@ export function toolbarCommands(schema) {
             }
             return false;
         },
+        setCodeLanguage: (state, dispatch, lang) => setCodeLanguage(state, dispatch, lang),
         insertTable: insertTableCommand,
         addRow: addRowCommand,
         addColumn: addColumnCommand,
@@ -209,6 +212,26 @@ export function toolbarCommands(schema) {
             ])(state, dispatch);
         },
     };
+}
+
+/** Sets the language (the fence info string) of the code
+ *  block at the cursor — how a typed block gains highlighting
+ *  after the fact, and how a pasted one changes language.
+ *  The block keeps its content and the cursor its place. */
+export function setCodeLanguage(state, dispatch, lang) {
+    const sel = state.selection;
+    if (sel.type !== "text") return false;
+    const $from = state.doc.resolve(sel.from);
+    const block = $from.parent;
+    if (block.type.name !== "code_block") return false;
+    const pos = $from.before();
+    const tr = state.tr();
+    tr.replaceWith(pos, pos + block.nodeSize, [
+        block.type.create({ ...block.attrs, params: (lang || "").trim() }, block.content, block.marks),
+    ]);
+    tr.setSelection(new TextSelection(sel.from));
+    if (dispatch) dispatch(tr);
+    return true;
 }
 
 /** Flips the checked state of the task item at `itemPos` (a

@@ -178,11 +178,12 @@ export function createEditor(el, options = {}) {
     const commands = toolbarCommands(schema);
 
     return {
-        /** Runs a selection-toolbar command by name (toolbar.js). */
-        exec(name) {
+        /** Runs a selection-toolbar command by name (toolbar.js).
+         *  `arg` reaches commands that take one (setCodeLanguage). */
+        exec(name, arg) {
             const command = commands[name];
             if (!command) return false;
-            const ok = command(view.state, (tr) => view.dispatch(tr));
+            const ok = command(view.state, (tr) => view.dispatch(tr), arg);
             view.focus();
             return ok;
         },
