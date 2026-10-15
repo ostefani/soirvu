@@ -28,6 +28,25 @@ pub fn open_external(url: &str) -> std::io::Result<()> {
     cmd.spawn().map(|_| ())
 }
 
+/// Release-build process hardening (§9): no debugger may
+/// attach, and no core dump may carry the diary's memory to
+/// disk. Called first in run(), before anything opens. Dev
+/// builds keep their debugger and dumps.
+pub fn harden_process() {
+    #[cfg(all(target_os = "macos", not(debug_assertions)))]
+    unsafe {
+        libc::ptrace(libc::PT_DENY_ATTACH, 0, std::ptr::null_mut(), 0);
+    }
+    #[cfg(all(unix, not(debug_assertions)))]
+    unsafe {
+        let limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        libc::setrlimit(libc::RLIMIT_CORE, &limit);
+    }
+}
+
 /// The §3 filesystem warning for a vault location: WAL files
 /// and sync clients do not mix, and SQLite over a network share
 /// is unreliable. Warn, never block. Returns "cloud_sync" or

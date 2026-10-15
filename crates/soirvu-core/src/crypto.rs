@@ -178,11 +178,15 @@ pub struct MasterKey(Key);
 
 impl MasterKey {
     pub fn generate() -> Result<Self> {
-        Ok(MasterKey(random_key()?))
+        let master = MasterKey(random_key()?);
+        master.lock_memory();
+        Ok(master)
     }
 
     pub(crate) fn from_key(key: Key) -> Self {
-        MasterKey(key)
+        let master = MasterKey(key);
+        master.lock_memory();
+        master
     }
 
     pub(crate) fn key(&self) -> &Key {
@@ -203,7 +207,37 @@ impl MasterKey {
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
         &self.0
     }
+
+    /// §9: keep the master key's pages out of swap. Best-effort:
+    /// a failed mlock never blocks opening a vault.
+    fn lock_memory(&self) {
+        lock_bytes(&self.0);
+    }
 }
+
+impl Drop for MasterKey {
+    fn drop(&mut self) {
+        // Release the pages first; the Zeroizing field then
+        // overwrites the key itself as it drops.
+        unlock_bytes(&self.0);
+    }
+}
+
+#[cfg(unix)]
+fn lock_bytes(key: &Key) {
+    let _ = unsafe { libc::mlock(key.as_ptr() as *const libc::c_void, KEY_LEN) };
+}
+
+#[cfg(not(unix))]
+fn lock_bytes(_key: &Key) {}
+
+#[cfg(unix)]
+fn unlock_bytes(key: &Key) {
+    let _ = unsafe { libc::munlock(key.as_ptr() as *const libc::c_void, KEY_LEN) };
+}
+
+#[cfg(not(unix))]
+fn unlock_bytes(_key: &Key) {}
 
 /// 256 random bits shown to the user once, as a fallback to the passphrase.
 pub struct RecoveryKey(Key);
