@@ -4,86 +4,61 @@
     // the entry dirty and saves after a quiet 900 ms. The editor's
     // onChange only fires on real edits, so merely opening an entry
     // never saves it — the baseline rule (§6.5).
-    import { onDestroy, onMount } from "svelte";
-    import * as api from "../api.js";
-    import { createEditor } from "../editor/index.js";
-    import EditorToolbar from "./EditorToolbar.svelte";
+    import { onDestroy, onMount } from 'svelte';
+    import * as api from '../api.js';
+    import { createEditor } from '../editor/index.js';
+    import EditorToolbar from './EditorToolbar.svelte';
 
     let { entryId, onDeleted, onSaved } = $props();
 
     let entry = $state(null);
-    let title = $state("");
-    let entryDate = $state("");
-    let mood = $state("");
-    let tagsText = $state("");
-    let status = $state("");
+    let title = $state('');
+    let entryDate = $state('');
+    let mood = $state('');
+    let tagsText = $state('');
+    let status = $state('');
     let deleteArmed = $state(false);
     let mountEl = $state(null);
-    let bar = $state(null);
+    let info = $state(null);
 
     let editor = null;
     let saveTimer = null;
     let dirty = false;
 
-    // The selection toolbar (§6.5): recomputed after every
-    // editor transaction. Shown only for a non-empty selection,
-    // above its first line — or below it when there is no room
-    // above (the entry starts at the top of the window).
-    function refreshBar() {
-        if (!editor) {
-            bar = null;
-            return;
-        }
-        const info = editor.query();
-        if (info.empty) {
-            bar = null;
-            return;
-        }
-        // coordsAtPos is the one layout-dependent call in this
-        // chain; if it ever fails in the webview, the toolbar
-        // still appears (over the editor's top edge) instead of
-        // vanishing silently with the exception.
-        let start;
-        let end;
-        try {
-            start = editor.coordsAtPos(info.from);
-            end = editor.coordsAtPos(info.to);
-        } catch {
-            const rect = mountEl.getBoundingClientRect();
-            start = { left: rect.left + rect.width / 2, top: rect.top };
-            end = { right: start.left, bottom: rect.bottom };
-        }
-        const x = Math.min(Math.max((start.left + end.right) / 2, 200), window.innerWidth - 200);
-        const below = start.top < 72;
-        bar = { info, x, y: below ? end.bottom : start.top, below };
+    // The toolbar is a fixed bar in the window (§6.5), always
+    // visible; this only keeps its active states current — the
+    // block and marks at the cursor or over the selection. It
+    // runs after every editor transaction.
+    function refreshToolbar() {
+        info = editor ? editor.query() : null;
     }
 
     function markDirty() {
         dirty = true;
-        status = "Not saved yet";
+        status = 'Not saved yet';
         clearTimeout(saveTimer);
         saveTimer = setTimeout(save, 900);
     }
 
     async function save() {
         if (!dirty || !entry || !editor) return;
-        status = "Saving…";
+        status = 'Saving…';
         try {
             const saved = await api.entrySave({
                 id: entry.id,
                 entry_date: entryDate,
-                title: title.trim() === "" ? null : title.trim(),
+                title: title.trim() === '' ? null : title.trim(),
                 body_md: editor.getMarkdown(),
-                mood: mood === "" ? null : Number(mood),
+                mood: mood === '' ? null : Number(mood),
                 tz: entry.tz,
                 tags: tagsText
-                    .split(",")
+                    .split(',')
                     .map((t) => t.trim())
-                    .filter((t) => t !== ""),
+                    .filter((t) => t !== ''),
             });
             entry = saved;
             dirty = false;
-            status = "Saved";
+            status = 'Saved';
             onSaved?.();
         } catch (e) {
             status = `Could not save (${e})`;
@@ -92,10 +67,10 @@
 
     onMount(async () => {
         entry = await api.entryGet(entryId);
-        title = entry.title ?? "";
+        title = entry.title ?? '';
         entryDate = entry.entry_date;
-        mood = entry.mood == null ? "" : String(entry.mood);
-        tagsText = entry.tags.join(", ");
+        mood = entry.mood == null ? '' : String(entry.mood);
+        tagsText = entry.tags.join(', ');
     });
 
     // The editor is created by an effect, not in onMount: the mount
@@ -110,9 +85,9 @@
         editor = createEditor(mountEl, {
             markdown: entry.body_md,
             onChange: () => markDirty(),
-            onSelectionChange: refreshBar,
+            onSelectionChange: refreshToolbar,
             onOpenLink: (href) => {
-                if (href.startsWith("https://") || href.startsWith("mailto:")) {
+                if (href.startsWith('https://') || href.startsWith('mailto:')) {
                     api.openLink(href).catch(() => {});
                 }
             },
@@ -145,16 +120,9 @@
                 {#each [1, 2, 3, 4, 5] as m}<option value={String(m)}>{m}</option>{/each}
             </select>
         </div>
-        <input
-            class="tags-input"
-            placeholder="Tags, comma separated"
-            bind:value={tagsText}
-            oninput={markDirty}
-        />
+        <input class="tags-input" placeholder="Tags, comma separated" bind:value={tagsText} oninput={markDirty} />
+        <EditorToolbar {editor} {info} />
         <div class="editor-mount" bind:this={mountEl}></div>
-        {#if bar}
-            <EditorToolbar {editor} {bar} />
-        {/if}
         <div class="editor-foot">
             <span class="status">{status}</span>
             {#if deleteArmed}
