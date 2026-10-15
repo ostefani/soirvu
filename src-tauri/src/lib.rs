@@ -172,6 +172,8 @@ pub fn run() {
             commands::misc::open_link,
             commands::misc::clipboard_note_copy,
             commands::misc::backup_now,
+            commands::misc::export_markdown,
+            commands::misc::export_json,
             commands::misc::settings_get,
             commands::misc::settings_set,
             commands::misc::settings_pick_backup_dir,

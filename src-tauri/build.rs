@@ -27,6 +27,8 @@ fn main() {
         "open_link",
         "clipboard_note_copy",
         "backup_now",
+        "export_markdown",
+        "export_json",
         "settings_get",
         "settings_set",
         "settings_pick_backup_dir",

@@ -181,6 +181,20 @@ export function vaultRegenerateRecovery(currentPassphrase) {
  *   shown once — or null when the user cancels the native
  *   confirmation.
  */
+/**
+ * §8 exports. Both resolve with { entries, attachments,
+ * target } (target is a display name, never a path), or
+ * null when the user backs out of the warning or the
+ * folder pick. The passphrase re-authenticates in Rust.
+ */
+export function exportMarkdown(passphrase) {
+    return invoke('export_markdown', { passphrase });
+}
+
+export function exportJson(passphrase) {
+    return invoke('export_json', { passphrase });
+}
+
 export function vaultRotateMasterKey(currentPassphrase) {
     return invoke('vault_rotate_master_key', { currentPassphrase });
 }

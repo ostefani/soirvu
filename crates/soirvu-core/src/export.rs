@@ -91,6 +91,154 @@ impl Vault {
     }
 }
 
+// ---------------------------------------------------------------------------
+// JSON export (§8): lossless, tombstones and ids included, made for
+// re-import. Attachments travel base64 inside the one file.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct JsonEntry {
+    id: String,
+    entry_date: String,
+    created_at: i64,
+    updated_at: i64,
+    title: Option<String>,
+    body_md: String,
+    mood: Option<i64>,
+    tz: Option<String>,
+    tags: Vec<String>,
+    deleted_at: Option<i64>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonAttachment {
+    id: String,
+    entry_id: String,
+    name: String,
+    mime: String,
+    size: i64,
+    sha256: String,
+    created_at: i64,
+    deleted_at: Option<i64>,
+    /// Base64 plaintext. Null for tombstones (their blobs are gone).
+    data_base64: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonExport {
+    format: &'static str,
+    version: u32,
+    vault_id: String,
+    exported_at: i64,
+    entries: Vec<JsonEntry>,
+    attachments: Vec<JsonAttachment>,
+}
+
+impl Vault {
+    /// Writes the whole vault — tombstones included — as one
+    /// JSON file. PLAINTEXT, like the Markdown export: the
+    /// caller warns and re-authenticates (§8).
+    pub fn export_json(&self, out_file: &Path) -> Result<ExportReport> {
+        let conn = self.db.connection();
+        // Tags per entry id (links join through the row id).
+        let mut tags: std::collections::HashMap<String, Vec<String>> = Default::default();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT e.id, t.name FROM entry_tag et
+                   JOIN tag t ON t.id = et.tag_id
+                   JOIN entry e ON e.rid = et.entry_rid
+                  ORDER BY t.name_key",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (id, name) = row?;
+                tags.entry(id).or_default().push(name);
+            }
+        }
+        let mut entries = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT id, entry_date, created_at, updated_at, title, body_md, mood, tz, deleted_at
+                   FROM entry ORDER BY entry_date, created_at, id",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                // A tombstone's body is scrubbed to NULL; export
+                // it as the empty string.
+                let body: Option<String> = row.get(5)?;
+                Ok(JsonEntry {
+                    id: row.get(0)?,
+                    entry_date: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                    title: row.get(4)?,
+                    body_md: body.unwrap_or_default(),
+                    mood: row.get(6)?,
+                    tz: row.get(7)?,
+                    tags: Vec::new(),
+                    deleted_at: row.get(8)?,
+                })
+            })?;
+            for row in rows {
+                let mut entry = row?;
+                entry.tags = tags.remove(&entry.id).unwrap_or_default();
+                entries.push(entry);
+            }
+        }
+        let mut attachments = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT id, entry_id, name, mime, size, sha256, created_at, deleted_at
+                   FROM attachment ORDER BY created_at, id",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                // sha256 is stored as raw bytes; export as hex.
+                let sha: Vec<u8> = row.get(5)?;
+                Ok(JsonAttachment {
+                    id: row.get(0)?,
+                    entry_id: row.get(1)?,
+                    name: row.get(2)?,
+                    mime: row.get(3)?,
+                    size: row.get(4)?,
+                    sha256: data_encoding::HEXLOWER.encode(&sha),
+                    created_at: row.get(6)?,
+                    deleted_at: row.get(7)?,
+                    data_base64: None,
+                })
+            })?;
+            for row in rows {
+                let mut att = row?;
+                if att.deleted_at.is_none() {
+                    let data = self.read_attachment(&att.id)?;
+                    att.data_base64 = Some(data_encoding::BASE64.encode(&data));
+                }
+                attachments.push(att);
+            }
+        }
+        let _ = conn;
+        let export = JsonExport {
+            format: "soirvu-json-export",
+            version: 1,
+            vault_id: self.header().vault_id.clone(),
+            exported_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or_default(),
+            entries,
+            attachments,
+        };
+        let text = serde_json::to_string_pretty(&export)
+            .map_err(|e| Error::InvalidInput(e.to_string()))?;
+        fs::write(out_file, text)?;
+        Ok(ExportReport {
+            entries: export.entries.len(),
+            attachments: export.attachments.len(),
+            dir: out_file.to_path_buf(),
+        })
+    }
+}
+
 fn prepare_out_dir(dir: &Path) -> Result<()> {
     if dir.exists() {
         let has_content = fs::read_dir(dir)?
@@ -331,5 +479,44 @@ mod tests {
         let report = vault.export_markdown(&out).unwrap();
         assert_eq!((report.entries, report.attachments), (0, 0));
         assert!(out.exists());
+    }
+
+    #[test]
+    fn json_export_is_lossless_and_includes_tombstones() {
+        let (tmp, mut vault) = new_vault();
+        let mut d = draft("2026-10-15", "live", "still here");
+        d.mood = Some(3);
+        d.tags = vec!["work".into()];
+        let live = vault.create_entry(&d).unwrap();
+        let gone = vault
+            .create_entry(&draft("2026-10-14", "gone", "secret text"))
+            .unwrap();
+        vault
+            .add_attachment(&live.id, "note.txt", "text/plain", b"attachment bytes")
+            .unwrap();
+        vault.delete_entry(&gone.id).unwrap();
+
+        let out = tmp.path().join("export.json");
+        let report = vault.export_json(&out).unwrap();
+        assert_eq!(report.entries, 2);
+        assert_eq!(report.attachments, 1);
+
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        assert_eq!(value["format"], "soirvu-json-export");
+        let entries = value["entries"].as_array().unwrap();
+        let tomb = entries.iter().find(|e| e["id"] == gone.id).unwrap();
+        assert!(tomb["deleted_at"].is_number());
+        assert_eq!(tomb["body_md"], ""); // scrubbed at delete; nothing leaks back
+        let live_json = entries.iter().find(|e| e["id"] == live.id).unwrap();
+        assert_eq!(live_json["tags"], serde_json::json!(["work"]));
+        assert_eq!(live_json["mood"], 3);
+        let att = &value["attachments"][0];
+        assert_eq!(
+            data_encoding::BASE64
+                .decode(att["data_base64"].as_str().unwrap().as_bytes())
+                .unwrap(),
+            b"attachment bytes"
+        );
     }
 }

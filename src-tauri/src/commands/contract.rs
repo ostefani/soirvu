@@ -166,6 +166,18 @@ fn forked_shape() {
 }
 
 #[test]
+fn export_outcome_shape() {
+    snap(
+        "export_outcome",
+        &crate::commands::misc::ExportOutcome {
+            entries: 12,
+            attachments: 3,
+            target: "Exports/soirvu-export.json".into(),
+        },
+    );
+}
+
+#[test]
 fn calendar_day_shape() {
     snap(
         "calendar_day",

@@ -101,3 +101,123 @@ pub fn clipboard_note_copy(state: State<'_, AppState>) -> Result<(), String> {
 pub fn backup_now(state: State<'_, AppState>) -> Result<String, String> {
     ipc(crate::backup::make_backup(&state))
 }
+/// What an export wrote (§8): counts only, plus a display
+/// name for the destination — paths never cross the IPC
+/// boundary.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportOutcome {
+    pub entries: usize,
+    pub attachments: usize,
+    pub target: String,
+}
+
+/// The §8 warning, native so the webview cannot skip it.
+/// True = the user chose to export plaintext anyway.
+async fn confirm_export(app: &AppHandle) -> bool {
+    let (tx, rx) = oneshot::channel();
+    app.dialog()
+        .message(
+            "Export writes your diary as PLAIN files that anyone can read — \
+             no passphrase protects them.\n\n\
+             Keep the export somewhere private, and delete it when you no longer need it."
+                .to_string(),
+        )
+        .title("Soirvu")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Export plaintext".into(),
+            "Cancel".into(),
+        ))
+        .show(move |confirmed| {
+            let _ = tx.send(confirmed);
+        });
+    rx.await.unwrap_or(false)
+}
+
+/// Shared export flow: warning, folder pick, then the work on
+/// a blocking thread against a standalone handle — opening it
+/// with the passphrase IS the §8 re-authentication.
+async fn run_export(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    passphrase: String,
+    json: bool,
+) -> Result<Option<ExportOutcome>, String> {
+    use soirvu_core::Vault;
+    use zeroize::Zeroizing;
+
+    let Some(id) = state.current_id() else {
+        return Err("locked".into());
+    };
+    let src = ipc(state.vault_path(&id))?;
+    if !confirm_export(&app).await {
+        return Ok(None);
+    }
+    let Some(dir) = crate::commands::vault::pick_folder(&app).await else {
+        return Ok(None);
+    };
+    let pass = Zeroizing::new(passphrase);
+    let joined = tauri::async_runtime::spawn_blocking(
+        move || -> crate::error::AppResult<ExportOutcome> {
+            let vault = Vault::open_with_passphrase(&src, &pass)?;
+            if json {
+                let file = dir.join("soirvu-export.json");
+                if file.exists() {
+                    return Err(crate::error::AppError::Code(
+                        "export_target_exists".into(),
+                    ));
+                }
+                let report = vault.export_json(&file)?;
+                let folder = dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                Ok(ExportOutcome {
+                    entries: report.entries,
+                    attachments: report.attachments,
+                    target: format!("{folder}/soirvu-export.json"),
+                })
+            } else {
+                let report = vault.export_markdown(&dir)?;
+                Ok(ExportOutcome {
+                    entries: report.entries,
+                    attachments: report.attachments,
+                    target: dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                })
+            }
+        },
+    )
+    .await;
+    let result = match joined {
+        Ok(inner) => inner,
+        Err(_) => Err(crate::error::AppError::Code("storage".into())),
+    };
+    Ok(Some(ipc(result)?))
+}
+
+/// §8: the whole diary as Markdown files with front matter,
+/// attachments loose in `assets/`. Plaintext — see the
+/// warning in `confirm_export`.
+#[tauri::command]
+pub async fn export_markdown(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    passphrase: String,
+) -> Result<Option<ExportOutcome>, String> {
+    run_export(app, state, passphrase, false).await
+}
+
+/// §8: the whole diary as one lossless JSON file,
+/// tombstones and ids included, made for re-import.
+#[tauri::command]
+pub async fn export_json(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    passphrase: String,
+) -> Result<Option<ExportOutcome>, String> {
+    run_export(app, state, passphrase, true).await
+}

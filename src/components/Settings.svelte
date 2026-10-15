@@ -72,6 +72,51 @@
         }
     }
 
+    let expPass = $state('');
+    let expBusy = $state(false);
+    let expNote = $state('');
+
+    function expError(e) {
+        switch (String(e)) {
+            case 'wrong_passphrase':
+                return 'Wrong passphrase.';
+            case 'folder_not_empty':
+                return 'That folder is not empty — pick an empty folder for the export.';
+            case 'export_target_exists':
+                return 'That folder already contains soirvu-export.json — pick another folder.';
+            case 'locked':
+                return 'The diary is locked.';
+            default:
+                return 'Something went wrong (' + String(e) + ').';
+        }
+    }
+
+    async function runExport(which) {
+        expNote = '';
+        expBusy = true;
+        try {
+            const outcome =
+                which === 'json'
+                    ? await api.exportJson(expPass)
+                    : await api.exportMarkdown(expPass);
+            if (outcome) {
+                expPass = '';
+                expNote =
+                    'Exported ' +
+                    outcome.entries +
+                    ' entries and ' +
+                    outcome.attachments +
+                    ' attachments to ' +
+                    outcome.target +
+                    '. These files are NOT encrypted.';
+            }
+        } catch (e) {
+            expNote = expError(e);
+        } finally {
+            expBusy = false;
+        }
+    }
+
     async function regenerateRecovery() {
         secNote = "";
         secBusy = true;
@@ -295,6 +340,29 @@
             Only the diary's header changes — nothing is re-encrypted and the diary stays open.
             Backups made earlier keep the passphrase and recovery key they were made with.
         </p>
+
+        <h3>Export</h3>
+        <p class="note">
+            Export writes the diary as plain, unencrypted files. You will be asked to confirm,
+            to type your passphrase again, and to pick an empty folder.
+        </p>
+        <label>
+            Passphrase
+            <input type="password" bind:value={expPass} autocomplete="current-password" />
+        </label>
+        <div class="row">
+            <button onclick={() => runExport('markdown')} disabled={expBusy || !expPass}>
+                Export as Markdown…
+            </button>
+            <button onclick={() => runExport('json')} disabled={expBusy || !expPass}>
+                Export as JSON…
+            </button>
+        </div>
+        <p class="note">
+            Markdown is for reading and moving to other apps. JSON keeps everything —
+            ids, deleted entries — and is made for importing back into Soirvu.
+        </p>
+        {#if expNote}<p class="note">{expNote}</p>{/if}
     {:else if !error}
         <p class="note">Loading…</p>
     {/if}

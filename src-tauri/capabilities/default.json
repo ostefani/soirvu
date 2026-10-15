@@ -31,6 +31,8 @@
         "allow-open-link",
     "allow-clipboard-note-copy",
     "allow-backup-now",
+    "allow-export-markdown",
+    "allow-export-json",
         "allow-settings-get",
         "allow-settings-set",
         "allow-settings-pick-backup-dir",

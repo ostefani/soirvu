@@ -127,6 +127,14 @@ impl Vault {
         Ok(recovery)
     }
 
+    /// Proves the caller holds this vault's passphrase
+    /// without changing anything — the re-authentication §8
+    /// asks for before plaintext export.
+    pub fn verify_passphrase(&self, passphrase: &str) -> Result<()> {
+        self.header.unlock_with_passphrase(passphrase)?;
+        Ok(())
+    }
+
     /// Changes the passphrase. The current passphrase is
     /// verified against the slot first (a wrong one fails with
     /// Error::Unlock, like a bad unlock); then only the header
