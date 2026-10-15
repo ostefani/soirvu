@@ -143,7 +143,50 @@
        typing looks like spaces are being eaten. break-spaces
        (pre-wrap as the older-engine fallback) keeps every space
        visible, which is what a text editor owes the typist. */
+    .editor-pane {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        max-width: 46rem;
+    }
+
+    .meta-row {
+        display: flex;
+        gap: 0.4rem;
+    }
+
+    .title-input {
+        flex: 1;
+        min-width: 0;
+        font-weight: 600;
+    }
+
+    .tags-input {
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    .editor-mount {
+        border: 1px solid rgba(127, 127, 127, 0.35);
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        min-height: 40vh;
+    }
+
+    .editor-foot {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .status {
+        font-size: 0.85em;
+        opacity: 0.7;
+    }
+
     :global(.editor-mount.ProseMirror) {
+        outline: none;
+        min-height: 38vh;
         white-space: pre-wrap;
         white-space: break-spaces;
     }
@@ -192,6 +235,8 @@
     }
 
     .editor-mount :global(pre) {
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 0.9em;
         background: rgba(0, 0, 0, 0.06);
         border-radius: 8px;
         padding: 0.75rem 1rem;

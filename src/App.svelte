@@ -95,3 +95,43 @@
         </div>
     </div>
 {/if}
+
+<style>
+    /* The diary shell: header bar and the two-pane body. */
+    .diary {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+    }
+
+    .diary-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 1rem;
+        border-bottom: 1px solid rgba(127, 127, 127, 0.35);
+    }
+
+    .vault-label {
+        font-weight: 600;
+    }
+
+    .diary-body {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+    }
+
+    .diary-body aside {
+        width: 19rem;
+        flex-shrink: 0;
+        border-right: 1px solid rgba(127, 127, 127, 0.35);
+        overflow-y: auto;
+    }
+
+    .diary-body main {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1rem 1.5rem;
+    }
+</style>

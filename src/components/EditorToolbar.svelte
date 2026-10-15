@@ -145,8 +145,8 @@
     }
 
     .editor-toolbar button.active {
-        background: #e3ecfd;
-        color: #2563eb;
+        background: rgba(57, 108, 216, 0.12);
+        color: #396cd8;
     }
 
     .tb-strike {

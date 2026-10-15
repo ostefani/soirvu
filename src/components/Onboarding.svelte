@@ -90,3 +90,17 @@
 
     {#if error}<p class="error">{error}</p>{/if}
 </div>
+
+<style>
+    /* The recovery key is shown once, here, so its style lives here. */
+    .recovery-key {
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 1.25em;
+        letter-spacing: 0.08em;
+        text-align: center;
+        padding: 1rem;
+        border: 1px dashed currentColor;
+        border-radius: 8px;
+        word-break: break-all;
+    }
+</style>

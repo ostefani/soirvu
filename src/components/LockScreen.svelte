@@ -126,3 +126,37 @@
 
     {#if error}<p class="error">{error}</p>{/if}
 </div>
+
+<style>
+    /* The vault rows and the passphrase/recovery toggle. */
+    .vault-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+    }
+
+    .vault-row {
+        display: flex;
+        gap: 0.4rem;
+        align-items: center;
+    }
+
+    .vault-name {
+        flex: 1;
+        text-align: left;
+    }
+
+    .missing {
+        opacity: 0.6;
+        font-size: 0.85em;
+    }
+
+    .kind-toggle {
+        display: flex;
+        gap: 0.4rem;
+    }
+
+    .kind-toggle button {
+        flex: 1;
+    }
+</style>
