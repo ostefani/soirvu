@@ -7,6 +7,7 @@
     import { onDestroy, onMount } from "svelte";
     import * as api from "../api.js";
     import { createEditor } from "../editor/index.js";
+    import EditorToolbar from "./EditorToolbar.svelte";
 
     let { entryId, onDeleted, onSaved } = $props();
 
@@ -18,10 +19,44 @@
     let status = $state("");
     let deleteArmed = $state(false);
     let mountEl = $state(null);
+    let bar = $state(null);
 
     let editor = null;
     let saveTimer = null;
     let dirty = false;
+
+    // The selection toolbar (§6.5): recomputed after every
+    // editor transaction. Shown only for a non-empty selection,
+    // above its first line — or below it when there is no room
+    // above (the entry starts at the top of the window).
+    function refreshBar() {
+        if (!editor) {
+            bar = null;
+            return;
+        }
+        const info = editor.query();
+        if (info.empty) {
+            bar = null;
+            return;
+        }
+        // coordsAtPos is the one layout-dependent call in this
+        // chain; if it ever fails in the webview, the toolbar
+        // still appears (over the editor's top edge) instead of
+        // vanishing silently with the exception.
+        let start;
+        let end;
+        try {
+            start = editor.coordsAtPos(info.from);
+            end = editor.coordsAtPos(info.to);
+        } catch {
+            const rect = mountEl.getBoundingClientRect();
+            start = { left: rect.left + rect.width / 2, top: rect.top };
+            end = { right: start.left, bottom: rect.bottom };
+        }
+        const x = Math.min(Math.max((start.left + end.right) / 2, 200), window.innerWidth - 200);
+        const below = start.top < 72;
+        bar = { info, x, y: below ? end.bottom : start.top, below };
+    }
 
     function markDirty() {
         dirty = true;
@@ -75,6 +110,7 @@
         editor = createEditor(mountEl, {
             markdown: entry.body_md,
             onChange: () => markDirty(),
+            onSelectionChange: refreshBar,
             onOpenLink: (href) => {
                 if (href.startsWith("https://") || href.startsWith("mailto:")) {
                     api.openLink(href).catch(() => {});
@@ -116,6 +152,9 @@
             oninput={markDirty}
         />
         <div class="editor-mount" bind:this={mountEl}></div>
+        {#if bar}
+            <EditorToolbar {editor} {bar} />
+        {/if}
         <div class="editor-foot">
             <span class="status">{status}</span>
             {#if deleteArmed}

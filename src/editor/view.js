@@ -297,6 +297,26 @@ export class EditorView {
         return { node: this.dom, offset: 0 };
     }
 
+    /** The client rect of a document position, so floating UI
+     *  (the selection toolbar) can be placed from it (§6.5). A
+     *  collapsed range on an empty line measures zero, so fall
+     *  back to the containing element's box there. */
+    coordsAtPos(pos) {
+        const point = this.domPointForPos(pos);
+        const range = document.createRange();
+        range.setStart(point.node, point.offset);
+        range.setEnd(point.node, point.offset);
+        let rect = range.getBoundingClientRect();
+        if (rect.height === 0 && rect.width === 0) {
+            const el = point.node.nodeType === 3 ? point.node.parentNode : point.node;
+            if (el && el.getBoundingClientRect) {
+                const r = el.getBoundingClientRect();
+                rect = { left: r.left, right: r.left, top: r.top, bottom: r.bottom };
+            }
+        }
+        return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+    }
+
     syncSelection() {
         const domSel = document.getSelection();
         if (!domSel) return;

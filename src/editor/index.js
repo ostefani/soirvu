@@ -15,6 +15,7 @@ import { EditorView } from "./view.js";
 import { historyPlugin } from "./history.js";
 import { inputRulesPlugin, keymapPlugin } from "./rules.js";
 import { deleteSelectionIn, insertTextIn } from "./commands.js";
+import { selectionInfo, toolbarCommands } from "./toolbar.js";
 import { schema } from "./schema.js";
 import { parseMarkdown, serializeMarkdown } from "./markdown.js";
 
@@ -111,9 +112,12 @@ export function makePasteHandler() {
  *   the attachment flow (§6.5, Phase 4).
  * @param {(href: string) => void} [options.onOpenLink] A link was
  *   clicked; the app routes https/mailto through open_link.
+ * @param {() => void} [options.onSelectionChange] Called after
+ *   every transaction, doc or selection, so floating UI (the
+ *   selection toolbar) can re-render from query().
  */
 export function createEditor(el, options = {}) {
-    const { markdown = "", onChange = () => {}, onOpenLink = null } = options;
+    const { markdown = "", onChange = () => {}, onOpenLink = null, onSelectionChange = null } = options;
     let readonly = false;
 
     const plugins = [inputRulesPlugin(), keymapPlugin(schema), historyPlugin()];
@@ -124,6 +128,7 @@ export function createEditor(el, options = {}) {
             const next = view.state.apply(tr);
             view.updateState(next);
             if (tr.docChanged) onChange(serializeMarkdown(next.doc));
+            if (onSelectionChange) onSelectionChange();
         },
         editable: () => !readonly,
         handleClickOn: (href) => {
@@ -132,13 +137,32 @@ export function createEditor(el, options = {}) {
         onPasteText: makePasteHandler(),
     });
 
+    const commands = toolbarCommands(schema);
+
     return {
+        /** Runs a selection-toolbar command by name (toolbar.js). */
+        exec(name) {
+            const command = commands[name];
+            if (!command) return false;
+            const ok = command(view.state, (tr) => view.dispatch(tr));
+            view.focus();
+            return ok;
+        },
+        /** What the selection looks like, for the toolbar. */
+        query() {
+            return selectionInfo(view.state);
+        },
+        /** The client rect of a document position (§6.5). */
+        coordsAtPos(pos) {
+            return view.coordsAtPos(pos);
+        },
         getMarkdown() {
             return serializeMarkdown(view.state.doc);
         },
         /** Replaces the document (switching entries). History resets. */
         setMarkdown(md) {
             view.updateState(EditorState.create({ doc: parseMarkdown(md), plugins }));
+            if (onSelectionChange) onSelectionChange();
         },
         focus() {
             view.focus();

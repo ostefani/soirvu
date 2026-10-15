@@ -566,7 +566,7 @@ export function selectNodeForward(state, dispatch) {
 // ---------------------------------------------------------------------------
 // Marks
 
-function markActive(state, markType) {
+export function markActive(state, markType) {
     const sel = state.selection;
     const doc = state.doc;
     if (sel.type !== "text") return false;
