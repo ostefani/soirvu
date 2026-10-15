@@ -21,7 +21,7 @@
 // an element knows the position just before its node.
 
 import { Fragment, Slice } from "prosemirror-model";
-import { NodeSelection, TextSelection } from "./state.js";
+import { NodeSelection, TextSelection, selectionNear } from "./state.js";
 import { deleteSelection as deleteSelectionCmd, insertTextIn } from "./commands.js";
 import { inlineSlice } from "./transform.js";
 import { tokenize } from "./highlight.js";
@@ -92,6 +92,8 @@ export class EditorView {
         this.compositionBlockPos = null;
         this.syncingSelection = false;
         this.lastHandledInputAt = 0;
+        this.dragHandle = null;
+        this.dragState = null;
 
         el.classList.add("ProseMirror");
         el.setAttribute("contenteditable", String(this.editable()));
@@ -292,6 +294,124 @@ export class EditorView {
 
     destroy() {
         this.unbindEvents();
+        if (this.dragHandle) this.dragHandle.remove();
+        if (this.dropLine) this.dropLine.remove();
+    }
+
+    // -- block drag handles (Phase 7, §6.5) --------------------------------
+    //
+    // One handle element for the whole editor, fixed-positioned
+    // in the gutter of the top-level block under the pointer,
+    // and a drop line while it is dragged. Both live on
+    // document.body, outside the editor tree: the reconciler
+    // indexes the editor's children directly, so nothing
+    // foreign may sit among them. Pointer events only — the
+    // move is a single transaction, a single undo step.
+
+    ensureDragEls() {
+        if (this.dragHandle) return;
+        const handle = document.createElement("div");
+        handle.className = "block-drag-handle";
+        handle.textContent = "\u283f";
+        handle.contentEditable = "false";
+        handle.style.display = "none";
+        handle.addEventListener("mousedown", (e) => this.onDragStart(e));
+        document.body.appendChild(handle);
+        const line = document.createElement("div");
+        line.className = "block-drop-line";
+        line.style.display = "none";
+        document.body.appendChild(line);
+        this.dragHandle = handle;
+        this.dropLine = line;
+    }
+
+    onHoverBlock(e) {
+        if (this.dragState || !this.editable()) return;
+        const blockEl = this.topBlockOf(e.target);
+        if (!blockEl || blockEl._pos === undefined) {
+            this.hideDragHandle();
+            return;
+        }
+        this.ensureDragEls();
+        const rect = blockEl.getBoundingClientRect();
+        const editorRect = this.dom.getBoundingClientRect();
+        this.dragBlock = { el: blockEl, pos: blockEl._pos, node: blockEl._node };
+        this.dragHandle.style.left = Math.max(0, editorRect.left - 22) + "px";
+        this.dragHandle.style.top = rect.top + "px";
+        this.dragHandle.style.display = "block";
+    }
+
+    hideDragHandle() {
+        if (this.dragState) return;
+        if (this.dragHandle) this.dragHandle.style.display = "none";
+    }
+
+    onDragStart(e) {
+        if (!this.dragBlock || !this.editable()) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const blocks = [];
+        let pos = 0;
+        this.state.doc.content.forEach((node, _o, index) => {
+            blocks.push({ index, pos, node });
+            pos += node.nodeSize;
+        });
+        const from = blocks.findIndex((b) => b.pos === this.dragBlock.pos);
+        if (from < 0) return;
+        this.dragState = { blocks, from, target: from };
+        this.dragMove = (ev) => this.onDragMove(ev);
+        this.dragUp = () => this.onDragEnd();
+        window.addEventListener("mousemove", this.dragMove);
+        window.addEventListener("mouseup", this.dragUp);
+    }
+
+    dragBoundaryY(index) {
+        const kids = this.dom.childNodes;
+        if (index < kids.length) return kids[index].getBoundingClientRect().top - 2;
+        return kids[kids.length - 1].getBoundingClientRect().bottom + 2;
+    }
+
+    onDragMove(e) {
+        const ds = this.dragState;
+        if (!ds) return;
+        let target = ds.blocks.length;
+        for (let i = 0; i < ds.blocks.length; i++) {
+            const el = this.dom.childNodes[i];
+            if (!el) continue;
+            const rect = el.getBoundingClientRect();
+            if (e.clientY < rect.top + rect.height / 2) {
+                target = i;
+                break;
+            }
+        }
+        ds.target = target;
+        const editorRect = this.dom.getBoundingClientRect();
+        this.dropLine.style.left = editorRect.left + "px";
+        this.dropLine.style.width = editorRect.width + "px";
+        this.dropLine.style.top = this.dragBoundaryY(target) + "px";
+        this.dropLine.style.display = "block";
+    }
+
+    onDragEnd() {
+        const ds = this.dragState;
+        this.dragState = null;
+        window.removeEventListener("mousemove", this.dragMove);
+        window.removeEventListener("mouseup", this.dragUp);
+        if (this.dropLine) this.dropLine.style.display = "none";
+        if (this.dragHandle) this.dragHandle.style.display = "none";
+        if (!ds) return;
+        const { blocks, from, target } = ds;
+        if (target === from || target === from + 1) return;
+        const node = blocks[from].node;
+        const fromPos = blocks[from].pos;
+        let insertAt = target < blocks.length ? blocks[target].pos : this.state.doc.content.size;
+        if (insertAt > fromPos) insertAt -= node.nodeSize;
+        const tr = this.state.tr();
+        tr.delete(fromPos, fromPos + node.nodeSize);
+        tr.insert(insertAt, [node]);
+        tr.setSelection(selectionNear(tr.doc, insertAt + 1));
+        this.dispatchTransaction(tr);
+        this.focus();
     }
 
     // -- position mapping ------------------------------------------------------
@@ -481,6 +601,8 @@ export class EditorView {
             compositionend: (e) => this.onCompositionEnd(e),
             paste: (e) => this.onPaste(e),
             mousedown: (e) => this.onMouseDown(e),
+            mousemove: (e) => this.onHoverBlock(e),
+            mouseleave: () => this.hideDragHandle(),
             click: (e) => this.onClick(e),
             drop: (e) => this.onDrop(e),
             dragover: (e) => e.preventDefault(),

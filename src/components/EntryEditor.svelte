@@ -429,4 +429,31 @@
             color: #8db4f2;
         }
     }
+    /* Drag handles (Phase 7): the handle and drop line are
+       fixed-position elements the view puts on document.body,
+       outside the editor tree. */
+    :global(.block-drag-handle) {
+        position: fixed;
+        width: 18px;
+        height: 22px;
+        line-height: 22px;
+        text-align: center;
+        font-size: 13px;
+        color: rgba(127, 127, 127, 0.75);
+        cursor: grab;
+        user-select: none;
+        z-index: 40;
+    }
+
+    :global(.block-drag-handle:active) {
+        cursor: grabbing;
+    }
+
+    :global(.block-drop-line) {
+        position: fixed;
+        height: 2px;
+        background: #396cd8;
+        z-index: 40;
+        pointer-events: none;
+    }
 </style>
