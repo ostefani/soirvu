@@ -147,11 +147,22 @@ export function vaultRelocate(vaultId) {
  * @returns {Promise<{ entries: EntrySummary[], next_cursor: string | null }>}
  */
 export function entryList(args = {}) {
-    return invoke("entry_list", {
+    return invoke('entry_list', {
         cursor: args.cursor ?? null,
         tag: args.tag ?? null,
+        date: args.date ?? null,
         limit: args.limit ?? null,
     });
+}
+
+/**
+ * Live-entry counts per day in [from, to), for the calendar.
+ * @param {string} from - First day, YYYY-MM-DD (included).
+ * @param {string} to - Last day, YYYY-MM-DD (excluded).
+ * @returns {Promise<Array<{date: string, entries: number}>>}
+ */
+export function calendarDays(from, to) {
+    return invoke('calendar_days', { from, to });
 }
 
 /**

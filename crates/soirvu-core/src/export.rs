@@ -50,6 +50,7 @@ impl Vault {
                 limit: 200,
                 after: after.clone(),
                 tag: None,
+                date: None,
             })?;
             ids.extend(page.items.iter().map(|item| item.id.clone()));
             match page.next {

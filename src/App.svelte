@@ -9,6 +9,7 @@
     import Onboarding from "./components/Onboarding.svelte";
     import LockScreen from "./components/LockScreen.svelte";
     import EntryList from "./components/EntryList.svelte";
+    import Calendar from "./components/Calendar.svelte";
     import EntryEditor from "./components/EntryEditor.svelte";
     import Settings from "./components/Settings.svelte";
 
@@ -18,6 +19,8 @@
     let selectedId = $state(null);
     let listEl = $state(null);
     let showSettings = $state(false);
+    let listDate = $state(null);
+    let calVersion = $state(0);
     let welcomeNote = $state("");
 
     async function refresh() {
@@ -107,7 +110,14 @@
         </header>
         <div class="diary-body">
             <aside>
-                <EntryList bind:this={listEl} selectedId={selectedId} onSelect={(id) => (selectedId = id)} />
+                <Calendar selectedDate={listDate} onSelect={(d) => (listDate = d)} version={calVersion} />
+                <EntryList
+                    bind:this={listEl}
+                    selectedId={selectedId}
+                    onSelect={(id) => (selectedId = id)}
+                    date={listDate}
+                    onClearDate={() => (listDate = null)}
+                />
             </aside>
             <main>
                 {#if showSettings}
@@ -119,8 +129,12 @@
                             onDeleted={() => {
                                 selectedId = null;
                                 listEl?.refresh();
+                                calVersion++;
                             }}
-                            onSaved={() => listEl?.refresh()}
+                            onSaved={() => {
+                                listEl?.refresh();
+                                calVersion++;
+                            }}
                         />
                     {/key}
                 {:else}

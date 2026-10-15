@@ -5,7 +5,7 @@
     // segments with <mark> — diary text never touches {@html}.
     import * as api from "../api.js";
 
-    let { selectedId, onSelect } = $props();
+    let { selectedId, onSelect, date = null, onClearDate } = $props();
 
     let entries = $state([]);
     let nextCursor = $state(null);
@@ -38,6 +38,7 @@
                 cursor: reset ? null : nextCursor,
                 limit: 50,
                 tag: tagFilter,
+                date,
             });
             entries = reset ? page.entries : [...entries, ...page.entries];
             nextCursor = page.next_cursor;
@@ -142,6 +143,13 @@
     </div>
 
     {#if error}<p class="form-error">{error}</p>{/if}
+
+    {#if date}
+        <p class="date-filter">
+            Entries for {date}
+            <button class="quiet" onclick={() => onClearDate?.()}>Show all</button>
+        </p>
+    {/if}
 
     {#if tags.length}
         <div class="tag-row">

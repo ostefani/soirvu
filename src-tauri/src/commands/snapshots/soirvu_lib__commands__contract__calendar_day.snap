@@ -1,0 +1,8 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+{
+  "date": "2026-10-15",
+  "entries": 2
+}

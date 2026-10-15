@@ -112,6 +112,7 @@ pub fn entry_list(
     state: State<'_, AppState>,
     cursor: Option<String>,
     tag: Option<String>,
+    date: Option<String>,
     limit: Option<u32>,
 ) -> Result<EntryPage, String> {
     let limit = limit.unwrap_or(50).clamp(1, 200) as usize;
@@ -121,7 +122,7 @@ pub fn entry_list(
         .transpose()
         .map_err(|e| e.to_ipc())?;
     ipc(state.with_vault(|vault| {
-        let page = vault.list_entries(&ListQuery { limit, after, tag })?;
+        let page = vault.list_entries(&ListQuery { limit, after, tag, date })?;
         Ok(EntryPage {
             entries: page.items.iter().map(EntrySummary::from).collect(),
             next_cursor: page.next.as_ref().map(encode_cursor),
@@ -207,6 +208,34 @@ impl From<&TagCount> for TagDto {
             entries: t.entries,
         }
     }
+}
+
+/// One day's live-entry count, for the calendar (§13 Phase 6).
+#[derive(Serialize)]
+pub struct CalendarDay {
+    pub date: String,
+    pub entries: i64,
+}
+
+impl From<&soirvu_core::entries::DayCount> for CalendarDay {
+    fn from(d: &soirvu_core::entries::DayCount) -> Self {
+        CalendarDay {
+            date: d.date.clone(),
+            entries: d.entries,
+        }
+    }
+}
+
+#[tauri::command]
+pub fn calendar_days(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<Vec<CalendarDay>, String> {
+    ipc(state.with_vault(|vault| {
+        let days = vault.entry_days(&from, &to)?;
+        Ok(days.iter().map(CalendarDay::from).collect())
+    }))
 }
 
 #[tauri::command]

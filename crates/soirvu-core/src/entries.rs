@@ -84,6 +84,8 @@ pub struct ListQuery {
     pub after: Option<Cursor>,
     /// Only entries with this tag (matched ignoring case).
     pub tag: Option<String>,
+    /// Only entries on this day (YYYY-MM-DD).
+    pub date: Option<String>,
 }
 
 impl Default for ListQuery {
@@ -92,8 +94,16 @@ impl Default for ListQuery {
             limit: 50,
             after: None,
             tag: None,
+            date: None,
         }
     }
+}
+
+/// One day's live-entry count, for the calendar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DayCount {
+    pub date: String,
+    pub entries: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -268,6 +278,7 @@ impl Vault {
                 AND (?4 IS NULL OR EXISTS (
                        SELECT 1 FROM entry_tag et JOIN tag t ON t.id = et.tag_id
                         WHERE et.entry_rid = e.rid AND t.name_key = ?4))
+                AND (?7 IS NULL OR e.entry_date = ?7)
               ORDER BY e.entry_date DESC, e.created_at DESC, e.id DESC
               LIMIT ?5",
         )?;
@@ -278,7 +289,8 @@ impl Vault {
                 after_id,
                 tag_key,
                 (limit + 1) as i64,
-                PREVIEW_CHARS as i64
+                PREVIEW_CHARS as i64,
+                query.date
             ],
             |row| {
                 let tags: Option<String> = row.get(6)?;
@@ -306,6 +318,23 @@ impl Vault {
             None
         };
         Ok(Page { items, next })
+    }
+
+    /// How many live entries each day in `[from, to)` has — the
+    /// calendar's dots. Days with no entries are absent.
+    pub fn entry_days(&self, from: &str, to: &str) -> Result<Vec<DayCount>> {
+        let mut stmt = self.db.connection().prepare(
+            "SELECT entry_date, COUNT(*) FROM entry
+              WHERE deleted_at IS NULL AND entry_date >= ?1 AND entry_date < ?2
+              GROUP BY entry_date ORDER BY entry_date",
+        )?;
+        let rows = stmt.query_map(params![from, to], |row| {
+            Ok(DayCount {
+                date: row.get(0)?,
+                entries: row.get(1)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// Finds entries containing every word of `query` (words of 3 or more characters;
@@ -1176,6 +1205,41 @@ mod tests {
     }
 
     #[test]
+    fn days_count_live_entries_and_the_list_filters_by_date() {
+        let (_tmp, mut vault) = new_vault();
+        let mut ids = Vec::new();
+        for (date, title) in [
+            ("2026-10-03", "a"),
+            ("2026-10-03", "b"),
+            ("2026-10-05", "c"),
+            ("2026-11-01", "d"),
+        ] {
+            ids.push(vault.create_entry(&draft(date, title, "text")).unwrap());
+        }
+        vault.delete_entry(&ids[3].id).unwrap(); // tombstones do not count
+
+        let days = vault.entry_days("2026-10-01", "2026-11-01").unwrap();
+        assert_eq!(
+            days,
+            vec![
+                DayCount { date: "2026-10-03".into(), entries: 2 },
+                DayCount { date: "2026-10-05".into(), entries: 1 },
+            ]
+        );
+
+        let page = vault
+            .list_entries(&ListQuery {
+                limit: 50,
+                after: None,
+                tag: None,
+                date: Some("2026-10-03".into()),
+            })
+            .unwrap();
+        assert_eq!(page.items.len(), 2);
+        assert!(page.items.iter().all(|e| e.entry_date == "2026-10-03"));
+    }
+
+    #[test]
     fn the_list_is_paged_newest_first_without_gaps_or_repeats() {
         let (_tmp, mut vault) = new_vault();
         let mut created = Vec::new();
@@ -1203,6 +1267,7 @@ mod tests {
                     limit: 2,
                     after: after.clone(),
                     tag: None,
+                    date: None,
                 })
                 .unwrap();
             pages += 1;
@@ -1221,6 +1286,7 @@ mod tests {
                 limit: 5,
                 after: None,
                 tag: None,
+                date: None,
             })
             .unwrap();
         assert_eq!(all.items.len(), 5);

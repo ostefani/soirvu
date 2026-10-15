@@ -11,7 +11,7 @@
 use serde::Serialize;
 
 use super::attachments::{AttachmentAdded, AttachmentInfo};
-use super::entries::{EntryDto, EntryPage, EntrySummary, HitDto, SaveDraft, TagDto};
+use super::entries::{CalendarDay, EntryDto, EntryPage, EntrySummary, HitDto, SaveDraft, TagDto};
 use super::vault::{Created, Picked};
 use crate::error::AppError;
 use crate::state::{Settings, Status, VaultInfo};
@@ -151,6 +151,17 @@ fn vault_status_event_values() {
             Status::Unlocked,
             Status::Locking,
         ],
+    );
+}
+
+#[test]
+fn calendar_day_shape() {
+    snap(
+        "calendar_day",
+        &CalendarDay {
+            date: "2026-10-15".into(),
+            entries: 2,
+        },
     );
 }
 

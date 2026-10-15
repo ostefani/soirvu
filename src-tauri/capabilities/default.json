@@ -15,6 +15,7 @@
         "allow-vault-forget",
         "allow-vault-relocate",
         "allow-entry-list",
+    "allow-calendar-days",
         "allow-entry-get",
         "allow-entry-save",
         "allow-entry-delete",
