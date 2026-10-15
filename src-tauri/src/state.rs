@@ -134,6 +134,7 @@ struct Inner {
     backoff_until: Option<Instant>,
     /// Folder picked for a create that has not happened yet.
     pending_create: Option<PathBuf>,
+    pending_fork: Option<PathBuf>,
     /// In-flight attachment uploads (§6.1): chunks accumulate here
     /// until attachment_finish commits them. Plaintext lives in
     /// process memory only — never on disk — and is dropped on lock.
@@ -171,6 +172,7 @@ impl AppState {
                 unlock_failures: 0,
                 backoff_until: None,
                 pending_create: None,
+                pending_fork: None,
                 uploads: std::collections::HashMap::new(),
                 upload_seq: 0,
             }),
@@ -312,6 +314,22 @@ impl AppState {
 
     pub fn set_pending_create(&self, path: PathBuf) {
         self.inner.lock().unwrap().pending_create = Some(path);
+    }
+
+    /// An imported backup copy waiting for its own identity
+    /// (Phase 6): the folder the copy was written to. The fork
+    /// command peeks (a wrong passphrase must not lose it) and
+    /// clears on success.
+    pub fn set_pending_fork(&self, path: PathBuf) {
+        self.inner.lock().unwrap().pending_fork = Some(path);
+    }
+
+    pub fn pending_fork(&self) -> Option<PathBuf> {
+        self.inner.lock().unwrap().pending_fork.clone()
+    }
+
+    pub fn clear_pending_fork(&self) {
+        self.inner.lock().unwrap().pending_fork = None;
     }
 
     pub fn take_pending_create(&self) -> AppResult<PathBuf> {

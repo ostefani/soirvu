@@ -14,6 +14,7 @@
         "allow-vault-lock",
         "allow-vault-forget",
         "allow-vault-relocate",
+    "allow-vault-fork-import",
         "allow-entry-list",
         "allow-entry-get",
         "allow-entry-save",

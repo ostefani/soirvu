@@ -27,6 +27,11 @@ pub struct Picked {
     /// location looks unsuitable for SQLite ("cloud_sync" |
     /// "network_fs"). A warning only — never a refusal.
     pub warning: Option<String>,
+    /// Mode "open", import case: the copy's vault is already
+    /// registered, so the copy is not registered yet — it waits
+    /// as a pending fork until vault_fork_import gives it its
+    /// own identity (or the user drops it).
+    pub fork_required: bool,
 }
 
 #[derive(Serialize)]
@@ -69,9 +74,14 @@ fn read_vault_id(path: &std::path::Path) -> Result<String, AppError> {
 /// Copies a vault's two files into an empty folder — the
 /// restore-as-import step. The source (a backup) is only read.
 fn import_copy(from: &std::path::Path, to: &std::path::Path) -> Result<(), AppError> {
-    let mut entries = std::fs::read_dir(to).map_err(|_| AppError::Code("storage".into()))?;
-    if entries.next().is_some() {
-        return Err(AppError::Code("destination_not_empty".into()));
+    // A folder holding only .DS_Store counts as empty: Finder
+    // writes that file into every folder it shows, so a folder
+    // the user emptied in Finder still has it.
+    for entry in std::fs::read_dir(to).map_err(|_| AppError::Code("storage".into()))? {
+        let entry = entry.map_err(|_| AppError::Code("storage".into()))?;
+        if entry.file_name() != ".DS_Store" {
+            return Err(AppError::Code("destination_not_empty".into()));
+        }
     }
     for file in ["soirvu.db", "vault.header.json"] {
         std::fs::copy(from.join(file), to.join(file))
@@ -202,6 +212,17 @@ pub async fn vault_pick_folder(
                 import_copy(&resolved, &dest).map_err(|e| e.to_ipc())?;
                 let name = folder_name(&dest);
                 let warning = crate::platform::fs_warning(&dest).map(str::to_string);
+                if state.vault_path(&vault_id).is_ok() {
+                    // The original is registered: the copy must
+                    // not take its place. It waits for a fork.
+                    state.set_pending_fork(dest);
+                    return Ok(Some(Picked {
+                        vault_id: Some(vault_id),
+                        name,
+                        warning,
+                        fork_required: true,
+                    }));
+                }
                 state
                     .register(vault_id.clone(), name.clone(), dest)
                     .map_err(|e| e.to_ipc())?;
@@ -209,6 +230,7 @@ pub async fn vault_pick_folder(
                     vault_id: Some(vault_id),
                     name,
                     warning,
+                    fork_required: false,
                 }));
             }
             // The header is unauthenticated, so a copied folder
@@ -238,6 +260,7 @@ pub async fn vault_pick_folder(
                 vault_id: Some(vault_id),
                 name,
                 warning,
+                fork_required: false,
             }))
         }
         "create" => {
@@ -248,6 +271,7 @@ pub async fn vault_pick_folder(
                 vault_id: None,
                 name,
                 warning,
+                fork_required: false,
             }))
         }
         _ => Err("invalid_input".into()),
@@ -419,6 +443,14 @@ mod tests {
         // And a non-empty destination is refused, untouched.
         let err = import_copy(&from, &to).unwrap_err();
         assert_eq!(err.to_ipc(), "destination_not_empty");
+
+        // But a folder whose only content is Finder's .DS_Store
+        // counts as empty.
+        let to2 = tmp.path().join("home2");
+        std::fs::create_dir_all(&to2).unwrap();
+        std::fs::write(to2.join(".DS_Store"), b"finder").unwrap();
+        import_copy(&from, &to2).unwrap();
+        assert!(to2.join("soirvu.db").is_file());
     }
 
     #[test]
@@ -447,4 +479,43 @@ mod tests {
         header_in(&tmp.path().join("random")); // not a backup stamp
         assert_eq!(resolve_vault_folder(tmp.path()), tmp.path());
     }
+}
+
+
+/// What a finished fork hands back: the copy's new identity
+/// and its NEW recovery key (shown once, like at creation).
+#[derive(Serialize)]
+pub struct Forked {
+    pub vault_id: String,
+    pub recovery_key: String,
+}
+
+/// Gives an imported backup copy its own identity (§13
+/// Phase 6): opens the pending copy with the passphrase —
+/// which is also the proof it is the diary's owner asking —
+/// forks its identity in the core, and registers it under the
+/// new id, next to the original. A wrong passphrase changes
+/// nothing; the pending copy stays pending.
+#[tauri::command]
+pub fn vault_fork_import(
+    state: State<'_, AppState>,
+    mut passphrase: String,
+) -> Result<Forked, String> {
+    let result = (|| -> Result<Forked, AppError> {
+        let dest = state
+            .pending_fork()
+            .ok_or_else(|| AppError::Code("invalid_input".into()))?;
+        let mut vault = Vault::open_with_passphrase(&dest, &passphrase)?;
+        let recovery = vault.fork_identity(&passphrase)?;
+        let new_id = vault.header().vault_id.clone();
+        drop(vault);
+        state.clear_pending_fork();
+        state.register(new_id.clone(), folder_name(&dest), dest)?;
+        Ok(Forked {
+            vault_id: new_id,
+            recovery_key: recovery.to_text(),
+        })
+    })();
+    passphrase.zeroize();
+    ipc(result)
 }

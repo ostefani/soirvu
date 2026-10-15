@@ -10,6 +10,7 @@ fn main() {
         "vault_lock",
         "vault_forget",
         "vault_relocate",
+        "vault_fork_import",
         "entry_list",
         "calendar_days",
         "entry_get",

@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use super::attachments::{AttachmentAdded, AttachmentInfo};
 use super::entries::{CalendarDay, EntryDto, EntryPage, EntrySummary, HitDto, SaveDraft, TagDto};
-use super::vault::{Created, Picked};
+use super::vault::{Created, Forked, Picked};
 use crate::error::AppError;
 use crate::state::{Settings, Status, VaultInfo};
 
@@ -155,6 +155,17 @@ fn vault_status_event_values() {
 }
 
 #[test]
+fn forked_shape() {
+    snap(
+        "forked",
+        &Forked {
+            vault_id: "a54c38f6a54c38f6a54c38f6a54c38f6".into(),
+            recovery_key: "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ-2345-567".into(),
+        },
+    );
+}
+
+#[test]
 fn calendar_day_shape() {
     snap(
         "calendar_day",
@@ -194,6 +205,7 @@ fn picked_and_created() {
             vault_id: Some("0123456789abcdef0123456789abcdef".into()),
             name: "test_diar".into(),
             warning: None,
+            fork_required: false,
         },
     );
     snap(
@@ -202,6 +214,7 @@ fn picked_and_created() {
             vault_id: None,
             name: "new_diary".into(),
             warning: None,
+            fork_required: false,
         },
     );
     snap(

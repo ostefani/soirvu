@@ -74,6 +74,25 @@ impl Vault {
         Ok(())
     }
 
+    /// Gives this vault a fresh identity (see
+    /// VaultHeader::fork): the database's stored vault_id and
+    /// the header are rewritten to the new id, and the new
+    /// recovery key is returned — it is shown once, by the UI.
+    /// The vault must already be open (the caller proved the
+    /// passphrase by opening it). Operates on an imported copy
+    /// before it is registered, so a failure leaves the copy
+    /// unregistered and the original vault untouched.
+    pub fn fork_identity(&mut self, passphrase: &str) -> Result<RecoveryKey> {
+        let (header, recovery) = self.header.fork(passphrase, &self.master)?;
+        self.db.connection().execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'vault_id'",
+            rusqlite::params![header.vault_id],
+        )?;
+        write_atomic(&self.dir.join(HEADER_FILE), &header.to_json()?)?;
+        self.header = header;
+        Ok(recovery)
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
     }

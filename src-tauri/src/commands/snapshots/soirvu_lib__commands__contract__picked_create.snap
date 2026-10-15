@@ -5,5 +5,6 @@ expression: json
 {
   "vault_id": null,
   "name": "new_diary",
-  "warning": null
+  "warning": null,
+  "fork_required": false
 }

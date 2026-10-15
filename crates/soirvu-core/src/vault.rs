@@ -119,6 +119,50 @@ impl VaultHeader {
         Ok((header, recovery, master))
     }
 
+    /// A new identity for a copy of this vault (an imported
+    /// backup): a fresh vault_id, the SAME master key re-wrapped
+    /// into both slots under the new id (the slot AAD binds the
+    /// id, so the old wrappings cannot survive), the passphrase
+    /// unchanged — and a NEW recovery key, because the old
+    /// recovery slot cannot be re-wrapped without the old
+    /// recovery key, and separate diaries should not share one.
+    /// The caller has already proven the passphrase by opening
+    /// the vault.
+    pub fn fork(&self, passphrase: &str, master: &MasterKey) -> Result<(VaultHeader, RecoveryKey)> {
+        let kdf = match &self.slots[0] {
+            Slot::Passphrase { kdf, .. } => *kdf,
+            _ => return Err(Error::InvalidHeader("first slot is not a passphrase slot".into())),
+        };
+        let recovery = RecoveryKey::generate()?;
+        let vault_id = HEXLOWER.encode(&random_bytes::<VAULT_ID_LEN>()?);
+
+        let salt = random_bytes::<SALT_LEN>()?;
+        let kek = derive_kek(passphrase, &salt, &kdf)?;
+        let slot_aad = aad(FORMAT_VERSION, SUITE, &vault_id, &passphrase_description(&kdf));
+        let (nonce, wrapped) = wrap_key(&kek, master.key(), &slot_aad)?;
+        let passphrase_slot = Slot::Passphrase {
+            kdf,
+            salt: HEXLOWER.encode(&salt),
+            nonce: HEXLOWER.encode(&nonce),
+            wrapped_key: HEXLOWER.encode(&wrapped),
+        };
+
+        let slot_aad = aad(FORMAT_VERSION, SUITE, &vault_id, RECOVERY_DESCRIPTION);
+        let (nonce, wrapped) = wrap_key(&recovery.kek(), master.key(), &slot_aad)?;
+        let recovery_slot = Slot::Recovery {
+            nonce: HEXLOWER.encode(&nonce),
+            wrapped_key: HEXLOWER.encode(&wrapped),
+        };
+
+        let header = VaultHeader {
+            format_version: FORMAT_VERSION,
+            suite: SUITE.to_string(),
+            vault_id,
+            slots: vec![passphrase_slot, recovery_slot],
+        };
+        Ok((header, recovery))
+    }
+
     /// Checks everything that can be checked without a secret.
     pub fn validate(&self) -> Result<()> {
         if self.format_version != FORMAT_VERSION {

@@ -13,6 +13,12 @@
     let error = $state("");
     let busy = $state(false);
     let forgetArmed = $state(null);
+    let forkDest = $state(null);
+    let forkSecret = $state("");
+    let forkKey = $state(null);
+    let forkNewId = $state(null);
+    let forkError = $state("");
+    let forkBusy = $state(false);
     let note = $state("");
 
     const FS_WARNINGS = {
@@ -73,12 +79,40 @@
         onVaultsChanged();
     }
 
+    async function doFork() {
+        forkError = "";
+        forkBusy = true;
+        try {
+            const forked = await api.vaultForkImport(forkSecret);
+            forkSecret = "";
+            forkNewId = forked.vault_id;
+            forkKey = forked.recovery_key;
+            onVaultsChanged();
+        } catch (e) {
+            forkError = describeError(e);
+        } finally {
+            forkBusy = false;
+        }
+    }
+
+    function finishFork() {
+        selectedId = forkNewId;
+        forkKey = null;
+        forkDest = null;
+        forkNewId = null;
+    }
+
     async function openAnother() {
         error = "";
         note = "";
         try {
             const picked = await api.vaultPickFolder("open");
-            if (picked) {
+            if (picked && picked.fork_required) {
+                forkDest = picked.name;
+                forkSecret = "";
+                forkError = "";
+                if (picked.warning) note = FS_WARNINGS[picked.warning] || "";
+            } else if (picked) {
                 selectedId = picked.vault_id;
                 if (picked.warning) note = FS_WARNINGS[picked.warning] || "";
                 onVaultsChanged();
@@ -135,6 +169,31 @@
             onkeydown={(e) => e.key === "Enter" && unlock()}
         />
         <button onclick={unlock} disabled={busy || !secret}>Unlock</button>
+    {/if}
+
+    {#if forkKey}
+        <div class="fork-panel">
+            <p>The copy is now a separate diary. Its new recovery key:</p>
+            <p><code>{forkKey}</code></p>
+            <p class="note">Save it now — it is shown once. The old recovery key opens only the original diary.</p>
+            <button onclick={finishFork}>Done</button>
+        </div>
+    {:else if forkDest}
+        <div class="fork-panel">
+            <p>
+                “{forkDest}” is a copy of a diary you already have. To keep both, the copy
+                needs its own identity.
+            </p>
+            <input
+                type="password"
+                placeholder="The diary's passphrase"
+                bind:value={forkSecret}
+                onkeydown={(e) => e.key === "Enter" && doFork()}
+            />
+            <button onclick={doFork} disabled={forkBusy || !forkSecret}>Make it a separate diary</button>
+            <button class="quiet" onclick={() => (forkDest = null)}>Not now</button>
+            {#if forkError}<p class="error">{forkError}</p>{/if}
+        </div>
     {/if}
 
     <button class="quiet" onclick={openAnother}>Open another diary folder…</button>

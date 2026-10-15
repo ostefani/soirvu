@@ -139,6 +139,18 @@ export function vaultRelocate(vaultId) {
     return invoke("vault_relocate", { vaultId });
 }
 
+/**
+ * Gives a pending imported copy its own identity (Phase 6):
+ * opens it with the passphrase, forks it in the core and
+ * registers it next to the original.
+ * @param {string} passphrase
+ * @returns {Promise<{vault_id: string, recovery_key: string}>}
+ *   The new recovery key is shown once.
+ */
+export function vaultForkImport(passphrase) {
+    return invoke('vault_fork_import', { passphrase });
+}
+
 // ---------------------------------------------------------------------------
 // Entries, search, tags (all reject with "locked" unless Unlocked)
 
