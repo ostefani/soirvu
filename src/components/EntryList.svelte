@@ -316,4 +316,53 @@
         flex-wrap: wrap;
         font-size: 0.9em;
     }
+    button.chip {
+        padding: 0.15em 0.7em;
+        font-size: 0.85em;
+        border-radius: 999px;
+    }
+
+    .entries,
+    .results {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+
+    button.entry-row,
+    button.result {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.1rem;
+        text-align: left;
+        width: 100%;
+    }
+
+    .entry-date {
+        font-size: 0.8em;
+        opacity: 0.65;
+    }
+
+    .entry-title {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+    }
+
+    .result-head {
+        font-weight: 600;
+        font-size: 0.9em;
+    }
+
+    .snippet {
+        font-size: 0.9em;
+        opacity: 0.85;
+    }
+
+    .snippet mark {
+        background: #ffe58a;
+        color: inherit;
+    }
 </style>
