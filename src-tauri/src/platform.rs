@@ -47,6 +47,40 @@ pub fn harden_process() {
     }
 }
 
+/// The clipboard's change counter (§9): it rises on every copy
+/// made by any app, so it identifies "the current clipboard"
+/// without ever reading its content. None where unsupported.
+pub fn clipboard_change_count() -> Option<i64> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSPasteboard;
+        let board = NSPasteboard::generalPasteboard();
+        Some(board.changeCount() as i64)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+/// Clears the clipboard, but only if it still holds exactly the
+/// copy counted earlier — the user may have copied something
+/// else in the meantime, and that is never ours to erase.
+pub fn clipboard_clear_if_unchanged(count: i64) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSPasteboard;
+        let board = NSPasteboard::generalPasteboard();
+        if board.changeCount() as i64 == count {
+            board.clearContents();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = count;
+    }
+}
+
 /// The §3 filesystem warning for a vault location: WAL files
 /// and sync clients do not mix, and SQLite over a network share
 /// is unreliable. Warn, never block. Returns "cloud_sync" or

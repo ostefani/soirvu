@@ -41,6 +41,12 @@
                 await refresh();
             }
         });
+        // §9 clipboard clearing: report copies; Rust checks the
+        // setting and clears after 30 s if the clipboard is
+        // untouched since. The content is never read.
+        document.addEventListener("copy", () => {
+            api.clipboardNoteCopy().catch(() => {});
+        });
         // Manual lock (§9): Cmd/Ctrl+Shift+L from anywhere in
         // the diary. The shell lives for the app's lifetime and
         // the document reloads on lock, so no cleanup is needed.

@@ -10,6 +10,7 @@
     let settings = $state(null);
     let timeoutMin = $state(5);
     let stripExif = $state(true);
+    let clipboardClear = $state(false);
     let error = $state("");
     let note = $state("");
 
@@ -18,6 +19,7 @@
             settings = await api.settingsGet();
             timeoutMin = Math.max(1, Math.round(settings.lock_timeout_secs / 60));
             stripExif = settings.strip_exif;
+            clipboardClear = settings.clipboard_clear;
         } catch (e) {
             error = `Something went wrong (${e}).`;
         }
@@ -41,6 +43,18 @@
         note = "";
         try {
             await api.settingsSet({ ...settings, strip_exif: stripExif });
+            settings = await api.settingsGet();
+            note = "Saved.";
+        } catch (e) {
+            error = `Something went wrong (${e}).`;
+        }
+    }
+
+    async function saveClipboard() {
+        error = "";
+        note = "";
+        try {
+            await api.settingsSet({ ...settings, clipboard_clear: clipboardClear });
             settings = await api.settingsGet();
             note = "Saved.";
         } catch (e) {
@@ -83,6 +97,11 @@
         <label>
             Strip location metadata (EXIF) from photos on import
             <input type="checkbox" bind:checked={stripExif} onchange={saveStrip} />
+        </label>
+
+        <label>
+            Clear the clipboard 30 seconds after copying from the diary
+            <input type="checkbox" bind:checked={clipboardClear} onchange={saveClipboard} />
         </label>
 
         <p>

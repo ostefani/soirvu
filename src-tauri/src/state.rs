@@ -62,6 +62,10 @@ impl Default for Caps {
 pub struct Settings {
     pub lock_timeout_secs: u64,
     pub strip_exif: bool,
+    /// §9: clear the clipboard 30 s after a copy from the diary
+    /// (only if nothing else has been copied since).
+    #[serde(default)]
+    pub clipboard_clear: bool,
     pub caps: Caps,
     /// Display name of the backup folder (never a path — paths
     /// stay in Rust). Derived from AppConfig::backup_dir whenever
@@ -73,7 +77,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { lock_timeout_secs: 300, strip_exif: true, caps: Caps::default(), backup_location: None }
+        Settings { lock_timeout_secs: 300, strip_exif: true, clipboard_clear: false, caps: Caps::default(), backup_location: None }
     }
 }
 
@@ -183,6 +187,11 @@ impl AppState {
             .as_deref()
             .map(folder_display_name);
         settings
+    }
+
+    /// Whether the clipboard should be cleared after a copy (§9).
+    pub fn clipboard_clear(&self) -> bool {
+        self.inner.lock().unwrap().config.settings.clipboard_clear
     }
 
     pub fn set_settings(&self, settings: Settings) -> AppResult<()> {

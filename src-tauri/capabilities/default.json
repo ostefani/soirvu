@@ -23,6 +23,7 @@
         "allow-tag-rename",
         "allow-tag-merge",
         "allow-open-link",
+    "allow-clipboard-note-copy",
         "allow-settings-get",
         "allow-settings-set",
         "allow-settings-pick-backup-dir",

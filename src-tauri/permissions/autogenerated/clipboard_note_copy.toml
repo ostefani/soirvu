@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clipboard-note-copy"
+description = "Enables the clipboard_note_copy command without any pre-configured scope."
+commands.allow = ["clipboard_note_copy"]
+
+[[permission]]
+identifier = "deny-clipboard-note-copy"
+description = "Denies the clipboard_note_copy command without any pre-configured scope."
+commands.deny = ["clipboard_note_copy"]

@@ -153,6 +153,7 @@ pub fn run() {
             commands::entries::tag_rename,
             commands::entries::tag_merge,
             commands::misc::open_link,
+            commands::misc::clipboard_note_copy,
             commands::misc::settings_get,
             commands::misc::settings_set,
             commands::misc::settings_pick_backup_dir,

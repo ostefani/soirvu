@@ -24,6 +24,11 @@
         }
     },
     "bundle": {
+        "macOS": {
+            "signingIdentity": "-",
+            "hardenedRuntime": true,
+            "entitlements": "Entitlements.plist"
+        },
         "active": true,
         "targets": "all",
         "category": "Productivity",

@@ -19,6 +19,7 @@ fn main() {
         "tag_rename",
         "tag_merge",
         "open_link",
+        "clipboard_note_copy",
         "settings_get",
         "settings_set",
         "settings_pick_backup_dir",

@@ -72,3 +72,23 @@ pub fn settings_clear_backup_dir(
     ipc(state.set_backup_dir(None))?;
     Ok(state.settings())
 }
+
+
+/// §9 (optional, off by default): the UI reports every copy made
+/// in the diary; 30 s later the clipboard is cleared, but only
+/// if nothing else has been copied since. The clipboard's
+/// content is never read — only its change counter.
+#[tauri::command]
+pub fn clipboard_note_copy(state: State<'_, AppState>) -> Result<(), String> {
+    if !state.clipboard_clear() {
+        return Ok(());
+    }
+    let Some(count) = platform::clipboard_change_count() else {
+        return Ok(());
+    };
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        platform::clipboard_clear_if_unchanged(count);
+    });
+    Ok(())
+}

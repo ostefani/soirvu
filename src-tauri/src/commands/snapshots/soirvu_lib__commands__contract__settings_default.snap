@@ -5,6 +5,7 @@ expression: json
 {
   "lock_timeout_secs": 300,
   "strip_exif": true,
+  "clipboard_clear": false,
   "caps": {
     "image_mb": 25,
     "pdf_mb": 100,

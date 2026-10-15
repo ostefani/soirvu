@@ -317,6 +317,15 @@ export function attachmentImport(entryId) {
 }
 
 /**
+ * Reports a copy made in the diary (§9 clipboard clearing).
+ * Rust checks the setting and schedules the clear.
+ * @returns {Promise<void>}
+ */
+export function clipboardNoteCopy() {
+    return invoke('clipboard_note_copy', {});
+}
+
+/**
  * Opens the attachment in the OS default app. Rust writes a
  * decrypted copy into the app-managed opened folder (wiped when
  * the diary locks) and hands it to the OS; no path crosses IPC.

@@ -1,0 +1,60 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Core and CLI tests
+        run: cargo test -p soirvu-core -p soirvu-cli
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install exactly as the lockfile says, no scripts
+        run: npm ci --ignore-scripts
+      - name: Audit the frontend dependencies
+        run: npm audit --audit-level=high
+      - name: The {@html} rule
+        run: npm run check
+      - name: Build
+        run: npm run build
+      - name: No external hostnames in the bundle (§9)
+        run: sh scripts/check-bundle-hosts.sh dist
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Licenses, advisories, bans, sources
+        uses: EmbarkStudios/cargo-deny-action@v2
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+
+  macos-release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install exactly as the lockfile says, no scripts
+        run: npm ci --ignore-scripts
+      - name: Build the app (ad-hoc signed, hardened runtime)
+        run: npm run tauri build
+      - name: Verify the signature (§9)
+        run: sh scripts/verify-release.sh src-tauri/target/release/bundle/macos/Soirvu.app
+      - name: Plaintext-leak test (§10)
+        run: sh scripts/leak-test.sh
