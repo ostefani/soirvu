@@ -4,5 +4,6 @@ expression: json
 ---
 {
   "vault_id": "0123456789abcdef0123456789abcdef",
-  "name": "test_diar"
+  "name": "test_diar",
+  "warning": null
 }

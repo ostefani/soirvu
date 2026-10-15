@@ -57,6 +57,11 @@ pub fn run() {
                         commands::emit_status(&handle, &state);
                         let _ = handle.emit("vault-locked", "idle");
                     }
+                    // §3: a volume that disappears mid-session
+                    // locks the vault and drops its keys.
+                    if state.lock_if_current_missing() {
+                        commands::emit_status(&handle, &state);
+                    }
                 }
             });
             Ok(())
@@ -80,6 +85,8 @@ pub fn run() {
             commands::misc::open_link,
             commands::misc::settings_get,
             commands::misc::settings_set,
+            commands::misc::settings_pick_backup_dir,
+            commands::misc::settings_clear_backup_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Soirvu");

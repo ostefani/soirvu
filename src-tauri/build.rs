@@ -21,6 +21,8 @@ fn main() {
         "open_link",
         "settings_get",
         "settings_set",
+        "settings_pick_backup_dir",
+        "settings_clear_backup_dir"
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("failed to run tauri-build");

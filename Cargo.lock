@@ -3366,6 +3366,7 @@ name = "soirvu"
 version = "0.1.0"
 dependencies = [
  "insta",
+ "libc",
  "serde",
  "serde_json",
  "soirvu-core",

@@ -4,5 +4,6 @@ expression: json
 ---
 {
   "vault_id": null,
-  "name": "new_diary"
+  "name": "new_diary",
+  "warning": null
 }

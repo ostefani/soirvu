@@ -4,10 +4,18 @@
     // once and confirm it is saved before entering the diary.
     import * as api from "../api.js";
 
-    let { onDone } = $props();
+    let { onDone, onCancel = null } = $props();
 
     let step = $state(1); // 1 folder, 2 passphrase, 3 recovery key
     let folderName = $state("");
+    let warning = $state("");
+
+    const FS_WARNINGS = {
+        cloud_sync:
+            "This folder is in a cloud-synced location. Sync clients and the diary's database files do not mix — a synced copy can be taken mid-write and sync conflicts can corrupt the vault. You can continue, but a local folder is safer.",
+        network_fs:
+            "This folder is on a network share. The diary's database (SQLite) is unreliable over network filesystems. You can continue, but a local folder is safer.",
+    };
     let passphrase = $state("");
     let confirm = $state("");
     let recoveryKey = $state("");
@@ -28,6 +36,7 @@
         const picked = await api.vaultPickFolder("create");
         if (picked) {
             folderName = picked.name;
+            warning = picked.warning ? FS_WARNINGS[picked.warning] || "" : "";
             step = 2;
         }
     }
@@ -65,6 +74,7 @@
         <button onclick={pick}>Choose an empty folder…</button>
     {:else if step === 2}
         <p>Diary folder: <strong>{folderName}</strong></p>
+        {#if warning}<p class="note">{warning}</p>{/if}
         <label>
             Passphrase
             <input type="password" bind:value={passphrase} autocomplete="new-password" />
@@ -86,6 +96,10 @@
             I have saved the recovery key
         </label>
         <button onclick={() => onDone()} disabled={!saved}>Open my diary</button>
+    {/if}
+
+    {#if onCancel && step < 3}
+        <button class="quiet" onclick={() => onCancel()}>Back</button>
     {/if}
 
     {#if error}<p class="error">{error}</p>{/if}

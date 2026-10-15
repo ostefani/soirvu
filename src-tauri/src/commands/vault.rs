@@ -23,6 +23,10 @@ pub struct Picked {
     /// Null for mode "create": the id exists only after vault_create.
     pub vault_id: Option<String>,
     pub name: String,
+    /// The §3 filesystem warning for this folder, when the
+    /// location looks unsuitable for SQLite ("cloud_sync" |
+    /// "network_fs"). A warning only — never a refusal.
+    pub warning: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -32,7 +36,7 @@ pub struct Created {
     pub recovery_key: String,
 }
 
-async fn pick_folder(app: &AppHandle) -> Option<PathBuf> {
+pub(crate) async fn pick_folder(app: &AppHandle) -> Option<PathBuf> {
     let (tx, rx) = oneshot::channel();
     app.dialog().file().pick_folder(move |result| {
         let _ = tx.send(result);
@@ -95,20 +99,24 @@ pub async fn vault_pick_folder(
                 }
             }
             let name = folder_name(&path);
+            let warning = crate::platform::fs_warning(&path).map(str::to_string);
             state
                 .register(vault_id.clone(), name.clone(), path)
                 .map_err(|e| e.to_ipc())?;
             Ok(Some(Picked {
                 vault_id: Some(vault_id),
                 name,
+                warning,
             }))
         }
         "create" => {
             let name = folder_name(&path);
+            let warning = crate::platform::fs_warning(&path).map(str::to_string);
             state.set_pending_create(path);
             Ok(Some(Picked {
                 vault_id: None,
                 name,
+                warning,
             }))
         }
         _ => Err("invalid_input".into()),

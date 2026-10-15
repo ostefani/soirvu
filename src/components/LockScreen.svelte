@@ -5,7 +5,7 @@
     // codes — never from Rust error prose.
     import * as api from "../api.js";
 
-    let { vaults, onUnlocked, onVaultsChanged } = $props();
+    let { vaults, onUnlocked, onVaultsChanged, onCreate } = $props();
 
     let selectedId = $state(null);
     let kind = $state("passphrase");
@@ -13,6 +13,14 @@
     let error = $state("");
     let busy = $state(false);
     let forgetArmed = $state(null);
+    let note = $state("");
+
+    const FS_WARNINGS = {
+        cloud_sync:
+            "That folder is in a cloud-synced location. Sync clients and the diary's database files do not mix — the vault is registered, but keeping it there risks corruption.",
+        network_fs:
+            "That folder is on a network share. The diary's database is unreliable over network filesystems — the vault is registered, but keeping it there is risky.",
+    };
 
     const selected = $derived(
         vaults.find((v) => v.id === (selectedId ?? vaults[0]?.id)) ?? null,
@@ -66,10 +74,12 @@
 
     async function openAnother() {
         error = "";
+        note = "";
         try {
             const picked = await api.vaultPickFolder("open");
             if (picked) {
                 selectedId = picked.vault_id;
+                if (picked.warning) note = FS_WARNINGS[picked.warning] || "";
                 onVaultsChanged();
             }
         } catch (e) {
@@ -90,10 +100,14 @@
                     onclick={() => (selectedId = vault.id)}
                 >
                     {vault.name}
-                    {#if vault.state === "missing"}<span class="missing"> — folder not found</span>{/if}
+                    {#if vault.state === "not_found"}<span class="missing"> — folder not found</span>{/if}
+                    {#if vault.state === "volume_missing"}<span class="missing"> — volume not mounted</span>{/if}
                 </button>
-                {#if vault.state === "missing"}
+                {#if vault.state === "not_found"}
                     <button onclick={() => relocate(vault)}>Locate…</button>
+                {/if}
+                {#if vault.state === "volume_missing"}
+                    <button onclick={() => onVaultsChanged()}>Retry</button>
                 {/if}
                 {#if forgetArmed === vault.id}
                     <button onclick={() => forget(vault)}>Really forget?</button>
@@ -104,7 +118,7 @@
         {/each}
     </div>
 
-    {#if selected && selected.state !== "missing"}
+    {#if selected && selected.state === "available"}
         <div class="kind-toggle">
             <button class:active={kind === "passphrase"} onclick={() => (kind = "passphrase")}>
                 Passphrase
@@ -123,7 +137,9 @@
     {/if}
 
     <button class="quiet" onclick={openAnother}>Open another diary folder…</button>
+    <button class="quiet" onclick={() => onCreate()}>Create a new diary…</button>
 
+    {#if note}<p class="note">{note}</p>{/if}
     {#if error}<p class="error">{error}</p>{/if}
 </div>
 

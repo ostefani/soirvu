@@ -47,3 +47,28 @@ pub fn settings_get(state: State<'_, AppState>) -> Settings {
 pub fn settings_set(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     ipc(state.set_settings(settings))
 }
+
+/// Picks the backup folder with the native dialog and stores
+/// the PATH in Rust (app.json). The UI gets back the updated
+/// settings, whose backup_location is a display name only —
+/// the one settings value that cannot travel through
+/// settings_set, because paths never cross the IPC boundary.
+#[tauri::command]
+pub async fn settings_pick_backup_dir(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<Settings>, String> {
+    let Some(path) = crate::commands::vault::pick_folder(&app).await else {
+        return Ok(None);
+    };
+    ipc(state.set_backup_dir(Some(path)))?;
+    Ok(Some(state.settings()))
+}
+
+#[tauri::command]
+pub fn settings_clear_backup_dir(
+    state: State<'_, AppState>,
+) -> Result<Settings, String> {
+    ipc(state.set_backup_dir(None))?;
+    Ok(state.settings())
+}

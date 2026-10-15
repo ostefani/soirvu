@@ -10,12 +10,15 @@
     import LockScreen from "./components/LockScreen.svelte";
     import EntryList from "./components/EntryList.svelte";
     import EntryEditor from "./components/EntryEditor.svelte";
+    import Settings from "./components/Settings.svelte";
 
     let screen = $state("boot"); // boot | welcome | create | locked | diary
     let vaults = $state([]);
     let currentVault = $state(null);
     let selectedId = $state(null);
     let listEl = $state(null);
+    let showSettings = $state(false);
+    let welcomeNote = $state("");
 
     async function refresh() {
         vaults = await api.vaultList();
@@ -41,9 +44,20 @@
         await refresh();
     });
 
+    const FS_WARNINGS = {
+        cloud_sync:
+            "That folder is in a cloud-synced location. Sync clients and the diary's database files do not mix — the vault is registered, but keeping it there risks corruption.",
+        network_fs:
+            "That folder is on a network share. The diary's database is unreliable over network filesystems — the vault is registered, but keeping it there is risky.",
+    };
+
     async function openExisting() {
+        welcomeNote = "";
         const picked = await api.vaultPickFolder("open");
-        if (picked) await refresh();
+        if (picked) {
+            if (picked.warning) welcomeNote = FS_WARNINGS[picked.warning] || "";
+            await refresh();
+        }
     }
 
     async function lock() {
@@ -61,23 +75,29 @@
         <p>An encrypted diary. It lives in a folder you choose; nothing leaves your machine.</p>
         <button onclick={() => (screen = "create")}>Create a new diary</button>
         <button class="quiet" onclick={openExisting}>Open an existing diary folder…</button>
+        {#if welcomeNote}<p class="note">{welcomeNote}</p>{/if}
     </div>
 {:else if screen === "create"}
-    <Onboarding onDone={refresh} />
+    <Onboarding onDone={refresh} onCancel={vaults.length > 0 ? refresh : undefined} />
 {:else if screen === "locked"}
-    <LockScreen {vaults} onUnlocked={refresh} onVaultsChanged={refresh} />
+    <LockScreen {vaults} onUnlocked={refresh} onVaultsChanged={refresh} onCreate={() => (screen = "create")} />
 {:else if screen === "diary"}
     <div class="diary">
         <header class="diary-head">
             <span class="vault-label">{currentVault?.name}</span>
-            <button class="quiet" onclick={lock}>Lock</button>
+            <span>
+                <button class="quiet" onclick={() => (showSettings = true)}>Settings</button>
+                <button class="quiet" onclick={lock}>Lock</button>
+            </span>
         </header>
         <div class="diary-body">
             <aside>
                 <EntryList bind:this={listEl} selectedId={selectedId} onSelect={(id) => (selectedId = id)} />
             </aside>
             <main>
-                {#if selectedId}
+                {#if showSettings}
+                    <Settings onBack={() => (showSettings = false)} />
+                {:else if selectedId}
                     {#key selectedId}
                         <EntryEditor
                             entryId={selectedId}

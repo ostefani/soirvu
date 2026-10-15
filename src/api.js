@@ -11,13 +11,15 @@ import { listen } from "@tauri-apps/api/event";
  * @typedef {object} VaultInfo
  * @property {string} id
  * @property {string} name
- * @property {"available" | "missing" | "unlocked"} state
+ * @property {"available" | "volume_missing" | "not_found" | "unlocked"} state
  */
 
 /**
  * @typedef {object} Picked
  * @property {string | null} vault_id Set for mode "open"; null for "create".
  * @property {string} name
+ * @property {string | null} warning "cloud_sync" | "network_fs" when the
+ *   folder looks unsuitable for SQLite (§3). A warning, never a refusal.
  */
 
 /**
@@ -67,6 +69,9 @@ import { listen } from "@tauri-apps/api/event";
  * @property {number} lock_timeout_secs
  * @property {boolean} strip_exif
  * @property {{ image_mb: number, pdf_mb: number, audio_mb: number, video_mb: number }} caps
+ * @property {string | null} backup_location Display name of the backup
+ *   folder (never a path). Read-only here: it changes only through
+ *   settingsPickBackupDir / settingsClearBackupDir.
  */
 
 // ---------------------------------------------------------------------------
@@ -219,6 +224,21 @@ export function settingsGet() {
 /** @param {Settings} settings */
 export function settingsSet(settings) {
     return invoke("settings_set", { settings });
+}
+
+/**
+ * Opens the native folder picker for the backup location; the
+ * path stays in Rust. Resolves to the updated Settings, or null
+ * when the user cancels the picker.
+ * @returns {Promise<Settings | null>}
+ */
+export function settingsPickBackupDir() {
+    return invoke("settings_pick_backup_dir");
+}
+
+/** @returns {Promise<Settings>} */
+export function settingsClearBackupDir() {
+    return invoke("settings_clear_backup_dir");
 }
 
 /**

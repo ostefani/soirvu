@@ -160,6 +160,7 @@ fn picked_and_created() {
         &Picked {
             vault_id: Some("0123456789abcdef0123456789abcdef".into()),
             name: "test_diar".into(),
+            warning: None,
         },
     );
     snap(
@@ -167,6 +168,7 @@ fn picked_and_created() {
         &Picked {
             vault_id: None,
             name: "new_diary".into(),
+            warning: None,
         },
     );
     snap(

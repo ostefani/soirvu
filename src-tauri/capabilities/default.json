@@ -24,6 +24,8 @@
         "allow-tag-merge",
         "allow-open-link",
         "allow-settings-get",
-        "allow-settings-set"
+        "allow-settings-set",
+        "allow-settings-pick-backup-dir",
+        "allow-settings-clear-backup-dir"
     ]
 }

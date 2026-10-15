@@ -63,11 +63,17 @@ pub struct Settings {
     pub lock_timeout_secs: u64,
     pub strip_exif: bool,
     pub caps: Caps,
+    /// Display name of the backup folder (never a path — paths
+    /// stay in Rust). Derived from AppConfig::backup_dir whenever
+    /// settings are read; the value sent back by settings_set is
+    /// ignored. Null until a folder is picked.
+    #[serde(default)]
+    pub backup_location: Option<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { lock_timeout_secs: 300, strip_exif: true, caps: Caps::default() }
+        Settings { lock_timeout_secs: 300, strip_exif: true, caps: Caps::default(), backup_location: None }
     }
 }
 
@@ -77,6 +83,11 @@ pub struct AppConfig {
     pub last_opened: Option<String>,
     #[serde(default)]
     pub settings: Settings,
+    /// The backup folder the user chose (Phase 3 setting; the
+    /// scheduled backups that use it arrive in Phase 6). A path,
+    /// so it lives here and never crosses the IPC boundary.
+    #[serde(default)]
+    pub backup_dir: Option<PathBuf>,
 }
 
 /// What the UI is allowed to know about a vault: an id, a name, and
@@ -85,7 +96,7 @@ pub struct AppConfig {
 pub struct VaultInfo {
     pub id: String,
     pub name: String,
-    /// "available" | "missing" | "unlocked"
+    /// "available" | "volume_missing" | "not_found" | "unlocked"
     pub state: String,
 }
 
@@ -147,12 +158,29 @@ impl AppState {
     }
 
     pub fn settings(&self) -> Settings {
-        self.inner.lock().unwrap().config.settings.clone()
+        let inner = self.inner.lock().unwrap();
+        let mut settings = inner.config.settings.clone();
+        settings.backup_location = inner
+            .config
+            .backup_dir
+            .as_deref()
+            .map(folder_display_name);
+        settings
     }
 
     pub fn set_settings(&self, settings: Settings) -> AppResult<()> {
         let mut inner = self.inner.lock().unwrap();
+        // backup_location in the DTO is read-only (see Settings):
+        // the stored path never comes from the webview.
         inner.config.settings = settings;
+        self.save_config(&inner)
+    }
+
+    /// Stores (or clears) the backup folder chosen through the
+    /// native picker. Only Rust ever sees the path.
+    pub fn set_backup_dir(&self, dir: Option<PathBuf>) -> AppResult<()> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.config.backup_dir = dir;
         self.save_config(&inner)
     }
 
@@ -170,10 +198,8 @@ impl AppState {
                     && inner.status == Status::Unlocked
                 {
                     "unlocked".into()
-                } else if v.path.join("vault.header.json").exists() {
-                    "available".into()
                 } else {
-                    "missing".into()
+                    availability_of(&v.path).into()
                 },
             })
             .collect()
@@ -323,10 +349,42 @@ impl AppState {
 
     /// THE guard (§6.2). Every vault-touching command runs its work
     /// through here: not Unlocked → the `locked` error code.
+    /// Locks the vault if its folder has gone (volume ejected
+    /// mid-session, §3): keys are dropped now, not at the next
+    /// I/O error. Returns true when it locked. The watcher calls
+    /// this every few seconds; with_vault checks too.
+    pub fn lock_if_current_missing(&self) -> bool {
+        let gone = {
+            let inner = self.inner.lock().unwrap();
+            if inner.status != Status::Unlocked {
+                return false;
+            }
+            match &inner.current {
+                Some(id) => inner
+                    .config
+                    .vaults
+                    .iter()
+                    .find(|v| &v.id == id)
+                    .map(|v| availability_of(&v.path) != "available")
+                    .unwrap_or(false),
+                None => false,
+            }
+        };
+        if gone {
+            self.lock();
+        }
+        gone
+    }
+
     pub fn with_vault<T>(
         &self,
         work: impl FnOnce(&mut Vault) -> AppResult<T>,
     ) -> AppResult<T> {
+        // A vanished volume (§3) locks the vault before any work
+        // touches the dead database handle.
+        if self.lock_if_current_missing() {
+            return Err(AppError::Code("vault_unavailable".into()));
+        }
         let mut inner = self.inner.lock().unwrap();
         if inner.status != Status::Unlocked {
             return Err(AppError::Code("locked".into()));
@@ -335,6 +393,38 @@ impl AppState {
         let vault = inner.vault.as_mut().expect("Unlocked implies a vault");
         work(vault)
     }
+}
+
+/// Where a known vault actually stands (§3, §6.1): the header
+/// file is there ("available"), the folder is gone from a volume
+/// that is itself gone ("volume_missing" — the mountpoint under
+/// /Volumes is missing), or the volume is there but the folder
+/// is not ("not_found": moved, renamed, deleted).
+pub fn availability_of(path: &std::path::Path) -> &'static str {
+    if path.join("vault.header.json").exists() {
+        return "available";
+    }
+    let mut cur = path;
+    loop {
+        if cur.exists() {
+            return "not_found";
+        }
+        match cur.parent() {
+            Some(parent) => {
+                if parent == std::path::Path::new("/Volumes") {
+                    return "volume_missing";
+                }
+                cur = parent;
+            }
+            None => return "not_found",
+        }
+    }
+}
+
+fn folder_display_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Folder".into())
 }
 
 #[cfg(test)]
@@ -408,5 +498,47 @@ mod tests {
         assert_eq!(list[0].state, "available");
         reloaded.forget(&id).unwrap();
         assert!(reloaded.vault_list().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod availability_tests {
+    use super::availability_of;
+    use std::io::Write;
+
+    #[test]
+    fn present_header_is_available() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().join("MyVault");
+        std::fs::create_dir(&vault).unwrap();
+        std::fs::File::create(vault.join("vault.header.json"))
+            .unwrap()
+            .write_all(b"{}")
+            .unwrap();
+        assert_eq!(availability_of(&vault), "available");
+    }
+
+    #[test]
+    fn deleted_folder_on_a_live_volume_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().join("Moved");
+        // The parent (the tempdir, our "volume") exists; the
+        // vault folder does not.
+        assert_eq!(availability_of(&vault), "not_found");
+    }
+
+    #[test]
+    fn folder_without_header_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().join("NotAVault");
+        std::fs::create_dir(&vault).unwrap();
+        assert_eq!(availability_of(&vault), "not_found");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn missing_volume_is_volume_missing() {
+        let vault = std::path::Path::new("/Volumes/soirvu-no-such-volume-9f3/Diary");
+        assert_eq!(availability_of(vault), "volume_missing");
     }
 }
