@@ -169,6 +169,7 @@ pub fn run() {
             commands::entries::tag_list,
             commands::entries::tag_rename,
             commands::entries::tag_merge,
+            commands::entries::tag_delete,
             commands::misc::open_link,
             commands::misc::clipboard_note_copy,
             commands::misc::backup_now,

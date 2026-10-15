@@ -24,6 +24,7 @@ fn main() {
         "tag_list",
         "tag_rename",
         "tag_merge",
+        "tag_delete",
         "open_link",
         "clipboard_note_copy",
         "backup_now",

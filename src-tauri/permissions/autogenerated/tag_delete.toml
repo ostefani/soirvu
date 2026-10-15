@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tag-delete"
+description = "Enables the tag_delete command without any pre-configured scope."
+commands.allow = ["tag_delete"]
+
+[[permission]]
+identifier = "deny-tag-delete"
+description = "Denies the tag_delete command without any pre-configured scope."
+commands.deny = ["tag_delete"]

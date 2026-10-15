@@ -28,6 +28,7 @@
         "allow-tag-list",
         "allow-tag-rename",
         "allow-tag-merge",
+    "allow-tag-delete",
         "allow-open-link",
     "allow-clipboard-note-copy",
     "allow-backup-now",

@@ -557,6 +557,26 @@ impl Vault {
         tx.commit()?;
         Ok(rids.len())
     }
+
+    /// Removes the tag `name` from every live entry that has it
+    /// and deletes the tag, returning how many entries that was.
+    /// The tag must be in use (`TagNotFound` otherwise, the same
+    /// rule as rename and merge). Affected entries get a new
+    /// revision, like a rename or a merge; tombstones keep
+    /// nothing of the tag — their links go with its row.
+    pub fn delete_tag(&mut self, name: &str) -> Result<usize> {
+        let (_, key) = normalize_tag(name)?;
+        let device = self.device_id.clone();
+
+        let tx = self.db.conn_mut().transaction()?;
+        let source = find_used_tag(&tx, &key)?.ok_or(Error::TagNotFound)?;
+        let rids = live_entries_with_tag(&tx, source.id)?;
+        tx.execute("DELETE FROM entry_tag WHERE tag_id = ?1", [source.id])?;
+        tx.execute("DELETE FROM tag WHERE id = ?1", [source.id])?;
+        bump_entries(&tx, &rids, &device)?;
+        tx.commit()?;
+        Ok(rids.len())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2004,5 +2024,36 @@ mod tests {
         assert_eq!(reopened.get_entry(&a.id).unwrap(), a_now);
         assert_eq!(reopened.get_entry(&b.id).unwrap(), b_now);
         assert_eq!(reopened.list_tags().unwrap(), [tc("A2", 1), tc("c1", 1)]);
+    }
+
+    #[test]
+    fn delete_tag_removes_it_from_live_entries_only() {
+        let (_tmp, mut vault) = new_vault();
+        let a = vault
+            .create_entry(&tagged(draft("2026-10-15", "a", "x"), &["work", "keep"]))
+            .unwrap();
+        let b = vault
+            .create_entry(&tagged(draft("2026-10-14", "b", "x"), &["work"]))
+            .unwrap();
+        let gone = vault
+            .create_entry(&tagged(draft("2026-10-13", "gone", "x"), &["work"]))
+            .unwrap();
+        vault.delete_entry(&gone.id).unwrap();
+
+        let before = vault.get_entry(&a.id).unwrap();
+        let removed = vault.delete_tag("work").unwrap();
+        assert_eq!(removed, 2); // the tombstone does not count
+
+        let a_after = vault.get_entry(&a.id).unwrap();
+        assert_eq!(a_after.tags, vec!["keep".to_string()]);
+        assert!(a_after.rev > before.rev); // a real change bumps the revision
+        assert_eq!(vault.get_entry(&b.id).unwrap().tags, Vec::<String>::new());
+        // The tag is gone from the list, and deleting it again fails.
+        let counts = vault.list_tags().unwrap();
+        assert!(counts.iter().all(|t| t.name != "work"));
+        assert!(matches!(
+            vault.delete_tag("work"),
+            Err(Error::TagNotFound)
+        ));
     }
 }

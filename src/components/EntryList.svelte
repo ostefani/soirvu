@@ -49,7 +49,7 @@
     }
 
     async function loadTags() {
-        tags = (await api.tagList()).map((t) => t.name);
+        tags = await api.tagList();
     }
 
     export async function refresh() {
@@ -129,6 +129,26 @@
         query = "";
         load(true);
     }
+
+    // The section folds away for people who do not use tags.
+    // The × on a tag (shown on hover) removes it from every
+    // entry at once; removing a tag from one entry is done in
+    // that entry's own tag field. Two-step, like entry deletion.
+    let tagsOpen = $state(true);
+    let confirmRemove = $state(null); // tag name awaiting confirmation
+    let tagNote = $state("");
+
+    async function removeTag(name) {
+        try {
+            await api.tagDelete(name);
+            if (tagFilter === name) tagFilter = null;
+            confirmRemove = null;
+            tagNote = "";
+            await refresh();
+        } catch (e) {
+            tagNote = describeError(e);
+        }
+    }
 </script>
 
 <div class="entry-list">
@@ -152,12 +172,42 @@
     {/if}
 
     {#if tags.length}
-        <div class="tag-row">
-            {#each tags as name}
-                <button class="chip" class:active={tagFilter === name} onclick={() => pickTag(name)}>
-                    {name}
-                </button>
-            {/each}
+        <div class="tags-block">
+            <button class="quiet tags-toggle" onclick={() => (tagsOpen = !tagsOpen)}>
+                {tagsOpen ? "▾" : "▸"} Tags
+            </button>
+            {#if tagsOpen}
+                <div class="tag-flow">
+                    {#each tags as t (t.name)}
+                        <span class="tag-wrap">
+                            {#if confirmRemove === t.name}
+                                <span class="confirm-row">
+                                    <span>Remove “{t.name}” from all {t.entries} entries?</span>
+                                    <button class="quiet mini" onclick={() => removeTag(t.name)}>Remove</button>
+                                    <button class="quiet mini" onclick={() => (confirmRemove = null)}>Cancel</button>
+                                </span>
+                            {:else}
+                                <button
+                                    class="chip"
+                                    class:active={tagFilter === t.name}
+                                    onclick={() => pickTag(t.name)}
+                                >
+                                    {t.name}
+                                </button>
+                                <span class="tag-count">{t.entries}</span>
+                                <button
+                                    class="tag-x"
+                                    title="Remove this tag from all entries"
+                                    onclick={() => (confirmRemove = t.name)}
+                                >
+                                    ×
+                                </button>
+                            {/if}
+                        </span>
+                    {/each}
+                </div>
+                {#if tagNote}<p class="note">{tagNote}</p>{/if}
+            {/if}
         </div>
     {/if}
 
@@ -216,59 +266,54 @@
         min-width: 0;
     }
 
-    .tag-row {
+    .tags-toggle {
+        align-self: flex-start;
+        font-size: 0.9em;
+    }
+
+    .tag-flow {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.3rem;
+        gap: 0.35rem 0.6rem;
+        margin-top: 0.3rem;
     }
 
-    button.chip {
-        padding: 0.15em 0.7em;
-        font-size: 0.85em;
-        border-radius: 999px;
+    .tag-wrap {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.2rem;
     }
 
-    .entries,
-    .results {
-        display: flex;
-        flex-direction: column;
-        gap: 0.25rem;
-    }
-
-    button.entry-row,
-    button.result {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 0.1rem;
-        text-align: left;
-        width: 100%;
-    }
-
-    .entry-date {
+    .tag-count {
         font-size: 0.8em;
         opacity: 0.65;
     }
 
-    .entry-title {
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        max-width: 100%;
+    button.mini {
+        font-size: 0.8em;
+        padding: 0.1em 0.4em;
     }
 
-    .result-head {
-        font-weight: 600;
+    .tag-x {
+        opacity: 0;
+        border: none;
+        background: none;
+        padding: 0 0.25em;
+        font-size: 1em;
+        line-height: 1;
+        cursor: pointer;
+    }
+
+    .tag-wrap:hover .tag-x,
+    .tag-x:focus-visible {
+        opacity: 0.7;
+    }
+
+    .confirm-row {
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        flex-wrap: wrap;
         font-size: 0.9em;
-    }
-
-    .snippet {
-        font-size: 0.9em;
-        opacity: 0.85;
-    }
-
-    .snippet mark {
-        background: #ffe58a;
-        color: inherit;
     }
 </style>

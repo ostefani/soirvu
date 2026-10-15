@@ -286,3 +286,11 @@ pub fn tag_merge(state: State<'_, AppState>, from: String, into: String) -> Resu
         Ok(i64::try_from(count).unwrap_or(i64::MAX))
     }))
 }
+
+#[tauri::command]
+pub fn tag_delete(state: State<'_, AppState>, name: String) -> Result<i64, String> {
+    ipc(state.with_vault(|vault| {
+        let count = vault.delete_tag(&name)?;
+        Ok(i64::try_from(count).unwrap_or(i64::MAX))
+    }))
+}

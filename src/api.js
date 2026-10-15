@@ -291,6 +291,11 @@ export function tagRename(from, to) {
     return invoke("tag_rename", { from, to });
 }
 
+/** @returns {Promise<number>} Entries the tag was removed from. */
+export function tagDelete(name) {
+    return invoke("tag_delete", { name });
+}
+
 /** @returns {Promise<number>} */
 export function tagMerge(from, into) {
     return invoke("tag_merge", { from, into });
