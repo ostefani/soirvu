@@ -389,4 +389,44 @@
     .editor-mount :global(th p) {
         margin: 0;
     }
+    /* Syntax highlighting (Phase 7): the view paints these
+       spans inside code blocks; the text itself is untouched. */
+    .editor-mount :global(.tok-kw) {
+        color: #8250df;
+    }
+
+    .editor-mount :global(.tok-str) {
+        color: #0a7d33;
+    }
+
+    .editor-mount :global(.tok-com) {
+        color: #8a8a8a;
+        font-style: italic;
+    }
+
+    .editor-mount :global(.tok-num) {
+        color: #b25c09;
+    }
+
+    .editor-mount :global(.tok-fn) {
+        color: #396cd8;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        .editor-mount :global(.tok-kw) {
+            color: #c4a6f5;
+        }
+
+        .editor-mount :global(.tok-str) {
+            color: #7fd08c;
+        }
+
+        .editor-mount :global(.tok-num) {
+            color: #e8a35c;
+        }
+
+        .editor-mount :global(.tok-fn) {
+            color: #8db4f2;
+        }
+    }
 </style>

@@ -24,6 +24,7 @@ import { Fragment, Slice } from "prosemirror-model";
 import { NodeSelection, TextSelection } from "./state.js";
 import { deleteSelection as deleteSelectionCmd, insertTextIn } from "./commands.js";
 import { inlineSlice } from "./transform.js";
+import { tokenize } from "./highlight.js";
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -114,6 +115,40 @@ export class EditorView {
         }
     }
 
+    /** A code block's text, split into highlighted spans.
+     *  Every text node keeps its exact _pos, so position
+     *  mapping and text sync see the same characters as the
+     *  plain rendering — only the paint differs. */
+    renderCodeText(child, block, parentEl, pos) {
+        const spans = tokenize(child.text, block.attrs.params);
+        if (!spans) {
+            const domNode = document.createTextNode(child.text);
+            domNode._pos = pos;
+            parentEl.appendChild(domNode);
+            return;
+        }
+        let cursor = 0;
+        const emit = (text, offset, cls) => {
+            if (!text) return;
+            const domNode = document.createTextNode(text);
+            domNode._pos = pos + offset;
+            if (!cls) {
+                parentEl.appendChild(domNode);
+                return;
+            }
+            const span = document.createElement("span");
+            span.className = "tok-" + cls;
+            span.appendChild(domNode);
+            parentEl.appendChild(span);
+        };
+        for (const span of spans) {
+            emit(child.text.slice(cursor, span.start), cursor, null);
+            emit(child.text.slice(span.start, span.end), span.start, span.cls);
+            cursor = span.end;
+        }
+        emit(child.text.slice(cursor), cursor, null);
+    }
+
     renderNode(node, pos) {
         const spec = node.type.spec.toDOM(node);
         let contentEl = null;
@@ -153,7 +188,9 @@ export class EditorView {
     renderContent(node, parentEl, contentPos) {
         let pos = contentPos;
         node.content.forEach((child) => {
-            if (child.isText) {
+            if (child.isText && node.type.name === "code_block") {
+                this.renderCodeText(child, node, parentEl, pos);
+            } else if (child.isText) {
                 let domNode = document.createTextNode(child.text);
                 domNode._pos = pos;
                 let wrapped = domNode;
