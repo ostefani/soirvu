@@ -189,6 +189,7 @@ fn create_with(path: &Path, key: &Key, vault_id: &str, migrations: &[&str]) -> R
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    silence_sqlite_log();
     let mut conn = Connection::open_with_flags(path, flags)?;
     apply_key(&conn, key)?;
     configure(&conn)?;
@@ -203,6 +204,7 @@ fn create_with(path: &Path, key: &Key, vault_id: &str, migrations: &[&str]) -> R
 
 fn open_with(path: &Path, key: &Key, backup_dir: &Path, migrations: &[&str]) -> Result<Database> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    silence_sqlite_log();
     let mut conn = Connection::open_with_flags(path, flags)?;
     apply_key(&conn, key)?;
 
@@ -260,6 +262,35 @@ fn backup_before_migration(
     Ok(())
 }
 
+/// SQLite reports its diagnostics through sqlite3_log, which
+/// by default lands on stderr. §9: audit every such message and
+/// silence the channel. The messages contain no diary content,
+/// but silence is achievable, so the log callback installed
+/// here discards them all. (SQLCipher's own logger does not
+/// route through this callback — it is silenced separately, by
+/// PRAGMA cipher_log_level in configure.) Installed once,
+/// before the first connection does work.
+fn silence_sqlite_log() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        unsafe extern "C" fn discard(
+            _: *mut std::ffi::c_void,
+            _: std::ffi::c_int,
+            _: *const std::ffi::c_char,
+        ) {
+        }
+        rusqlite::ffi::sqlite3_config(
+            rusqlite::ffi::SQLITE_CONFIG_LOG,
+            discard
+                as unsafe extern "C" fn(
+                    *mut std::ffi::c_void,
+                    std::ffi::c_int,
+                    *const std::ffi::c_char,
+                ),
+        );
+    });
+}
+
 /// `PRAGMA key` must be the first statement on a connection.
 /// The `x'...'` form hands SQLCipher the raw 32-byte key, so it does not run its
 /// own (slower) password-to-key step; Argon2id already did the slow part.
@@ -276,7 +307,8 @@ fn configure(conn: &Connection) -> Result<()> {
          PRAGMA synchronous = FULL;
          PRAGMA foreign_keys = ON;
          PRAGMA temp_store = MEMORY;
-         PRAGMA cipher_memory_security = ON;",
+         PRAGMA cipher_memory_security = ON;
+         PRAGMA cipher_log_level = 'NONE';",
     )?;
     Ok(())
 }
