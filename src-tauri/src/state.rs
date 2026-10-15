@@ -137,7 +137,7 @@ impl AppState {
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default();
-        AppState {
+        let state = AppState {
             inner: Mutex::new(Inner {
                 status: Status::Unavailable,
                 vault: None,
@@ -151,7 +151,10 @@ impl AppState {
                 upload_seq: 0,
             }),
             config_file,
-        }
+        };
+        // Copies left by a crashed run must not outlive it.
+        state.clear_opened();
+        state
     }
 
     fn save_config(&self, inner: &Inner) -> AppResult<()> {
@@ -365,6 +368,22 @@ impl AppState {
             .ok_or_else(|| AppError::Code("invalid_input".into()))
     }
 
+    /// The folder decrypted attachment copies land in when the
+    /// user opens one (§6.4 rework): opened/<id>/<name> under the
+    /// app config folder. Managed by the app, never by the user;
+    /// wiped on lock and at startup, so plaintext copies exist
+    /// only while the diary is unlocked.
+    pub fn opened_dir(&self) -> PathBuf {
+        self.config_file
+            .parent()
+            .map(|p| p.join("opened"))
+            .unwrap_or_else(|| PathBuf::from("opened"))
+    }
+
+    pub fn clear_opened(&self) {
+        let _ = fs::remove_dir_all(self.opened_dir());
+    }
+
     pub fn drop_upload(&self, upload_id: &str) {
         self.inner.lock().unwrap().uploads.remove(upload_id);
     }
@@ -372,6 +391,7 @@ impl AppState {
     /// Unlocked ──► Locking ──► Locked (or Unavailable if the vault
     /// folder is gone). Zeroizes the keys via the core's lock().
     pub fn lock(&self) {
+        self.clear_opened();
         let mut inner = self.inner.lock().unwrap();
         inner.uploads.clear();
         if inner.vault.is_none() {

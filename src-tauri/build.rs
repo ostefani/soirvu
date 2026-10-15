@@ -29,7 +29,7 @@ fn main() {
         "attachment_abort",
         "attachment_info",
         "attachment_import",
-        "attachment_save_copy"
+        "attachment_open"
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("failed to run tauri-build");

@@ -317,12 +317,14 @@ export function attachmentImport(entryId) {
 }
 
 /**
- * Native save dialog, then the decrypted copy is written there.
+ * Opens the attachment in the OS default app. Rust writes a
+ * decrypted copy into the app-managed opened folder (wiped when
+ * the diary locks) and hands it to the OS; no path crosses IPC.
  * @param {string} id
- * @returns {Promise<boolean>} False when the user cancels.
+ * @returns {Promise<boolean>}
  */
-export function attachmentSaveCopy(id) {
-    return invoke("attachment_save_copy", { id });
+export function attachmentOpen(id) {
+    return invoke('attachment_open', { id });
 }
 
 /** @param {Settings} settings */

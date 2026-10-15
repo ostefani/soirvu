@@ -83,6 +83,13 @@
     // makes those runs no-ops, and onDestroy does the teardown.
     $effect(() => {
         if (!entry || !mountEl || editor) return;
+        mountEl.addEventListener('dblclick', (e) => {
+            const img = e.target.closest('img');
+            const src = img?.getAttribute('src') || '';
+            if (src.startsWith('soirvu-asset://localhost/')) {
+                api.attachmentOpen(src.slice('soirvu-asset://localhost/'.length)).catch(() => {});
+            }
+        });
         editor = createEditor(mountEl, {
             markdown: entry.body_md,
             onChange: () => markDirty(),
@@ -148,24 +155,15 @@
                 a.controls = true;
                 a.src = url;
                 el.appendChild(a);
-            } else if (info.mime === 'application/pdf') {
-                const f = document.createElement('iframe');
-                f.src = url;
-                f.title = info.name;
-                el.appendChild(f);
             } else {
                 const label = document.createElement('span');
                 label.textContent = `${info.name} · ${Math.max(1, Math.round(info.size / 1024))} KB`;
                 el.appendChild(label);
             }
-            const saveBtn = document.createElement('button');
-            saveBtn.type = 'button';
-            saveBtn.textContent = 'Save a copy…';
-            saveBtn.className = 'attachment-save';
-            saveBtn.addEventListener('click', () => {
-                api.attachmentSaveCopy(info.id).catch(() => {});
+            el.title = 'Double-click to open';
+            el.addEventListener('dblclick', () => {
+                api.attachmentOpen(info.id).catch(() => {});
             });
-            el.appendChild(saveBtn);
         } catch {
             el.textContent = 'Attachment unavailable.';
         }
@@ -357,11 +355,6 @@
     :global(.editor-mount div.attachment audio) {
         flex: 1;
         min-width: 12rem;
-    }
-    :global(.editor-mount div.attachment iframe) {
-        width: 100%;
-        height: 26rem;
-        border: 1px solid #ddd;
     }
     :global(.editor-mount img[data-blocked-image]) {
         display: inline-block;

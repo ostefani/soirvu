@@ -12,7 +12,7 @@ use std::ops::Range;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
-use crate::error::{AppError, ipc};
+use crate::error::{ipc, AppError};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -118,12 +118,7 @@ pub fn attachment_finish(
     upload_id: String,
 ) -> Result<AttachmentAdded, String> {
     let upload = ipc(state.take_upload(&upload_id))?;
-    ipc(finish_upload(
-        &state,
-        upload.entry_id,
-        upload.name,
-        upload.bytes,
-    ))
+    ipc(finish_upload(&state, upload.entry_id, upload.name, upload.bytes))
 }
 
 #[tauri::command]
@@ -141,8 +136,7 @@ fn finish_upload(
 ) -> Result<AttachmentAdded, AppError> {
     let settings = state.settings();
     let mime = sniff_mime(&bytes).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
-    let cap =
-        cap_for(mime, &settings.caps).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
+    let cap = cap_for(mime, &settings.caps).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
     if bytes.len() as u64 > cap {
         return Err(AppError::Code("too_large".into()));
     }
@@ -153,27 +147,23 @@ fn finish_upload(
         let a = vault.add_attachment(&entry_id, &name, mime, &bytes)?;
         Ok(a)
     })?;
-    Ok(AttachmentAdded {
-        id: added.id,
-        mime: added.mime,
-        size: added.size,
-    })
+    Ok(AttachmentAdded { id: added.id, mime: added.mime, size: added.size })
 }
 
 // ---------------------------------------------------------------------------
 // Info, import, save a copy
 
 #[tauri::command]
-pub fn attachment_info(state: State<'_, AppState>, id: String) -> Result<AttachmentInfo, String> {
-    ipc(state.with_vault(|vault| {
-        let a = vault.get_attachment(&id)?;
-        Ok(AttachmentInfo {
-            id: a.id,
-            name: a.name,
-            mime: a.mime,
-            size: a.size,
-        })
-    }))
+pub fn attachment_info(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<AttachmentInfo, String> {
+    ipc(
+        state.with_vault(|vault| {
+            let a = vault.get_attachment(&id)?;
+            Ok(AttachmentInfo { id: a.id, name: a.name, mime: a.mime, size: a.size })
+        }),
+    )
 }
 
 /// Optional §6.1 path for very large files: Rust opens the picker
@@ -205,14 +195,9 @@ pub fn import_path(
     let mut file = std::fs::File::open(path).map_err(|_| AppError::Code("io".into()))?;
     let mut head = [0u8; 8192];
     let head_len = read_up_to(&mut file, &mut head)?;
-    let mime =
-        sniff_mime(&head[..head_len]).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
-    let cap =
-        cap_for(mime, &settings.caps).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
-    let total = file
-        .metadata()
-        .map_err(|_| AppError::Code("io".into()))?
-        .len();
+    let mime = sniff_mime(&head[..head_len]).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
+    let cap = cap_for(mime, &settings.caps).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
+    let total = file.metadata().map_err(|_| AppError::Code("io".into()))?.len();
     if total > cap {
         return Err(AppError::Code("too_large".into()));
     }
@@ -222,29 +207,20 @@ pub fn import_path(
         // keeps the in-memory pass reasonable.
         let mut bytes = Vec::with_capacity(total as usize);
         bytes.extend_from_slice(&head[..head_len]);
-        file.read_to_end(&mut bytes)
-            .map_err(|_| AppError::Code("io".into()))?;
+        file.read_to_end(&mut bytes).map_err(|_| AppError::Code("io".into()))?;
         let bytes = strip_metadata(&bytes, mime);
         let added = state.with_vault(|vault| {
             let a = vault.add_attachment(entry_id, name, mime, &bytes)?;
             Ok(a)
         })?;
-        return Ok(AttachmentAdded {
-            id: added.id,
-            mime: added.mime,
-            size: added.size,
-        });
+        return Ok(AttachmentAdded { id: added.id, mime: added.mime, size: added.size });
     }
     let mut reader = std::io::Cursor::new(head[..head_len].to_vec()).chain(file);
     let added = state.with_vault(|vault| {
         let a = vault.add_attachment_from_reader(entry_id, name, mime, &mut reader)?;
         Ok(a)
     })?;
-    Ok(AttachmentAdded {
-        id: added.id,
-        mime: added.mime,
-        size: added.size,
-    })
+    Ok(AttachmentAdded { id: added.id, mime: added.mime, size: added.size })
 }
 
 fn read_up_to(file: &mut std::fs::File, buf: &mut [u8]) -> Result<usize, AppError> {
@@ -259,21 +235,17 @@ fn read_up_to(file: &mut std::fs::File, buf: &mut [u8]) -> Result<usize, AppErro
     Ok(n)
 }
 
-/// Re-auth is the native save dialog itself: the user picks the
-/// destination, then the decrypted file is written there (§6.1).
-#[tauri::command]
-pub async fn attachment_save_copy(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<bool, String> {
-    let info = ipc(state.with_vault(|vault| vault.get_attachment(&id).map_err(AppError::from)))?;
-    let Some(path) = save_file(&app, &info.name).await else {
-        return Ok(false);
-    };
-    ipc(write_copy(&state, &id, &path).map(|()| true))
+async fn pick_file(app: &AppHandle) -> Option<std::path::PathBuf> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_file(move |choice| {
+        let _ = tx.send(choice.and_then(|p| p.into_path().ok()));
+    });
+    rx.await.ok().flatten()
 }
 
+/// Writes the decrypted attachment to `path`, one range read at
+/// a time (the whole file is never held in memory).
 pub fn write_copy(state: &AppState, id: &str, path: &std::path::Path) -> Result<(), AppError> {
     use std::io::Write;
     let size = state.with_vault(|vault| {
@@ -292,32 +264,39 @@ pub fn write_copy(state: &AppState, id: &str, path: &std::path::Path) -> Result<
         if bytes.is_empty() {
             break;
         }
-        out.write_all(&bytes)
-            .map_err(|_| AppError::Code("io".into()))?;
+        out.write_all(&bytes).map_err(|_| AppError::Code("io".into()))?;
         offset = end;
     }
     Ok(())
 }
 
-async fn pick_file(app: &AppHandle) -> Option<std::path::PathBuf> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog().file().pick_file(move |choice| {
-        let _ = tx.send(choice.and_then(|p| p.into_path().ok()));
-    });
-    rx.await.ok().flatten()
+/// Opens an attachment in the OS default app: the decrypted
+/// bytes are written to the app-managed opened folder (wiped on
+/// lock) under the file's own name, and the OS takes it from
+/// there. The webview never sees the path.
+#[tauri::command]
+pub fn attachment_open(state: State<'_, AppState>, id: String) -> Result<bool, String> {
+    let path = ipc(materialize_open_copy(&state, &id))?;
+    Ok(crate::platform::open_external(&path.to_string_lossy()).is_ok())
 }
 
-async fn save_file(app: &AppHandle, file_name: &str) -> Option<std::path::PathBuf> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_file_name(file_name)
-        .save_file(move |choice| {
-            let _ = tx.send(choice.and_then(|p| p.into_path().ok()));
-        });
-    rx.await.ok().flatten()
+/// Writes the decrypted attachment into opened/<id>/<name> and
+/// returns the path (Rust-side only).
+pub fn materialize_open_copy(
+    state: &AppState,
+    id: &str,
+) -> Result<std::path::PathBuf, AppError> {
+    let info = state.with_vault(|vault| vault.get_attachment(id).map_err(AppError::from))?;
+    let safe_name = std::path::Path::new(&info.name)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "attachment".to_string());
+    let dir = state.opened_dir().join(id);
+    std::fs::create_dir_all(&dir).map_err(|_| AppError::Code("io".into()))?;
+    let path = dir.join(safe_name);
+    write_copy(state, id, &path)?;
+    Ok(path)
 }
 
 // ---------------------------------------------------------------------------
@@ -340,11 +319,7 @@ fn asset(status: u16, mime: &str, body: Vec<u8>, extra: &[(&str, String)]) -> As
     for (k, v) in extra {
         headers.push((k.to_string(), v.clone()));
     }
-    AssetResponse {
-        status,
-        headers,
-        body,
-    }
+    AssetResponse { status, headers, body }
 }
 
 /// Serves one attachment by id. Locked vault → 403; unknown or
@@ -374,13 +349,7 @@ pub fn serve_asset(state: &AppState, id: &str, range_header: Option<&str>) -> As
     match range {
         Some((start, end)) => {
             let bytes = state.with_vault(|vault| {
-                let b = vault.read_attachment_range(
-                    id,
-                    Range {
-                        start,
-                        end: end + 1,
-                    },
-                )?;
+                let b = vault.read_attachment_range(id, Range { start, end: end + 1 })?;
                 Ok(b)
             });
             match bytes {
@@ -395,13 +364,7 @@ pub fn serve_asset(state: &AppState, id: &str, range_header: Option<&str>) -> As
         }
         None => {
             let bytes = state.with_vault(|vault| {
-                let b = vault.read_attachment_range(
-                    id,
-                    Range {
-                        start: 0,
-                        end: total,
-                    },
-                )?;
+                let b = vault.read_attachment_range(id, Range { start: 0, end: total })?;
                 Ok(b)
             });
             match bytes {
@@ -520,8 +483,7 @@ fn strip_webp(bytes: &[u8]) -> Option<Vec<u8>> {
     let mut vp8x_at: Option<usize> = None;
     while i + 8 <= bytes.len() {
         let kind = &bytes[i..i + 4];
-        let len =
-            u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]) as usize;
+        let len = u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]) as usize;
         let total = 8 + len + (len % 2);
         if i + total > bytes.len() {
             return None;

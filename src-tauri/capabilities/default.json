@@ -33,6 +33,6 @@
         "allow-attachment-abort",
         "allow-attachment-info",
         "allow-attachment-import",
-        "allow-attachment-save-copy"
+        "allow-attachment-open"
     ]
 }

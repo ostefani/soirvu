@@ -141,7 +141,7 @@ pub fn run() {
             commands::attachments::attachment_abort,
             commands::attachments::attachment_info,
             commands::attachments::attachment_import,
-            commands::attachments::attachment_save_copy,
+            commands::attachments::attachment_open,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Soirvu");

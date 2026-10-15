@@ -56,13 +56,25 @@ function buildDOM(spec, fillContent) {
     return el;
 }
 
+// The positioned atom ancestor of a DOM node, if any. Node views
+// (hydrated attachments) contain foreign DOM whose nodes carry
+// no _pos of their own; the atom owns their position.
+function enclosingAtom(domNode) {
+    let n = domNode.nodeType === 1 ? domNode : domNode.parentNode;
+    while (n) {
+        if (n.dataset && n.dataset.atom && n._pos !== undefined) return n;
+        n = n.parentNode;
+    }
+    return null;
+}
+
 function assetUrl(id) {
     return `soirvu-asset://localhost/${id}`;
 }
 
 function markElement(mark) {
     const spec = mark.type.spec.toDOM(mark, true);
-    return buildDOM(spec, () => {});
+    return buildDOM(spec, () => { });
 }
 
 export class EditorView {
@@ -79,7 +91,6 @@ export class EditorView {
         this.compositionBlockPos = null;
         this.syncingSelection = false;
         this.lastHandledInputAt = 0;
-        this.atomClick = null;
 
         el.classList.add("ProseMirror");
         el.setAttribute("contenteditable", String(this.editable()));
@@ -249,7 +260,11 @@ export class EditorView {
     // -- position mapping ------------------------------------------------------
 
     startPosOf(domNode) {
-        if (domNode.nodeType === 3) return domNode._pos;
+        if (domNode.nodeType === 3) {
+            if (domNode._pos !== undefined) return domNode._pos;
+            const atom = enclosingAtom(domNode);
+            return atom ? atom._pos : undefined;
+        }
         if (domNode._leaf) return domNode._pos;
         if (domNode.dataset && domNode.dataset.atom) return domNode._pos;
         if (domNode.firstChild) return this.startPosOf(domNode.firstChild);
@@ -257,7 +272,11 @@ export class EditorView {
     }
 
     endPosOf(domNode) {
-        if (domNode.nodeType === 3) return domNode._pos + domNode.textContent.length;
+        if (domNode.nodeType === 3) {
+            if (domNode._pos !== undefined) return domNode._pos + domNode.textContent.length;
+            const atom = enclosingAtom(domNode);
+            return atom ? atom._pos + atom._node.nodeSize : undefined;
+        }
         if (domNode._leaf) return domNode._pos;
         if (domNode.dataset && domNode.dataset.atom) return domNode._pos + domNode._node.nodeSize;
         if (domNode.lastChild) return this.endPosOf(domNode.lastChild);
@@ -266,11 +285,30 @@ export class EditorView {
 
     posFromDOM(domNode, offset) {
         if (!this.dom.contains(domNode)) return this.state.selection.from;
-        if (domNode.nodeType === 3) return domNode._pos + offset;
-        const kids = domNode.childNodes;
-        if (kids.length === 0) return domNode._pos !== undefined ? domNode._pos + 1 : 0;
-        if (offset >= kids.length) return this.endPosOf(kids[kids.length - 1]);
-        return this.startPosOf(kids[offset]);
+        let result;
+        if (domNode.nodeType === 3) {
+            if (domNode._pos !== undefined) {
+                result = domNode._pos + offset;
+            } else {
+                // Foreign text inside a node view: the atom owns
+                // the position.
+                const atom = enclosingAtom(domNode);
+                result = atom ? atom._pos : this.state.selection.from;
+            }
+        } else {
+            const kids = domNode.childNodes;
+            if (kids.length === 0) {
+                result = domNode._pos !== undefined ? domNode._pos + 1 : 0;
+            } else if (offset >= kids.length) {
+                result = this.endPosOf(kids[kids.length - 1]);
+            } else {
+                result = this.startPosOf(kids[offset]);
+            }
+        }
+        // A position is a finite integer or it is nothing: a NaN
+        // here would poison the state selection for every later
+        // edit (inserts fail, deletes go nowhere).
+        return Number.isFinite(result) ? result : this.state.selection.from;
     }
 
     candidates() {
@@ -282,6 +320,7 @@ export class EditorView {
         let node;
         while ((node = walker.nextNode())) {
             if (node.nodeType === 3) {
+                if (node._pos === undefined) continue;
                 out.push({ node, from: node._pos, to: node._pos + node.textContent.length, leaf: false });
             } else if (node._leaf || (node.dataset && node.dataset.atom)) {
                 const size = node._leaf ? 0 : node._node.nodeSize;
@@ -359,11 +398,11 @@ export class EditorView {
             const head = this.domPointForPos(sel.head);
             const current = domSel.rangeCount
                 ? {
-                      anchorNode: domSel.anchorNode,
-                      anchorOffset: domSel.anchorOffset,
-                      focusNode: domSel.focusNode,
-                      focusOffset: domSel.focusOffset,
-                  }
+                    anchorNode: domSel.anchorNode,
+                    anchorOffset: domSel.anchorOffset,
+                    focusNode: domSel.focusNode,
+                    focusOffset: domSel.focusOffset,
+                }
                 : null;
             if (
                 current &&
@@ -404,6 +443,7 @@ export class EditorView {
             },
             compositionend: (e) => this.onCompositionEnd(e),
             paste: (e) => this.onPaste(e),
+            mousedown: (e) => this.onMouseDown(e),
             click: (e) => this.onClick(e),
             drop: (e) => this.onDrop(e),
             dragover: (e) => e.preventDefault(),
@@ -443,7 +483,7 @@ export class EditorView {
             metaKey: Boolean(mods.meta),
             altKey: Boolean(mods.alt),
             shiftKey: Boolean(mods.shift),
-            preventDefault() {},
+            preventDefault() { },
         };
         // Mod means Cmd on macOS, Ctrl elsewhere; the keymap
         // normalizes both to "Mod".
@@ -648,10 +688,22 @@ export class EditorView {
             if (this.handleClickOn) this.handleClickOn(link.getAttribute("href"));
             return;
         }
+    }
+
+    // Pressing on an atom selects it in the model, synchronously:
+    // mousedown always precedes the selection changes the press
+    // causes, so no ordering with selectionchange or click has to
+    // be guessed. The event is not prevented — media controls and
+    // everything else still receive it normally.
+    onMouseDown(e) {
         const atom = e.target.closest ? e.target.closest("[data-atom]") : null;
-        if (atom && this.dom.contains(atom) && atom._pos !== undefined) {
-            this.atomClick = { pos: atom._pos, at: performance.now() };
-        }
+        if (!atom || !this.dom.contains(atom) || atom._pos === undefined) return;
+        const pos = atom._pos;
+        const sel = this.state.selection;
+        if (sel.type === "node" && sel.anchor === pos) return;
+        const tr = this.state.tr();
+        tr.setSelection(new NodeSelection(pos));
+        this.dispatch(tr);
     }
 
     onSelectionChange() {
@@ -659,21 +711,43 @@ export class EditorView {
         if (document.activeElement !== this.dom && !this.dom.contains(document.activeElement)) return;
         const read = this.readDOMSelection();
         if (!read) return;
+        if (!Number.isFinite(read.anchor) || !Number.isFinite(read.head)) return;
         const sel = this.state.selection;
-        if (this.atomClick && performance.now() - this.atomClick.at < 150) {
-            const atomPos = this.atomClick.pos;
-            if (
-                sel.type !== "node" &&
-                (read.anchor === atomPos || read.head === atomPos) &&
-                read.anchor === read.head
-            ) {
-                const atomNode = this.state.doc.nodeAt(atomPos);
-                if (atomNode) {
-                    const tr = this.state.tr();
-                    tr.setSelection(new NodeSelection(atomPos));
-                    this.dispatch(tr);
-                    this.atomClick = null;
-                    return;
+        if (sel.type !== "node" && read.anchor === read.head) {
+            // A collapsed caret parked inside an atom (its content
+            // is not editable text) means the atom is the
+            // selection. Derived from the DOM node itself, so it
+            // holds whatever order the events arrived in.
+            const domSel = document.getSelection();
+            const atomEl = domSel ? enclosingAtom(domSel.anchorNode) : null;
+            if (atomEl && read.anchor === atomEl._pos) {
+                const tr = this.state.tr();
+                tr.setSelection(new NodeSelection(atomEl._pos));
+                this.dispatch(tr);
+                return;
+            }
+        }
+        if (sel.type === "node") {
+            // syncSelection writes a node selection into the DOM as
+            // a range around the atom, and the browser may also park
+            // the caret inside the atom's own DOM. Both are this
+            // selection echoing back — replacing it with a text
+            // selection here would make the atom undeletable, so
+            // recognize the echo at the DOM level and keep it.
+            const domSel = document.getSelection();
+            const cands = this.candidates();
+            const atom = cands.find((c) => c.leaf && c.from === sel.from && c.node._node);
+            if (atom && domSel && domSel.rangeCount) {
+                const { anchorNode: a, focusNode: f } = domSel;
+                if ((a && atom.node.contains(a)) || (f && atom.node.contains(f))) return;
+                const parent = atom.node.parentNode;
+                if (parent) {
+                    const idx = [...parent.childNodes].indexOf(atom.node);
+                    const wraps =
+                        (a === parent && f === parent &&
+                            ((domSel.anchorOffset === idx && domSel.focusOffset === idx + 1) ||
+                                (domSel.anchorOffset === idx + 1 && domSel.focusOffset === idx)));
+                    if (wraps) return;
                 }
             }
         }
