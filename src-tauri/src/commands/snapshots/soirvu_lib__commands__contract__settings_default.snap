@@ -13,5 +13,6 @@ expression: json
     "audio_mb": 200,
     "video_mb": 1024
   },
-  "backup_location": null
+  "backup_location": null,
+  "vault_location": null
 }

@@ -116,6 +116,11 @@
     <h2>Settings</h2>
 
     {#if settings}
+        <p>
+            This diary lives in:
+            <strong>{settings.vault_location ?? "—"}</strong>
+        </p>
+
         <label>
             Lock after (minutes of inactivity)
             <input type="number" min="1" bind:value={timeoutMin} />

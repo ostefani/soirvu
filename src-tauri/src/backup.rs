@@ -103,8 +103,11 @@ fn last_backup(dir: &Path) -> Option<SystemTime> {
     newest
 }
 
-/// Deletes all but the newest KEEP backup folders.
-fn prune(dir: &Path) {
+/// Deletes all but the newest KEEP backup folders. The folder
+/// the live vault sits in (and anything containing it) is
+/// never deleted: a vault restored into a backup folder by an
+/// older version must not be pruned from under itself.
+fn prune(dir: &Path, keep_path: &Path) {
     let Ok(read) = fs::read_dir(dir) else { return };
     let mut stamps: Vec<PathBuf> = read
         .flatten()
@@ -114,6 +117,9 @@ fn prune(dir: &Path) {
     stamps.sort();
     if stamps.len() > KEEP {
         for old in &stamps[..stamps.len() - KEEP] {
+            if keep_path == old || keep_path.starts_with(old) {
+                continue;
+            }
             let _ = fs::remove_dir_all(old);
         }
     }
@@ -154,7 +160,7 @@ pub fn make_backup(state: &AppState) -> AppResult<String> {
     let dest = per_vault.join(&stamp);
     let _ = fs::remove_dir_all(&dest);
     fs::rename(&tmp, &dest).map_err(|_| unavailable())?;
-    prune(&per_vault);
+    prune(&per_vault, &src);
 
     let display = per_vault
         .file_name()
@@ -211,13 +217,24 @@ mod tests {
     }
 
     #[test]
+    fn prune_never_deletes_the_live_vaults_folder() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        for i in 0..9 {
+            fs::create_dir(tmp.path().join(format!("2026-10-{i:02}_000000"))).unwrap();
+        }
+        let live = tmp.path().join("2026-10-00_000000");
+        prune(tmp.path(), &live);
+        assert!(live.exists(), "the live vault's folder survives pruning");
+    }
+
+    #[test]
     fn prune_keeps_the_newest_seven() {
         let tmp = tempfile::TempDir::new().unwrap();
         for i in 0..9 {
             fs::create_dir(tmp.path().join(format!("2026-10-{i:02}_000000"))).unwrap();
         }
         fs::create_dir(tmp.path().join("unrelated")).unwrap();
-        prune(tmp.path());
+        prune(tmp.path(), tmp.path());
         let mut names: Vec<String> = fs::read_dir(tmp.path())
             .unwrap()
             .flatten()

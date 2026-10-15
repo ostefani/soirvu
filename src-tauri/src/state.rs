@@ -87,11 +87,17 @@ pub struct Settings {
     /// ignored. Null until a folder is picked.
     #[serde(default)]
     pub backup_location: Option<String>,
+    /// Where the open diary lives, as a full path (derived like
+    /// backup_location; the value sent back by settings_set is
+    /// ignored). The diary's own home is shown in full, on
+    /// purpose: the user should always know where it is.
+    #[serde(default)]
+    pub vault_location: Option<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { lock_timeout_secs: 300, strip_exif: true, clipboard_clear: false, backup_schedule: BackupSchedule::Off, caps: Caps::default(), backup_location: None }
+        Settings { lock_timeout_secs: 300, strip_exif: true, clipboard_clear: false, backup_schedule: BackupSchedule::Off, caps: Caps::default(), backup_location: None, vault_location: None }
     }
 }
 
@@ -200,6 +206,14 @@ impl AppState {
             .backup_dir
             .as_deref()
             .map(folder_display_name);
+        settings.vault_location = inner.current.as_ref().and_then(|id| {
+            inner
+                .config
+                .vaults
+                .iter()
+                .find(|v| &v.id == id)
+                .map(|v| v.path.to_string_lossy().into_owned())
+        });
         settings
     }
 

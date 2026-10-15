@@ -37,6 +37,7 @@
                 storage: "The vault folder is not available right now.",
                 vault_not_found: "This vault is no longer in the list.",
                 vault_mismatch: "That folder holds a different vault.",
+                destination_not_empty: "That folder is not empty. Pick an empty folder for the restored diary.",
                 corrupt: "The vault looks damaged. The CLI can check it: soirvu-cli verify.",
             }[e] || `Something went wrong (${e}).`
         );

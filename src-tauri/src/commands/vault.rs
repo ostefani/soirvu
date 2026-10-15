@@ -66,6 +66,41 @@ fn read_vault_id(path: &std::path::Path) -> Result<String, AppError> {
     Ok(header.vault_id)
 }
 
+/// Copies a vault's two files into an empty folder — the
+/// restore-as-import step. The source (a backup) is only read.
+fn import_copy(from: &std::path::Path, to: &std::path::Path) -> Result<(), AppError> {
+    let mut entries = std::fs::read_dir(to).map_err(|_| AppError::Code("storage".into()))?;
+    if entries.next().is_some() {
+        return Err(AppError::Code("destination_not_empty".into()));
+    }
+    for file in ["soirvu.db", "vault.header.json"] {
+        std::fs::copy(from.join(file), to.join(file))
+            .map_err(|_| AppError::Code("storage".into()))?;
+    }
+    Ok(())
+}
+
+/// Native explanation before a backup restore: a backup is an
+/// archive, not a home, so restoring imports it into a folder
+/// the user chooses next.
+async fn confirm_import(app: &AppHandle, name: &str) -> bool {
+    let (tx, rx) = oneshot::channel();
+    app.dialog()
+        .message(format!(
+            "This is a backup of \"{name}\"\n\nTo restore it, choose an empty folder where the diary will live. The backup itself stays untouched."
+        ))
+        .title("Soirvu")
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Choose folder\u{2026}".into(),
+            "Cancel".into(),
+        ))
+        .show(move |confirmed| {
+            let _ = tx.send(confirmed);
+        });
+    rx.await.unwrap_or(false)
+}
+
 /// The folder that actually holds the vault: the picked folder
 /// itself, or — when a backup's per-vault folder was picked —
 /// its newest backup inside it. Backups nest one level (the
@@ -119,10 +154,12 @@ fn folder_name(path: &std::path::Path) -> String {
         .unwrap_or_else(|| "Vault".into())
 }
 
+
 #[tauri::command]
 pub fn vault_list(state: State<'_, AppState>) -> Vec<VaultInfo> {
     state.vault_list()
 }
+
 
 #[tauri::command]
 pub async fn vault_pick_folder(
@@ -135,8 +172,45 @@ pub async fn vault_pick_folder(
     };
     match mode.as_str() {
         "open" => {
-            let path = resolve_vault_folder(&path);
-            let vault_id = read_vault_id(&path).map_err(|e| e.to_ipc())?;
+            let resolved = resolve_vault_folder(&path);
+            let vault_id = read_vault_id(&resolved).map_err(|e| e.to_ipc())?;
+            // A backup is an archive, not a home: restoring
+            // imports it into a folder the user chooses, and
+            // the backup folder itself is never registered.
+            let in_backup_root = state
+                .backup_dir()
+                .is_some_and(|root| resolved.starts_with(&root));
+            let is_backup = resolved != path
+                || crate::backup::is_stamp(&folder_name(&resolved))
+                || in_backup_root;
+            if is_backup {
+                let name = state
+                    .vault_list()
+                    .into_iter()
+                    .find(|v| v.id == vault_id)
+                    .map(|v| v.name)
+                    .unwrap_or_else(|| folder_name(&path));
+                if !confirm_import(&app, &name).await {
+                    return Ok(None);
+                }
+                let Some(dest) = pick_folder(&app).await else {
+                    return Ok(None);
+                };
+                if dest == resolved {
+                    return Err("invalid_input".into());
+                }
+                import_copy(&resolved, &dest).map_err(|e| e.to_ipc())?;
+                let name = folder_name(&dest);
+                let warning = crate::platform::fs_warning(&dest).map(str::to_string);
+                state
+                    .register(vault_id.clone(), name.clone(), dest)
+                    .map_err(|e| e.to_ipc())?;
+                return Ok(Some(Picked {
+                    vault_id: Some(vault_id),
+                    name,
+                    warning,
+                }));
+            }
             // The header is unauthenticated, so a copied folder
             // claims the same id. If that id is already registered
             // at another folder that still exists, this is a copy
@@ -179,6 +253,7 @@ pub async fn vault_pick_folder(
         _ => Err("invalid_input".into()),
     }
 }
+
 
 #[tauri::command]
 pub async fn vault_create(
@@ -224,6 +299,7 @@ pub async fn vault_create(
     super::emit_status(&app, &state);
     Ok(created)
 }
+
 
 #[tauri::command]
 pub async fn vault_unlock(
@@ -279,6 +355,7 @@ pub async fn vault_unlock(
     }
 }
 
+
 #[tauri::command]
 pub fn vault_lock(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     state.lock();
@@ -291,10 +368,12 @@ pub fn vault_lock(app: AppHandle, state: State<'_, AppState>) -> Result<(), Stri
     Ok(())
 }
 
+
 #[tauri::command]
 pub fn vault_forget(state: State<'_, AppState>, vault_id: String) -> Result<(), String> {
     ipc(state.forget(&vault_id))
 }
+
 
 #[tauri::command]
 pub async fn vault_relocate(
@@ -324,6 +403,22 @@ mod tests {
     fn header_in(dir: &std::path::Path) {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("vault.header.json"), b"{}").unwrap();
+    }
+
+    #[test]
+    fn import_copies_into_an_empty_folder_only() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let from = tmp.path().join("backup");
+        let to = tmp.path().join("home");
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(from.join("soirvu.db"), b"db").unwrap();
+        std::fs::write(from.join("vault.header.json"), b"{}").unwrap();
+        import_copy(&from, &to).unwrap();
+        assert_eq!(std::fs::read(to.join("soirvu.db")).unwrap(), b"db");
+        // And a non-empty destination is refused, untouched.
+        let err = import_copy(&from, &to).unwrap_err();
+        assert_eq!(err.to_ipc(), "destination_not_empty");
     }
 
     #[test]
