@@ -10,7 +10,7 @@ use soirvu_core::crypto::{KdfParams, RecoveryKey};
 use soirvu_core::vault::VaultHeader;
 use soirvu_core::Vault;
 use tauri::{AppHandle, State};
-use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::oneshot;
 use zeroize::Zeroize;
 
@@ -66,6 +66,53 @@ fn read_vault_id(path: &std::path::Path) -> Result<String, AppError> {
     Ok(header.vault_id)
 }
 
+/// The folder that actually holds the vault: the picked folder
+/// itself, or — when a backup's per-vault folder was picked —
+/// its newest backup inside it. Backups nest one level (the
+/// timestamp folder is the vault copy); a folder with no header
+/// of its own and no backup inside is not a vault.
+fn resolve_vault_folder(path: &std::path::Path) -> std::path::PathBuf {
+    if path.join("vault.header.json").exists() {
+        return path.to_path_buf();
+    }
+    let mut newest: Option<std::path::PathBuf> = None;
+    if let Ok(read) = std::fs::read_dir(path) {
+        for entry in read.flatten() {
+            let sub = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if sub.is_dir()
+                && crate::backup::is_stamp(&name)
+                && sub.join("vault.header.json").exists()
+                && newest.as_ref().is_none_or(|n| sub > *n)
+            {
+                newest = Some(sub);
+            }
+        }
+    }
+    newest.unwrap_or_else(|| path.to_path_buf())
+}
+
+/// Native confirmation for opening a copy of a registered
+/// vault (a restored backup, most often): the registration is
+/// repointed only if the user says so.
+async fn confirm_open_copy(app: &AppHandle, name: &str) -> bool {
+    let (tx, rx) = oneshot::channel();
+    app.dialog()
+        .message(format!(
+            "This folder is a copy of \"{name}\"\n\nOpen the copy? Soirvu will use this folder for \"{name}\" from now on. The other folder is left untouched."
+        ))
+        .title("Soirvu")
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Open the copy".into(),
+            "Cancel".into(),
+        ))
+        .show(move |confirmed| {
+            let _ = tx.send(confirmed);
+        });
+    rx.await.unwrap_or(false)
+}
+
 fn folder_name(path: &std::path::Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -88,14 +135,24 @@ pub async fn vault_pick_folder(
     };
     match mode.as_str() {
         "open" => {
+            let path = resolve_vault_folder(&path);
             let vault_id = read_vault_id(&path).map_err(|e| e.to_ipc())?;
-            // The header is unauthenticated, so a copied folder claims
-            // the same id. If that id is already registered at another
-            // folder that still exists, refuse to repoint it silently;
-            // moving a vault is what vault_relocate is for.
+            // The header is unauthenticated, so a copied folder
+            // claims the same id. If that id is already registered
+            // at another folder that still exists, this is a copy
+            // (a restored backup, most often): never repoint
+            // silently — ask first, natively.
             if let Ok(old_path) = state.vault_path(&vault_id) {
                 if old_path != path && old_path.join("vault.header.json").exists() {
-                    return Err("vault_mismatch".into());
+                    let name = state
+                        .vault_list()
+                        .into_iter()
+                        .find(|v| v.id == vault_id)
+                        .map(|v| v.name)
+                        .unwrap_or_else(|| folder_name(&old_path));
+                    if !confirm_open_copy(&app, &name).await {
+                        return Ok(None);
+                    }
                 }
             }
             let name = folder_name(&path);
@@ -257,4 +314,42 @@ pub async fn vault_relocate(
         .register(vault_id, name, path)
         .map_err(|e| e.to_ipc())?;
     Ok(true)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn header_in(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("vault.header.json"), b"{}").unwrap();
+    }
+
+    #[test]
+    fn resolve_prefers_the_folder_itself() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        header_in(tmp.path());
+        assert_eq!(resolve_vault_folder(tmp.path()), tmp.path());
+    }
+
+    #[test]
+    fn resolve_enters_a_backup_folder_and_takes_the_newest() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        header_in(&tmp.path().join("2026-10-14_020000"));
+        header_in(&tmp.path().join("2026-10-15_032607"));
+        std::fs::create_dir(tmp.path().join("2026-10-16_000000")).unwrap(); // no header: skip
+        assert_eq!(
+            resolve_vault_folder(tmp.path()),
+            tmp.path().join("2026-10-15_032607")
+        );
+    }
+
+    #[test]
+    fn resolve_leaves_other_folders_alone() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join("random")).unwrap();
+        header_in(&tmp.path().join("random")); // not a backup stamp
+        assert_eq!(resolve_vault_folder(tmp.path()), tmp.path());
+    }
 }

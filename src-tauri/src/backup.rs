@@ -68,7 +68,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 
 /// The stamp shape this module writes; other folders in the
 /// backup location are never counted or pruned.
-fn is_stamp(name: &str) -> bool {
+pub(crate) fn is_stamp(name: &str) -> bool {
     let b = name.as_bytes();
     b.len() == 17
         && b.iter().enumerate().all(|(i, c)| match i {
