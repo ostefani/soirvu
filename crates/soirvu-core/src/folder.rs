@@ -74,6 +74,38 @@ impl Vault {
         Ok(())
     }
 
+    /// Changes the passphrase. The current passphrase is
+    /// verified against the slot first (a wrong one fails with
+    /// Error::Unlock, like a bad unlock); then only the header
+    /// is rewritten — the master key does not change, so no
+    /// entry, attachment or database page is re-encrypted,
+    /// and this open session simply continues.
+    pub fn change_passphrase(
+        &mut self,
+        current_passphrase: &str,
+        new_passphrase: &str,
+        kdf: KdfParams,
+    ) -> Result<()> {
+        self.header.unlock_with_passphrase(current_passphrase)?;
+        let header = self
+            .header
+            .with_new_passphrase(new_passphrase, &self.master, kdf)?;
+        write_atomic(&self.dir.join(HEADER_FILE), &header.to_json()?)?;
+        self.header = header;
+        Ok(())
+    }
+
+    /// Replaces the recovery key with a fresh one, shown once
+    /// by the caller. The current passphrase is the re-auth
+    /// proof, as for a passphrase change.
+    pub fn regenerate_recovery(&mut self, current_passphrase: &str) -> Result<RecoveryKey> {
+        self.header.unlock_with_passphrase(current_passphrase)?;
+        let (header, recovery) = self.header.with_new_recovery(&self.master)?;
+        write_atomic(&self.dir.join(HEADER_FILE), &header.to_json()?)?;
+        self.header = header;
+        Ok(recovery)
+    }
+
     /// Gives this vault a fresh identity (see
     /// VaultHeader::fork): the database's stored vault_id and
     /// the header are rewritten to the new id, and the new
@@ -236,6 +268,27 @@ mod tests {
             .windows(needle.len())
             .any(|window| window == needle)
     }
+
+    #[test]
+    fn passphrase_change_and_recovery_regeneration() {
+        let (tmp, mut vault, recovery) = new_vault_with_note();
+        vault
+            .change_passphrase("not the passphrase", "second passphrase", fast())
+            .expect_err("the current passphrase is the proof");
+        vault.change_passphrase(PASSPHRASE, "second passphrase", fast()).unwrap();
+
+        let new_recovery = vault.regenerate_recovery("second passphrase").unwrap();
+        vault.lock();
+
+        let dir = tmp.path().join("v");
+        assert!(Vault::open_with_passphrase(&dir, PASSPHRASE).is_err()); // old passphrase dead
+        assert!(Vault::open_with_recovery(&dir, &recovery).is_err()); // old recovery dead
+        let by_new_pass = Vault::open_with_passphrase(&dir, "second passphrase").unwrap();
+        assert_eq!(read_note(&by_new_pass), CANARY); // data untouched
+        by_new_pass.lock();
+        assert!(Vault::open_with_recovery(&dir, &new_recovery).is_ok());
+    }
+
 
     #[test]
     fn data_survives_lock_and_reopen_with_passphrase() {

@@ -11,6 +11,8 @@ fn main() {
         "vault_forget",
         "vault_relocate",
         "vault_fork_import",
+        "vault_change_passphrase",
+        "vault_regenerate_recovery",
         "entry_list",
         "calendar_days",
         "on_this_day",

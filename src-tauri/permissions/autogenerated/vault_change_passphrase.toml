@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vault-change-passphrase"
+description = "Enables the vault_change_passphrase command without any pre-configured scope."
+commands.allow = ["vault_change_passphrase"]
+
+[[permission]]
+identifier = "deny-vault-change-passphrase"
+description = "Denies the vault_change_passphrase command without any pre-configured scope."
+commands.deny = ["vault_change_passphrase"]

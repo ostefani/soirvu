@@ -151,6 +151,27 @@ export function vaultForkImport(passphrase) {
     return invoke('vault_fork_import', { passphrase });
 }
 
+/**
+ * Changes the open vault's passphrase; the core verifies the
+ * current one. The session stays unlocked.
+ * @param {string} currentPassphrase
+ * @param {string} newPassphrase
+ * @returns {Promise<void>}
+ */
+export function vaultChangePassphrase(currentPassphrase, newPassphrase) {
+    return invoke('vault_change_passphrase', { currentPassphrase, newPassphrase });
+}
+
+/**
+ * Replaces the open vault's recovery key; the current
+ * passphrase is the re-auth proof.
+ * @param {string} currentPassphrase
+ * @returns {Promise<string>} The new recovery key — shown once.
+ */
+export function vaultRegenerateRecovery(currentPassphrase) {
+    return invoke('vault_regenerate_recovery', { currentPassphrase });
+}
+
 // ---------------------------------------------------------------------------
 // Entries, search, tags (all reject with "locked" unless Unlocked)
 

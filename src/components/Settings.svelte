@@ -13,6 +13,47 @@
     let clipboardClear = $state(false);
     let backupSchedule = $state("off");
     let error = $state("");
+    let curPass = $state("");
+    let newPass = $state("");
+    let newPass2 = $state("");
+    let secNote = $state("");
+    let newRecoveryKey = $state("");
+    let secBusy = $state(false);
+
+    function secError(e) {
+        return e === "wrong_passphrase" ? "Wrong current passphrase." : `Something went wrong (${e}).`;
+    }
+
+    async function changePassphrase() {
+        secNote = "";
+        newRecoveryKey = "";
+        secBusy = true;
+        try {
+            await api.vaultChangePassphrase(curPass, newPass);
+            curPass = "";
+            newPass = "";
+            newPass2 = "";
+            secNote = "Passphrase changed. The diary stays open — the new passphrase applies at the next unlock.";
+        } catch (e) {
+            secNote = secError(e);
+        } finally {
+            secBusy = false;
+        }
+    }
+
+    async function regenerateRecovery() {
+        secNote = "";
+        secBusy = true;
+        try {
+            newRecoveryKey = await api.vaultRegenerateRecovery(curPass);
+            curPass = "";
+        } catch (e) {
+            secNote = secError(e);
+            newRecoveryKey = "";
+        } finally {
+            secBusy = false;
+        }
+    }
     let note = $state("");
 
     onMount(async () => {
@@ -167,6 +208,42 @@
         <p class="note">
             A backup is an encrypted copy of this vault (the newest 7 are kept). To restore one,
             choose its folder from the lock screen.
+        </p>
+        <h3>Passphrase and recovery key</h3>
+
+        <label>
+            Current passphrase
+            <input type="password" bind:value={curPass} />
+        </label>
+
+        <label>
+            New passphrase
+            <input type="password" bind:value={newPass} />
+        </label>
+
+        <label>
+            Confirm new passphrase
+            <input type="password" bind:value={newPass2} />
+        </label>
+
+        <div class="row">
+            <button onclick={changePassphrase} disabled={secBusy || !curPass || !newPass || newPass !== newPass2}>
+                Change passphrase
+            </button>
+            <button class="quiet" onclick={regenerateRecovery} disabled={secBusy || !curPass}>
+                Regenerate recovery key
+            </button>
+        </div>
+
+        {#if newRecoveryKey}
+            <p>Your new recovery key: <code>{newRecoveryKey}</code></p>
+            <p class="note">Save it now — it is shown once, and the old key no longer works.</p>
+        {/if}
+        {#if secNote}<p class="note">{secNote}</p>{/if}
+
+        <p class="note">
+            Only the diary's header changes — nothing is re-encrypted and the diary stays open.
+            Backups made earlier keep the passphrase and recovery key they were made with.
         </p>
     {:else if !error}
         <p class="note">Loading…</p>

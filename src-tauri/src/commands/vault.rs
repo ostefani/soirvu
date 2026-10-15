@@ -519,3 +519,41 @@ pub fn vault_fork_import(
     passphrase.zeroize();
     ipc(result)
 }
+
+
+/// Changes the open vault's passphrase (§13 Phase 6). The
+/// core verifies the current one; the KDF for the new slot is
+/// calibrated like at creation.
+#[tauri::command]
+pub fn vault_change_passphrase(
+    state: State<'_, AppState>,
+    current_passphrase: String,
+    new_passphrase: String,
+) -> Result<(), String> {
+    let mut current = current_passphrase;
+    let mut new = new_passphrase;
+    let result = state.with_vault(|vault| {
+        let kdf = KdfParams::calibrate(Duration::from_millis(750))?;
+        vault.change_passphrase(&current, &new, kdf)?;
+        Ok(())
+    });
+    current.zeroize();
+    new.zeroize();
+    ipc(result)
+}
+
+/// Replaces the open vault's recovery key with a fresh one;
+/// returns its text — the UI shows it exactly once.
+#[tauri::command]
+pub fn vault_regenerate_recovery(
+    state: State<'_, AppState>,
+    current_passphrase: String,
+) -> Result<String, String> {
+    let mut current = current_passphrase;
+    let result = state.with_vault(|vault| {
+        let recovery = vault.regenerate_recovery(&current)?;
+        Ok(recovery.to_text())
+    });
+    current.zeroize();
+    ipc(result)
+}

@@ -119,6 +119,50 @@ impl VaultHeader {
         Ok((header, recovery, master))
     }
 
+    /// This header with its passphrase slot re-wrapped under
+    /// a new passphrase (fresh salt, the given KDF parameters).
+    /// The recovery slot is carried over byte for byte — its
+    /// wrapping does not involve the passphrase.
+    pub fn with_new_passphrase(
+        &self,
+        new_passphrase: &str,
+        master: &MasterKey,
+        kdf: KdfParams,
+    ) -> Result<VaultHeader> {
+        if new_passphrase.is_empty() {
+            return Err(Error::EmptyPassphrase);
+        }
+        kdf.check()?;
+        let salt = random_bytes::<SALT_LEN>()?;
+        let kek = derive_kek(new_passphrase, &salt, &kdf)?;
+        let slot_aad = aad(FORMAT_VERSION, SUITE, &self.vault_id, &passphrase_description(&kdf));
+        let (nonce, wrapped) = wrap_key(&kek, master.key(), &slot_aad)?;
+        let mut header = self.clone();
+        header.slots[0] = Slot::Passphrase {
+            kdf,
+            salt: HEXLOWER.encode(&salt),
+            nonce: HEXLOWER.encode(&nonce),
+            wrapped_key: HEXLOWER.encode(&wrapped),
+        };
+        Ok(header)
+    }
+
+    /// This header with a fresh recovery slot: a brand-new
+    /// recovery key wrapping the same master key. The old
+    /// recovery key stops working the moment this header is
+    /// written; the passphrase slot is carried over untouched.
+    pub fn with_new_recovery(&self, master: &MasterKey) -> Result<(VaultHeader, RecoveryKey)> {
+        let recovery = RecoveryKey::generate()?;
+        let slot_aad = aad(FORMAT_VERSION, SUITE, &self.vault_id, RECOVERY_DESCRIPTION);
+        let (nonce, wrapped) = wrap_key(&recovery.kek(), master.key(), &slot_aad)?;
+        let mut header = self.clone();
+        header.slots[1] = Slot::Recovery {
+            nonce: HEXLOWER.encode(&nonce),
+            wrapped_key: HEXLOWER.encode(&wrapped),
+        };
+        Ok((header, recovery))
+    }
+
     /// A new identity for a copy of this vault (an imported
     /// backup): a fresh vault_id, the SAME master key re-wrapped
     /// into both slots under the new id (the slot AAD binds the

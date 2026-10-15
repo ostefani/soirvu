@@ -15,6 +15,8 @@
         "allow-vault-forget",
         "allow-vault-relocate",
     "allow-vault-fork-import",
+    "allow-vault-change-passphrase",
+    "allow-vault-regenerate-recovery",
         "allow-entry-list",
         "allow-entry-get",
         "allow-entry-save",
