@@ -87,6 +87,51 @@ fn is_network_fs(_path: &std::path::Path) -> bool {
     false
 }
 
+/// Why the OS says the diary must lock (§9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockReason {
+    /// System sleep, display sleep, or lid close (which sleeps).
+    Sleep,
+    /// The screen was locked.
+    ScreenLocked,
+    /// The screensaver started.
+    Screensaver,
+}
+
+/// OS lock signals (§9). Idle expiry and volume loss are timers
+/// in lib.rs; sleep, screen lock and screensaver arrive through
+/// this trait, so the rest of the bridge never names a platform
+/// type. The macOS backend is `crate::macos_lock`.
+pub trait LockEvents: Send {
+    /// Calls `on_lock` (on the main thread) when the OS says the
+    /// session is no longer private.
+    fn start(&mut self, on_lock: Box<dyn Fn(LockReason) + Send + Sync>) -> Result<(), String>;
+    fn stop(&mut self) {}
+}
+
+/// The platform's lock-signal source.
+pub fn lock_events() -> Box<dyn LockEvents> {
+    #[cfg(target_os = "macos")]
+    {
+        Box::new(crate::macos_lock::MacLockEvents::default())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Box::new(NoLockEvents)
+    }
+}
+
+/// Platforms without a backend yet: no OS signals.
+#[cfg(not(target_os = "macos"))]
+struct NoLockEvents;
+
+#[cfg(not(target_os = "macos"))]
+impl LockEvents for NoLockEvents {
+    fn start(&mut self, _on_lock: Box<dyn Fn(LockReason) + Send + Sync>) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

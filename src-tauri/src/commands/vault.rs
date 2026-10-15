@@ -226,6 +226,11 @@ pub async fn vault_unlock(
 pub fn vault_lock(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     state.lock();
     super::emit_status(&app, &state);
+    // §9: reload the document onto the lock screen. Deferred to
+    // the main thread's next turn so this command's reply is not
+    // lost with the document it destroys.
+    let reload_app = app.clone();
+    let _ = app.run_on_main_thread(move || super::reload_main_window(&reload_app));
     Ok(())
 }
 

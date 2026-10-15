@@ -33,3 +33,10 @@ tauri-plugin-dialog = "2"
 tempfile = "3"
 # Contract snapshots for the IPC boundary (src/commands/contract.rs).
 insta = "1"
+
+# §9 lock signals: NSWorkspace + distributed notifications.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace"] }
+objc2-foundation = { version = "0.3", features = ["NSNotification", "NSDistributedNotificationCenter", "NSOperation", "NSString"] }

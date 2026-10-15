@@ -41,6 +41,15 @@
                 await refresh();
             }
         });
+        // Manual lock (§9): Cmd/Ctrl+Shift+L from anywhere in
+        // the diary. The shell lives for the app's lifetime and
+        // the document reloads on lock, so no cleanup is needed.
+        window.addEventListener("keydown", (e) => {
+            if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "l" && screen === "diary") {
+                e.preventDefault();
+                lock();
+            }
+        });
         await refresh();
     });
 

@@ -5,6 +5,8 @@
 
 mod commands;
 mod error;
+#[cfg(target_os = "macos")]
+mod macos_lock;
 mod platform;
 mod state;
 
@@ -93,6 +95,22 @@ pub fn run() {
             .build()?;
             let _ = window.set_focus();
 
+            // OS lock signals (§9): system sleep, screen lock and
+            // screensaver lock the vault like the idle timer does.
+            let mut lock_events = platform::lock_events();
+            let event_handle = app.handle().clone();
+            let _ = lock_events.start(Box::new(move |_reason| {
+                let state = event_handle.state::<AppState>();
+                if state.status() == state::Status::Unlocked {
+                    state.lock();
+                    commands::emit_status(&event_handle, &state);
+                    commands::reload_main_window(&event_handle);
+                }
+            }));
+            // The observers live as long as the process: there
+            // is no moment where the app stops listening.
+            std::mem::forget(lock_events);
+
             // Idle auto-lock (§6.2): every 5 s, ask the state; on
             // expiry, lock and tell the UI.
             let handle = app.handle().clone();
@@ -103,12 +121,14 @@ pub fn run() {
                     if state.idle_expired() {
                         state.lock();
                         commands::emit_status(&handle, &state);
+                        commands::reload_main_window(&handle);
                         let _ = handle.emit("vault-locked", "idle");
                     }
                     // §3: a volume that disappears mid-session
                     // locks the vault and drops its keys.
                     if state.lock_if_current_missing() {
                         commands::emit_status(&handle, &state);
+                        commands::reload_main_window(&handle);
                     }
                 }
             });
