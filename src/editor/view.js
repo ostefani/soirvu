@@ -56,6 +56,10 @@ function buildDOM(spec, fillContent) {
     return el;
 }
 
+function assetUrl(id) {
+    return `soirvu-asset://localhost/${id}`;
+}
+
 function markElement(mark) {
     const spec = mark.type.spec.toDOM(mark, true);
     return buildDOM(spec, () => {});
@@ -70,6 +74,7 @@ export class EditorView {
         this.handleClickOn = options.handleClickOn || null;
         this.onTaskToggle = options.onTaskToggle || null;
         this.onPasteText = options.onPasteText || null;
+        this.onAttachFile = options.onAttachFile || null;
         this.composing = false;
         this.compositionBlockPos = null;
         this.syncingSelection = false;
@@ -104,6 +109,18 @@ export class EditorView {
         const el = buildDOM(spec, (parent) => {
             contentEl = parent;
         });
+        if (node.type.name === "image") {
+            // §6.5: only attachment: images ever load, through the
+            // asset protocol. A remote URL renders as a placeholder
+            // and causes no network request.
+            const src = node.attrs.src || "";
+            if (src.startsWith("attachment:")) {
+                el.setAttribute("src", assetUrl(src.slice("attachment:".length)));
+            } else {
+                el.removeAttribute("src");
+                el.setAttribute("data-blocked-image", "");
+            }
+        }
         el._pos = pos;
         el._node = node;
         if (node.isAtom || node.isLeaf) {
@@ -388,7 +405,7 @@ export class EditorView {
             compositionend: (e) => this.onCompositionEnd(e),
             paste: (e) => this.onPaste(e),
             click: (e) => this.onClick(e),
-            drop: (e) => e.preventDefault(),
+            drop: (e) => this.onDrop(e),
             dragover: (e) => e.preventDefault(),
         };
         for (const [name, fn] of Object.entries(this.handlers)) {
@@ -517,8 +534,22 @@ export class EditorView {
         }
     }
 
+    onDrop(e) {
+        e.preventDefault();
+        const files = e.dataTransfer ? e.dataTransfer.files : null;
+        if (files && files.length && this.onAttachFile) {
+            for (const file of files) this.onAttachFile(file);
+        }
+    }
+
     onPaste(e) {
         if (this.composing) return;
+        const files = e.clipboardData ? e.clipboardData.files : null;
+        if (files && files.length && this.onAttachFile) {
+            e.preventDefault();
+            for (const file of files) this.onAttachFile(file);
+            return;
+        }
         const text = e.clipboardData ? e.clipboardData.getData("text/plain") : null;
         if (text != null && this.onPasteText) {
             e.preventDefault();

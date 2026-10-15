@@ -221,6 +221,110 @@ export function settingsGet() {
     return invoke("settings_get");
 }
 
+/**
+ * @typedef {object} AttachmentAdded
+ * @property {string} id
+ * @property {string} mime Sniffed in Rust, never from the file name.
+ * @property {number} size
+ */
+
+/**
+ * @typedef {object} AttachmentInfo
+ * @property {string} id
+ * @property {string} name
+ * @property {string} mime
+ * @property {number} size
+ */
+
+/**
+ * The URL the webview loads an attachment from (§6.4). The id is
+ * the only thing in it — never a path.
+ * @param {string} id
+ */
+export function assetUrl(id) {
+    return `soirvu-asset://localhost/${id}`;
+}
+
+/**
+ * Starts a chunked upload (§6.1).
+ * @param {string} entryId
+ * @param {string} name Original file name.
+ * @param {string | null} mimeHint
+ * @returns {Promise<string>} The upload id.
+ */
+export function attachmentBegin(entryId, name, mimeHint) {
+    return invoke("attachment_begin", { entryId, name, mimeHint });
+}
+
+const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/** Base64 for one chunk (standard alphabet, padded). */
+function encodeBase64(bytes) {
+    let out = "";
+    for (let i = 0; i < bytes.length; i += 3) {
+        const b0 = bytes[i];
+        const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+        const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+        const n = (b0 << 16) | (b1 << 8) | b2;
+        out += B64[(n >> 18) & 63];
+        out += B64[(n >> 12) & 63];
+        out += i + 1 < bytes.length ? B64[(n >> 6) & 63] : "=";
+        out += i + 2 < bytes.length ? B64[n & 63] : "=";
+    }
+    return out;
+}
+
+/**
+ * Sends one slice of an upload. Slices travel as base64: the
+ * isolation pattern carries JSON, not binary bodies.
+ * @param {string} uploadId
+ * @param {Uint8Array} bytes
+ */
+export function attachmentChunk(uploadId, bytes) {
+    return invoke("attachment_chunk", { uploadId, dataBase64: encodeBase64(bytes) });
+}
+
+/**
+ * Sniffs, caps, strips (per settings) and commits an upload.
+ * @param {string} uploadId
+ * @returns {Promise<AttachmentAdded>}
+ */
+export function attachmentFinish(uploadId) {
+    return invoke("attachment_finish", { uploadId });
+}
+
+/** @param {string} uploadId */
+export function attachmentAbort(uploadId) {
+    return invoke("attachment_abort", { uploadId });
+}
+
+/**
+ * @param {string} id
+ * @returns {Promise<AttachmentInfo>}
+ */
+export function attachmentInfo(id) {
+    return invoke("attachment_info", { id });
+}
+
+/**
+ * Rust-side picker + streaming import for very large files (§6.1).
+ * Resolves to null when the user cancels the picker.
+ * @param {string} entryId
+ * @returns {Promise<AttachmentAdded | null>}
+ */
+export function attachmentImport(entryId) {
+    return invoke("attachment_import", { entryId });
+}
+
+/**
+ * Native save dialog, then the decrypted copy is written there.
+ * @param {string} id
+ * @returns {Promise<boolean>} False when the user cancels.
+ */
+export function attachmentSaveCopy(id) {
+    return invoke("attachment_save_copy", { id });
+}
+
 /** @param {Settings} settings */
 export function settingsSet(settings) {
     return invoke("settings_set", { settings });

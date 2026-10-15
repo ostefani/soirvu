@@ -10,6 +10,7 @@
 
 use serde::Serialize;
 
+use super::attachments::{AttachmentAdded, AttachmentInfo};
 use super::entries::{EntryDto, EntryPage, EntrySummary, HitDto, SaveDraft, TagDto};
 use super::vault::{Created, Picked};
 use crate::error::AppError;
@@ -150,6 +151,27 @@ fn vault_status_event_values() {
             Status::Unlocked,
             Status::Locking,
         ],
+    );
+}
+
+#[test]
+fn attachment_shapes() {
+    snap(
+        "attachment_added",
+        &AttachmentAdded {
+            id: "0190a1b2-7c3d-7abc-8def-0123456789ab".into(),
+            mime: "image/png".into(),
+            size: 12345,
+        },
+    );
+    snap(
+        "attachment_info",
+        &AttachmentInfo {
+            id: "0190a1b2-7c3d-7abc-8def-0123456789ab".into(),
+            name: "photo.png".into(),
+            mime: "image/png".into(),
+            size: 12345,
+        },
     );
 }
 

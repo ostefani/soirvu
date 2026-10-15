@@ -18,6 +18,54 @@ use state::AppState;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // soirvu-asset://<attachment_id> (§6.4): serves decrypted
+        // attachment bytes by id only — never a path — and only
+        // while the vault is unlocked. Range requests get a 206
+        // with exactly the needed chunks decrypted.
+        .register_asynchronous_uri_scheme_protocol(
+            "soirvu-asset",
+            |ctx, request, responder| {
+                use tauri::Manager;
+                let app = ctx.app_handle().clone();
+                let uri = request.uri();
+                let path_id = uri.path().trim_matches('/');
+                let id: String = if !path_id.is_empty() && !path_id.contains('/') {
+                    path_id.to_string()
+                } else {
+                    uri.host().unwrap_or("").to_string()
+                };
+                let range = request
+                    .headers()
+                    .get(tauri::http::header::RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|v| v.to_string());
+                tauri::async_runtime::spawn(async move {
+                    let answer = if id.is_empty()
+                        || id.len() > 64
+                        || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                    {
+                        crate::commands::attachments::AssetResponse {
+                            status: 400,
+                            headers: vec![("Content-Length".into(), "0".into())],
+                            body: Vec::new(),
+                        }
+                    } else {
+                        let state = app.state::<crate::state::AppState>();
+                        crate::commands::attachments::serve_asset(&state, &id, range.as_deref())
+                    };
+                    let mut builder = tauri::http::Response::builder()
+                        .status(answer.status);
+                    for (name, value) in &answer.headers {
+                        builder = builder.header(name.as_str(), value.as_str());
+                    }
+                    responder.respond(
+                        builder.body(answer.body).unwrap_or_else(|_| {
+                            tauri::http::Response::new(Vec::new())
+                        }),
+                    );
+                });
+            },
+        )
         .setup(|app| {
             // App config (§3): ~/Library/Application Support/Soirvu/
             let config_dir = app.path().config_dir()?.join("Soirvu");
@@ -87,6 +135,13 @@ pub fn run() {
             commands::misc::settings_set,
             commands::misc::settings_pick_backup_dir,
             commands::misc::settings_clear_backup_dir,
+            commands::attachments::attachment_begin,
+            commands::attachments::attachment_chunk,
+            commands::attachments::attachment_finish,
+            commands::attachments::attachment_abort,
+            commands::attachments::attachment_info,
+            commands::attachments::attachment_import,
+            commands::attachments::attachment_save_copy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Soirvu");

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-attachment-finish"
+description = "Enables the attachment_finish command without any pre-configured scope."
+commands.allow = ["attachment_finish"]
+
+[[permission]]
+identifier = "deny-attachment-finish"
+description = "Denies the attachment_finish command without any pre-configured scope."
+commands.deny = ["attachment_finish"]

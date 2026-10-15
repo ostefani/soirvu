@@ -19,6 +19,7 @@
     let status = $state('');
     let deleteArmed = $state(false);
     let mountEl = $state(null);
+    let fileInput = $state(null);
     let info = $state(null);
 
     let editor = null;
@@ -86,6 +87,8 @@
             markdown: entry.body_md,
             onChange: () => markDirty(),
             onSelectionChange: refreshToolbar,
+            onAttach: (file) => attachFile(file),
+            onAttachmentView: (el, id) => hydrateAttachment(el, id),
             onOpenLink: (href) => {
                 if (href.startsWith('https://') || href.startsWith('mailto:')) {
                     api.openLink(href).catch(() => {});
@@ -93,6 +96,80 @@
             },
         });
     });
+
+    // Attachments (§6.5): the file is read in 1 MiB slices and
+    // sent through the chunked upload; Rust sniffs, caps and
+    // strips it, and the editor inserts the node. A paste or drop
+    // of files lands here too, through the editor's onAttach.
+    const ATTACH_CHUNK = 1024 * 1024;
+
+    async function attachFile(file) {
+        if (!entry || !editor) return;
+        status = `Attaching ${file.name}…`;
+        let uploadId = null;
+        try {
+            uploadId = await api.attachmentBegin(entry.id, file.name, file.type || null);
+            for (let offset = 0; offset < file.size; offset += ATTACH_CHUNK) {
+                const slice = await file.slice(offset, offset + ATTACH_CHUNK).arrayBuffer();
+                await api.attachmentChunk(uploadId, new Uint8Array(slice));
+            }
+            const added = await api.attachmentFinish(uploadId);
+            uploadId = null;
+            editor.insertAttachment({ id: added.id, mime: added.mime, name: file.name });
+            status = 'Saved';
+        } catch (e) {
+            if (uploadId) api.attachmentAbort(uploadId).catch(() => {});
+            if (e === 'too_large') status = 'That file is too large for its type.';
+            else if (e === 'unsupported_type') status = 'That file type is not supported.';
+            else if (e === 'locked') status = 'The diary is locked.';
+            else status = `Could not attach the file (${e}).`;
+        }
+    }
+
+    function onFilesPicked() {
+        for (const file of fileInput.files) attachFile(file);
+        fileInput.value = '';
+    }
+
+    // Fills an attachment block with its viewer (§6.4): the type
+    // comes from Rust (attachment_info), never from the file name.
+    async function hydrateAttachment(el, id) {
+        try {
+            const info = await api.attachmentInfo(id);
+            el.replaceChildren();
+            const url = api.assetUrl(info.id);
+            if (info.mime.startsWith('video/')) {
+                const v = document.createElement('video');
+                v.controls = true;
+                v.src = url;
+                el.appendChild(v);
+            } else if (info.mime.startsWith('audio/')) {
+                const a = document.createElement('audio');
+                a.controls = true;
+                a.src = url;
+                el.appendChild(a);
+            } else if (info.mime === 'application/pdf') {
+                const f = document.createElement('iframe');
+                f.src = url;
+                f.title = info.name;
+                el.appendChild(f);
+            } else {
+                const label = document.createElement('span');
+                label.textContent = `${info.name} · ${Math.max(1, Math.round(info.size / 1024))} KB`;
+                el.appendChild(label);
+            }
+            const saveBtn = document.createElement('button');
+            saveBtn.type = 'button';
+            saveBtn.textContent = 'Save a copy…';
+            saveBtn.className = 'attachment-save';
+            saveBtn.addEventListener('click', () => {
+                api.attachmentSaveCopy(info.id).catch(() => {});
+            });
+            el.appendChild(saveBtn);
+        } catch {
+            el.textContent = 'Attachment unavailable.';
+        }
+    }
 
     onDestroy(() => {
         clearTimeout(saveTimer);
@@ -121,7 +198,14 @@
             </select>
         </div>
         <input class="tags-input" placeholder="Tags, comma separated" bind:value={tagsText} oninput={markDirty} />
-        <EditorToolbar {editor} {info} />
+        <EditorToolbar {editor} {info} onAttach={() => fileInput?.click()} />
+        <input
+            type="file"
+            multiple
+            hidden
+            bind:this={fileInput}
+            onchange={onFilesPicked}
+        />
         <div class="editor-mount" bind:this={mountEl}></div>
         <div class="editor-foot">
             <span class="status">{status}</span>
@@ -257,5 +341,32 @@
         .editor-mount :global(li[data-checked="true"]) {
             color: rgba(255, 255, 255, 0.55);
         }
+    }
+
+    :global(.editor-mount div.attachment) {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        flex-wrap: wrap;
+        margin: 0.4rem 0;
+    }
+    :global(.editor-mount div.attachment video) {
+        max-width: 100%;
+        max-height: 22rem;
+    }
+    :global(.editor-mount div.attachment audio) {
+        flex: 1;
+        min-width: 12rem;
+    }
+    :global(.editor-mount div.attachment iframe) {
+        width: 100%;
+        height: 26rem;
+        border: 1px solid #ddd;
+    }
+    :global(.editor-mount img[data-blocked-image]) {
+        display: inline-block;
+        width: 1.2em;
+        height: 1.2em;
+        background: #eee;
     }
 </style>

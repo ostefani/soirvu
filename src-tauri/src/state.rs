@@ -110,6 +110,19 @@ struct Inner {
     backoff_until: Option<Instant>,
     /// Folder picked for a create that has not happened yet.
     pending_create: Option<PathBuf>,
+    /// In-flight attachment uploads (§6.1): chunks accumulate here
+    /// until attachment_finish commits them. Plaintext lives in
+    /// process memory only — never on disk — and is dropped on lock.
+    uploads: std::collections::HashMap<String, Upload>,
+    upload_seq: u64,
+}
+
+/// One in-flight attachment upload.
+pub struct Upload {
+    pub entry_id: String,
+    pub name: String,
+    pub mime_hint: Option<String>,
+    pub bytes: Vec<u8>,
 }
 
 pub struct AppState {
@@ -135,6 +148,8 @@ impl AppState {
                 unlock_failures: 0,
                 backoff_until: None,
                 pending_create: None,
+                uploads: std::collections::HashMap::new(),
+                upload_seq: 0,
             }),
             config_file,
         }
@@ -307,10 +322,57 @@ impl AppState {
         inner.backoff_until = Some(Instant::now() + wait);
     }
 
+    /// Starts an attachment upload (§6.1). The vault must be
+    /// unlocked; the entry is checked by the core at finish.
+    pub fn begin_upload(
+        &self,
+        entry_id: String,
+        name: String,
+        mime_hint: Option<String>,
+    ) -> AppResult<String> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.vault.is_none() {
+            return Err(AppError::Code("locked".into()));
+        }
+        inner.upload_seq += 1;
+        let id = format!("upload-{}", inner.upload_seq);
+        inner.uploads.insert(
+            id.clone(),
+            Upload { entry_id, name, mime_hint, bytes: Vec::new() },
+        );
+        Ok(id)
+    }
+
+    pub fn push_chunk(&self, upload_id: &str, bytes: &[u8]) -> AppResult<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let upload = inner
+            .uploads
+            .get_mut(upload_id)
+            .ok_or_else(|| AppError::Code("invalid_input".into()))?;
+        if upload.bytes.len() + bytes.len() > crate::commands::attachments::MAX_UPLOAD_HARD_CAP {
+            return Err(AppError::Code("too_large".into()));
+        }
+        upload.bytes.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    pub fn take_upload(&self, upload_id: &str) -> AppResult<Upload> {
+        let mut inner = self.inner.lock().unwrap();
+        inner
+            .uploads
+            .remove(upload_id)
+            .ok_or_else(|| AppError::Code("invalid_input".into()))
+    }
+
+    pub fn drop_upload(&self, upload_id: &str) {
+        self.inner.lock().unwrap().uploads.remove(upload_id);
+    }
+
     /// Unlocked ──► Locking ──► Locked (or Unavailable if the vault
     /// folder is gone). Zeroizes the keys via the core's lock().
     pub fn lock(&self) {
         let mut inner = self.inner.lock().unwrap();
+        inner.uploads.clear();
         if inner.vault.is_none() {
             return;
         }

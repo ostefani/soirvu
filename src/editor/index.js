@@ -10,7 +10,7 @@
 // closing it untouched saves nothing and rewrites nothing.
 
 import { Fragment, Slice } from "prosemirror-model";
-import { EditorState, selectionNear } from "./state.js";
+import { EditorState, TextSelection, selectionNear } from "./state.js";
 import { EditorView } from "./view.js";
 import { historyPlugin } from "./history.js";
 import { inputRulesPlugin, keymapPlugin } from "./rules.js";
@@ -122,8 +122,12 @@ export function makePasteHandler() {
  * @param {(markdown: string) => void} [options.onChange] Called
  *   after every document-changing transaction, with the entry
  *   serialized back to normalized Markdown.
- * @param {(file: File) => void} [options.onAttach] Reserved for
- *   the attachment flow (§6.5, Phase 4).
+ * @param {(file: File) => void} [options.onAttach] A file was
+ *   pasted or dropped (§6.5, Phase 4): the app uploads it and then
+ *   calls insertAttachment with the result.
+ * @param {(el: HTMLElement, id: string) => void} [options.onAttachmentView]
+ *   An attachment block was rendered: the app fills the element
+ *   with the right viewer for the attachment's type (§6.4).
  * @param {(href: string) => void} [options.onOpenLink] A link was
  *   clicked; the app routes https/mailto through open_link.
  * @param {() => void} [options.onSelectionChange] Called after
@@ -131,7 +135,7 @@ export function makePasteHandler() {
  *   selection toolbar) can re-render from query().
  */
 export function createEditor(el, options = {}) {
-    const { markdown = "", onChange = () => {}, onOpenLink = null, onSelectionChange = null } = options;
+    const { markdown = "", onChange = () => {}, onOpenLink = null, onSelectionChange = null, onAttach = null, onAttachmentView = null } = options;
     let readonly = false;
 
     const plugins = [inputRulesPlugin(), keymapPlugin(schema), historyPlugin()];
@@ -143,6 +147,7 @@ export function createEditor(el, options = {}) {
             view.updateState(next);
             if (tr.docChanged) onChange(serializeMarkdown(next.doc));
             if (onSelectionChange) onSelectionChange();
+            hydrateAttachments();
         },
         editable: () => !readonly,
         onTaskToggle: (itemPos) => {
@@ -152,7 +157,23 @@ export function createEditor(el, options = {}) {
             if (onOpenLink && href) onOpenLink(href);
         },
         onPasteText: makePasteHandler(),
+        onAttachFile: (file) => {
+            if (onAttach) onAttach(file);
+        },
     });
+
+    /** Fills freshly rendered attachment blocks via the app (§6.4). */
+    function hydrateAttachments() {
+        if (!onAttachmentView) return;
+        const blocks = view.dom.querySelectorAll(
+            "div.attachment[data-attachment-id]:not([data-hydrated])",
+        );
+        for (const el of blocks) {
+            el.dataset.hydrated = "1";
+            onAttachmentView(el, el.getAttribute("data-attachment-id"));
+        }
+    }
+    hydrateAttachments();
 
     const commands = toolbarCommands(schema);
 
@@ -173,6 +194,36 @@ export function createEditor(el, options = {}) {
         coordsAtPos(pos) {
             return view.coordsAtPos(pos);
         },
+        /**
+         * Inserts an uploaded attachment at the selection (§6.5):
+         * images inline, everything else as an attachment block
+         * after the current block.
+         * @param {{ id: string, mime: string, name: string }} added
+         */
+        insertAttachment(added) {
+            const { state } = view;
+            const nodes = state.schema.nodes;
+            const tr = state.tr();
+            if (added.mime.startsWith("image/")) {
+                const img = nodes.image.create({
+                    src: `attachment:${added.id}`,
+                    alt: added.name || "",
+                    title: null,
+                });
+                tr.replaceWith(state.selection.from, state.selection.to, [img]);
+            } else {
+                const block = nodes.attachment.create({
+                    attachmentId: added.id,
+                    name: added.name || "Attachment",
+                });
+                const $from = state.selection.$from;
+                const after = $from.depth >= 1 ? $from.after(1) : $from.pos;
+                tr.insert(after, [block, nodes.paragraph.create()]);
+                tr.setSelection(new TextSelection(after + block.nodeSize + 1));
+            }
+            view.dispatch(tr);
+            view.focus();
+        },
         getMarkdown() {
             return serializeMarkdown(view.state.doc);
         },
@@ -180,6 +231,7 @@ export function createEditor(el, options = {}) {
         setMarkdown(md) {
             view.updateState(EditorState.create({ doc: parseMarkdown(md), plugins }));
             if (onSelectionChange) onSelectionChange();
+            hydrateAttachments();
         },
         focus() {
             view.focus();

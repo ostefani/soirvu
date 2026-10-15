@@ -6,7 +6,7 @@
     // and their active-state logic live in editor/toolbar.js.
     // Buttons take the mousedown without letting it move focus,
     // so the editor keeps its selection.
-    let { editor, info } = $props();
+    let { editor, info, onAttach = null } = $props();
 
     function run(name) {
         editor?.exec(name);
@@ -113,6 +113,10 @@
         onclick={() => run('codeBlock')}
         title="Code block">{'{ }'}</button
     >
+    {#if onAttach}
+        <span class="tb-sep"></span>
+        <button type="button" onmousedown={keepFocus} onclick={() => onAttach()}>Attach…</button>
+    {/if}
 </div>
 
 <style>

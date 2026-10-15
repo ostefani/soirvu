@@ -22,7 +22,14 @@ fn main() {
         "settings_get",
         "settings_set",
         "settings_pick_backup_dir",
-        "settings_clear_backup_dir"
+        "settings_clear_backup_dir",
+        "attachment_begin",
+        "attachment_chunk",
+        "attachment_finish",
+        "attachment_abort",
+        "attachment_info",
+        "attachment_import",
+        "attachment_save_copy"
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("failed to run tauri-build");

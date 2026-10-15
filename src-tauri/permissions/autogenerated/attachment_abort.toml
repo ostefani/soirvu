@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-attachment-abort"
+description = "Enables the attachment_abort command without any pre-configured scope."
+commands.allow = ["attachment_abort"]
+
+[[permission]]
+identifier = "deny-attachment-abort"
+description = "Denies the attachment_abort command without any pre-configured scope."
+commands.deny = ["attachment_abort"]

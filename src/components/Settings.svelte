@@ -9,6 +9,7 @@
 
     let settings = $state(null);
     let timeoutMin = $state(5);
+    let stripExif = $state(true);
     let error = $state("");
     let note = $state("");
 
@@ -16,6 +17,7 @@
         try {
             settings = await api.settingsGet();
             timeoutMin = Math.max(1, Math.round(settings.lock_timeout_secs / 60));
+            stripExif = settings.strip_exif;
         } catch (e) {
             error = `Something went wrong (${e}).`;
         }
@@ -27,6 +29,18 @@
         try {
             const next = { ...settings, lock_timeout_secs: Math.max(1, Math.round(timeoutMin)) * 60 };
             await api.settingsSet(next);
+            settings = await api.settingsGet();
+            note = "Saved.";
+        } catch (e) {
+            error = `Something went wrong (${e}).`;
+        }
+    }
+
+    async function saveStrip() {
+        error = "";
+        note = "";
+        try {
+            await api.settingsSet({ ...settings, strip_exif: stripExif });
             settings = await api.settingsGet();
             note = "Saved.";
         } catch (e) {
@@ -65,6 +79,11 @@
             <input type="number" min="1" bind:value={timeoutMin} />
         </label>
         <button onclick={saveTimeout}>Save lock timeout</button>
+
+        <label>
+            Strip location metadata (EXIF) from photos on import
+            <input type="checkbox" bind:checked={stripExif} onchange={saveStrip} />
+        </label>
 
         <p>
             Backup location:
