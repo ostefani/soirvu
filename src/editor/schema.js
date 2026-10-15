@@ -50,6 +50,44 @@ const nodes = base.spec.nodes
             ],
         },
     })
+    // Tables (Phase 7, §6.5): GFM pipe tables. A cell holds
+    // exactly one paragraph of inline content; the first row's
+    // cells are headers. Alignment lives on the cells of the
+    // header row and is written back into the delimiter row.
+    .append({
+        table: {
+            content: "table_row+",
+            group: "block",
+            toDOM: () => ["table", 0],
+            parseDOM: [{ tag: "table" }],
+        },
+        table_row: {
+            content: "table_cell+",
+            toDOM: () => ["tr", 0],
+            parseDOM: [{ tag: "tr" }],
+        },
+        table_cell: {
+            content: "paragraph",
+            attrs: {
+                header: { default: false },
+                align: { default: null },
+            },
+            toDOM: (node) => [
+                node.attrs.header ? "th" : "td",
+                node.attrs.align ? { style: `text-align: ${node.attrs.align}` } : {},
+                0,
+            ],
+            parseDOM: [
+                {
+                    tag: "td, th",
+                    getAttrs: (dom) => ({
+                        header: dom.tagName === "TH",
+                        align: dom.style.textAlign || null,
+                    }),
+                },
+            ],
+        },
+    })
     // Task items: list_item gains an optional checked attribute.
     // null = a plain item, false = [ ], true = [x].
     .update("list_item", {

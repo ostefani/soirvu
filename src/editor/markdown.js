@@ -96,6 +96,7 @@ const SUPPORTED_TOP = new Set([
     "code_block",
     "fence",
     "hr",
+    "table_open",
 ]);
 
 // Footnote definitions are found by a line scan, not by a plugin:
@@ -236,6 +237,9 @@ const parser = new MarkdownParser(schema, md, {
         noCloseToken: true,
     },
     hr: { node: "horizontal_rule" },
+    table: { block: "table" },
+    tr: { block: "table_row" },
+
     image: {
         node: "image",
         getAttrs: (tok) => ({
@@ -292,6 +296,36 @@ parser.tokenHandlers.link_open = (state, tok) => {
     );
 };
 
+// Cells: markdown-it puts the inline content directly inside
+// th/td, with no paragraph token — but a cell holds exactly
+// one paragraph (§6.5), so the handlers open and close both.
+function openCell(state, tok, header) {
+    state.openNode(schema.nodes.table_cell, { header, align: cellAlign(tok) });
+    state.openNode(schema.nodes.paragraph);
+}
+function closeCell(state) {
+    state.closeNode();
+    state.closeNode();
+}
+parser.tokenHandlers.th_open = (state, tok) => openCell(state, tok, true);
+parser.tokenHandlers.th_close = (state) => closeCell(state);
+parser.tokenHandlers.td_open = (state, tok) => openCell(state, tok, false);
+parser.tokenHandlers.td_close = (state) => closeCell(state);
+
+// Wrapper tokens with no node of their own: rows and cells
+// open directly under the table.
+parser.tokenHandlers.thead_open = () => {};
+parser.tokenHandlers.thead_close = () => {};
+parser.tokenHandlers.tbody_open = () => {};
+parser.tokenHandlers.tbody_close = () => {};
+
+// markdown-it marks a cell's alignment as a style attribute.
+function cellAlign(tok) {
+    const style = tok.attrGet("style") || "";
+    const m = /text-align:\s*(left|center|right)/.exec(style);
+    return m ? m[1] : null;
+}
+
 // Inline HTML (a stray <b>, an <img onerror>) stays as literal text:
 // the schema has no HTML, and the text is what the writer sees.
 parser.tokenHandlers.html_inline = (state, tok) => state.addText(tok.content);
@@ -330,6 +364,45 @@ function listIsTight(tokens, i) {
 const serializer = new MarkdownSerializer(
     {
         ...defaultMarkdownSerializer.nodes,
+        table(state, node) {
+            // Flush the previous block's pending close first:
+            // the cell rendering below measures state.out, and a
+            // flush landing mid-measure would corrupt the row.
+            state.write();
+            const delim = { left: ":---", center: ":---:", right: "---:", none: "---" };
+            node.forEach((row, _o, rowIndex) => {
+                let line = "|";
+                row.forEach((cell) => {
+                    line += " ";
+                    const start = state.out.length;
+                    if (cell.firstChild) state.renderInline(cell.firstChild);
+                    const seg = state.out.slice(start);
+                    state.out = state.out.slice(0, start);
+                    // A literal pipe in cell text would split the
+                    // cell on reparse; escape it (markdown-it
+                    // reads \| back as |). No lookbehind: the
+                    // placeholder dance keeps old Safari happy.
+                    line += seg
+                        .replace(/\\\|/g, "\u0001")
+                        .replace(/\|/g, "\\|")
+                        .replace(/\u0001/g, "\\|");
+                    line += " |";
+                });
+                state.write(line);
+                state.write("\n");
+                if (rowIndex === 0) {
+                    let marks = "|";
+                    row.forEach((cell) => {
+                        marks += " " + delim[cell.attrs.align || "none"] + " |";
+                    });
+                    state.write(marks);
+                    state.write("\n");
+                }
+            });
+            state.closeBlock(node);
+        },
+        table_row() {},
+        table_cell() {},
         raw_block(state, node) {
             state.write(node.textContent);
             state.closeBlock(node);

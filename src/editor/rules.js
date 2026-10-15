@@ -37,6 +37,7 @@ import {
     wrapBlocks,
 } from "./commands.js";
 import { redo, undo } from "./history.js";
+import { enterInTable, tabInTable } from "./table.js";
 
 export const rulesKey = "soirvu-rules";
 
@@ -369,7 +370,7 @@ export function keymapPlugin(schema) {
         "Mod-z": undo,
         "Mod-y": redo,
         "Shift-Mod-z": redo,
-        Enter: chainCommands(splitListItem, newlineInCode, liftEmptyBlock, splitBlock, createParagraphNear),
+        Enter: chainCommands(enterInTable, splitListItem, newlineInCode, liftEmptyBlock, splitBlock, createParagraphNear),
         "Shift-Enter": insertHardBreak,
         Backspace: chainCommands(undoInputRule, deleteSelection, deleteChar(-1), joinBackward, selectNodeBackward),
         Delete: chainCommands(deleteSelection, deleteChar(1), joinForward, selectNodeForward),
@@ -377,8 +378,8 @@ export function keymapPlugin(schema) {
         "Alt-Backspace": deleteWord(-1),
         "Mod-Delete": deleteWord(1),
         "Alt-Delete": deleteWord(1),
-        Tab: sinkListItem,
-        "Shift-Tab": liftListItem,
+        Tab: chainCommands(tabInTable(1), sinkListItem),
+        "Shift-Tab": chainCommands(tabInTable(-1), liftListItem),
     };
     if (marks.strong) table["Mod-b"] = toggleMark(marks.strong);
     if (marks.em) table["Mod-i"] = toggleMark(marks.em);

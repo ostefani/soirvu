@@ -117,6 +117,39 @@
         <span class="tb-sep"></span>
         <button type="button" onmousedown={keepFocus} onclick={() => onAttach()}>Attach…</button>
     {/if}
+    <span class="tb-sep"></span>
+    <button
+        type="button"
+        onmousedown={keepFocus}
+        onclick={() => run('insertTable')}
+        title="Insert table">Table</button
+    >
+    {#if info?.inTable}
+        <button
+            type="button"
+            onmousedown={keepFocus}
+            onclick={() => run('addRow')}
+            title="Add a row below">+Row</button
+        >
+        <button
+            type="button"
+            onmousedown={keepFocus}
+            onclick={() => run('addColumn')}
+            title="Add a column to the right">+Col</button
+        >
+        <button
+            type="button"
+            onmousedown={keepFocus}
+            onclick={() => run('deleteRow')}
+            title="Delete this row">−Row</button
+        >
+        <button
+            type="button"
+            onmousedown={keepFocus}
+            onclick={() => run('deleteColumn')}
+            title="Delete this column">−Col</button
+        >
+    {/if}
 </div>
 
 <style>

@@ -14,6 +14,14 @@ import {
     wrapBlocks,
 } from "./commands.js";
 import { selectionNear } from "./state.js";
+import {
+    addColumnCommand,
+    addRowCommand,
+    deleteColumnCommand,
+    deleteRowCommand,
+    insertTableCommand,
+    tableContext,
+} from "./table.js";
 
 /** A plain description of the selection, for rendering the
  *  toolbar's active states. `block` is the textblock at the
@@ -33,6 +41,7 @@ export function selectionInfo(state) {
         headingLevel: null,
         quote: false,
         list: null,
+        inTable: false,
     };
     if (sel.type !== "text") return info;
     const { marks, nodes } = state.schema;
@@ -50,6 +59,7 @@ export function selectionInfo(state) {
     } else if (parent.type === nodes.paragraph) {
         info.block = "paragraph";
     }
+    info.inTable = Boolean(tableContext(state));
     for (let d = 1; d <= $from.depth; d++) {
         const node = $from.node(d);
         if (node.type === nodes.blockquote) info.quote = true;
@@ -162,6 +172,11 @@ export function toolbarCommands(schema) {
             }
             return false;
         },
+        insertTable: insertTableCommand,
+        addRow: addRowCommand,
+        addColumn: addColumnCommand,
+        deleteRow: deleteRowCommand,
+        deleteColumn: deleteColumnCommand,
         bulletList: listCommand("bullet"),
         orderedList: listCommand("ordered"),
         taskList: (state, dispatch) => {

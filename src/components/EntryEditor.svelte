@@ -365,4 +365,28 @@
         height: 1.2em;
         background: #eee;
     }
+    /* Tables (Phase 7): plain grid, header row shaded. */
+    .editor-mount :global(table) {
+        border-collapse: collapse;
+        margin: 0.5em 0;
+    }
+
+    .editor-mount :global(th),
+    .editor-mount :global(td) {
+        border: 1px solid rgba(127, 127, 127, 0.45);
+        padding: 0.25em 0.6em;
+        min-width: 3em;
+        text-align: left;
+        vertical-align: top;
+    }
+
+    .editor-mount :global(th) {
+        background: rgba(127, 127, 127, 0.12);
+        font-weight: 600;
+    }
+
+    .editor-mount :global(td p),
+    .editor-mount :global(th p) {
+        margin: 0;
+    }
 </style>
