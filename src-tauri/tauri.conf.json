@@ -14,7 +14,13 @@
         "windows": [],
         "security": {
             "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' soirvu-asset:; media-src soirvu-asset:; connect-src ipc: http://ipc.localhost",
-            "devCsp": "default-src 'self' http://localhost:5173; script-src 'self' http://localhost:5173 'unsafe-inline' 'unsafe-eval'; style-src 'self' http://localhost:5173 'unsafe-inline'; img-src 'self' soirvu-asset: data: blob:; connect-src ipc: http://ipc.localhost http://localhost:5173 ws://localhost:5173"
+            "devCsp": "default-src 'self' http://localhost:5173; script-src 'self' http://localhost:5173 'unsafe-inline' 'unsafe-eval'; style-src 'self' http://localhost:5173 'unsafe-inline'; img-src 'self' soirvu-asset: data: blob:; connect-src ipc: http://ipc.localhost http://localhost:5173 ws://localhost:5173",
+            "pattern": {
+                "use": "isolation",
+                "options": {
+                    "dir": "isolation"
+                }
+            }
         }
     },
     "bundle": {

@@ -31,7 +31,7 @@
 
 set -u
 
-BUNDLE_ID="com.ostefanishyna.soirvu"
+BUNDLE_ID="dev.ostefani.soirvu"
 
 VAULT_DIR="${1:-${VAULT_DIR:-}}"
 if [ -z "$VAULT_DIR" ] || [ ! -d "$VAULT_DIR" ]; then

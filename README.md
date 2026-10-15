@@ -50,6 +50,9 @@ Prerequisites: Rust toolchain and Node.js.
 ```sh
 npm install
 npm run tauri dev
+
+# run leak test
+sh scripts/leak-test.sh <path-to-test_diar-folder>
 ```
 
 ## License

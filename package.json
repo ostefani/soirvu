@@ -9,7 +9,8 @@
         "preview": "vite preview",
         "tauri": "tauri",
         "test": "node --test test/*.test.js",
-        "check": "sh scripts/check-no-html.sh"
+        "check": "sh scripts/check-no-html.sh",
+        "leak": "sh scripts/leak-test.sh crates/soirvu-core"
     },
     "dependencies": {
         "@tauri-apps/api": "^2",
