@@ -156,6 +156,7 @@ pub fn run() {
             commands::vault::vault_forget,
             commands::vault::vault_relocate,
             commands::entries::entry_list,
+            commands::entries::calendar_days,
             commands::entries::entry_get,
             commands::entries::entry_save,
             commands::entries::entry_delete,

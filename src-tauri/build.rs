@@ -11,6 +11,7 @@ fn main() {
         "vault_forget",
         "vault_relocate",
         "entry_list",
+        "calendar_days",
         "entry_get",
         "entry_save",
         "entry_delete",
