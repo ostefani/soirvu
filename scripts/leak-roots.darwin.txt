@@ -1,0 +1,5 @@
+__HOME__/Library/WebKit/__BUNDLE_ID__
+__HOME__/Library/Caches/__BUNDLE_ID__
+__HOME__/Library/Application Support/__BUNDLE_ID__
+__HOME__/Library/Application Support/Soirvu
+__HOME__/Library/Application Support/Soirvu Dev

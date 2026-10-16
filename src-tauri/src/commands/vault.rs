@@ -806,9 +806,9 @@ pub async fn vault_rotate_master_key(
     if old.exists() {
         let _ = std::fs::remove_dir_all(&old);
     }
-    std::fs::rename(&src, &old).map_err(|_| "storage".to_string())?;
-    if std::fs::rename(&staging, &src).is_err() {
-        let _ = std::fs::rename(&old, &src);
+    crate::platform::rename_retry(&src, &old).map_err(|_| "storage".to_string())?;
+    if crate::platform::rename_retry(&staging, &src).is_err() {
+        let _ = crate::platform::rename_retry(&old, &src);
         return Err("storage".into());
     }
     let _ = std::fs::remove_dir_all(&old);

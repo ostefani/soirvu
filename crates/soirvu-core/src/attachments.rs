@@ -422,7 +422,7 @@ pub(crate) fn write_blob(dir: &Path, id: &str, key: &Key, reader: &mut impl Read
         }
         file.sync_all()?;
         drop(file);
-        fs::rename(&tmp, &final_path)?;
+        crate::folder::rename_retry(&tmp, &final_path)?;
         #[cfg(unix)]
         if let Some(parent) = final_path.parent() {
             File::open(parent)?.sync_all()?;

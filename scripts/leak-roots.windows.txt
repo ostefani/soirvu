@@ -1,0 +1,6 @@
+__APPDATA__/Soirvu
+__APPDATA__/Soirvu Dev
+__LOCALAPPDATA__/__BUNDLE_ID__
+__LOCALAPPDATA__/Soirvu
+__LOCALAPPDATA__/CrashDumps
+__APPDATA__/Microsoft/Windows/Recent

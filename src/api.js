@@ -376,7 +376,12 @@ export function settingsGet() {
  * @param {string} id
  */
 export function assetUrl(id) {
-    return `soirvu-asset://localhost/${id}`;
+    // §12: on Windows the scheme is served as an
+    // http://<scheme>.localhost origin; everywhere else
+    // the scheme form. (Same rule as the editor's copy.)
+    return navigator.userAgent.includes("Windows")
+        ? `http://soirvu-asset.localhost/${id}`
+        : `soirvu-asset://localhost/${id}`;
 }
 
 /**

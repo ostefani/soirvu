@@ -159,7 +159,7 @@ pub fn make_backup(state: &AppState) -> AppResult<String> {
     }
     let dest = per_vault.join(&stamp);
     let _ = fs::remove_dir_all(&dest);
-    fs::rename(&tmp, &dest).map_err(|_| unavailable())?;
+    crate::platform::rename_retry(&tmp, &dest).map_err(|_| unavailable())?;
     prune(&per_vault, &src);
 
     let display = per_vault

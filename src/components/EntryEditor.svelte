@@ -81,13 +81,18 @@
     // NOT return a cleanup that destroys the editor: `entry` is
     // reassigned by every save, which re-runs the effect; the guard
     // makes those runs no-ops, and onDestroy does the teardown.
+    const ASSET_PREFIXES = ['soirvu-asset://localhost/', 'http://soirvu-asset.localhost/'];
+
     $effect(() => {
         if (!entry || !mountEl || editor) return;
         mountEl.addEventListener('dblclick', (e) => {
             const img = e.target.closest('img');
             const src = img?.getAttribute('src') || '';
-            if (src.startsWith('soirvu-asset://localhost/')) {
-                api.attachmentOpen(src.slice('soirvu-asset://localhost/'.length)).catch(() => {});
+            // §12: the asset origin takes the localhost form
+            // on Windows; the id follows either prefix.
+            const prefix = ASSET_PREFIXES.find((p) => src.startsWith(p));
+            if (prefix) {
+                api.attachmentOpen(src.slice(prefix.length)).catch(() => {});
             }
         });
         editor = createEditor(mountEl, {

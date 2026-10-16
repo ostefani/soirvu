@@ -1,0 +1,20 @@
+{
+    "app": {
+        "security": {
+            "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' soirvu-asset: http://soirvu-asset.localhost; media-src soirvu-asset: http://soirvu-asset.localhost; connect-src ipc: http://ipc.localhost"
+        }
+    },
+    "bundle": {
+        "targets": [
+            "nsis"
+        ],
+        "windows": {
+            "webviewInstallMode": {
+                "type": "embedBootstrapper"
+            },
+            "nsis": {
+                "installMode": "currentUser"
+            }
+        }
+    }
+}

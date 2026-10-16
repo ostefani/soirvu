@@ -229,7 +229,22 @@ fn lock_bytes(key: &Key) {
     let _ = unsafe { libc::mlock(key.as_ptr() as *const libc::c_void, KEY_LEN) };
 }
 
-#[cfg(not(unix))]
+// libc does not export the memory-lock functions for
+// Windows; declared directly (kernel32), like the bridge's
+// platform FFI.
+#[cfg(windows)]
+unsafe extern "C" {
+    fn VirtualLock(address: *mut std::ffi::c_void, size: usize) -> i32;
+    fn VirtualUnlock(address: *mut std::ffi::c_void, size: usize) -> i32;
+}
+
+#[cfg(windows)]
+fn lock_bytes(key: &Key) {
+    // VirtualLock is mlock's Windows form (§12).
+    let _ = unsafe { VirtualLock(key.as_ptr() as *mut std::ffi::c_void, KEY_LEN) };
+}
+
+#[cfg(not(any(unix, windows)))]
 fn lock_bytes(_key: &Key) {}
 
 #[cfg(unix)]
@@ -237,7 +252,12 @@ fn unlock_bytes(key: &Key) {
     let _ = unsafe { libc::munlock(key.as_ptr() as *const libc::c_void, KEY_LEN) };
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn unlock_bytes(key: &Key) {
+    let _ = unsafe { VirtualUnlock(key.as_ptr() as *mut std::ffi::c_void, KEY_LEN) };
+}
+
+#[cfg(not(any(unix, windows)))]
 fn unlock_bytes(_key: &Key) {}
 
 /// 256 random bits held by the device keychain (Phase 8):

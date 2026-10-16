@@ -70,7 +70,13 @@ function enclosingAtom(domNode) {
 }
 
 function assetUrl(id) {
-    return `soirvu-asset://localhost/${id}`;
+    // §12: on Windows the scheme is served as an
+    // http://<scheme>.localhost origin; everywhere else
+    // the scheme form. The protocol handler reads the id
+    // from the path either way.
+    return navigator.userAgent.includes("Windows")
+        ? `http://soirvu-asset.localhost/${id}`
+        : `soirvu-asset://localhost/${id}`;
 }
 
 function markElement(mark) {

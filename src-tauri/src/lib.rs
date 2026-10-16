@@ -9,6 +9,8 @@ mod error;
 mod keychain;
 #[cfg(target_os = "linux")]
 mod linux_lock;
+#[cfg(target_os = "windows")]
+mod windows_lock;
 #[cfg(target_os = "macos")]
 mod macos_lock;
 mod platform;
@@ -107,10 +109,11 @@ pub fn run() {
                         && matches!(url.host_str(), Some("localhost" | "127.0.0.1")))
             });
             // WebKitGTK's default data manager persists site
-            // data under ~/.local/share; the ephemeral one
-            // keeps the diary's webview stateless (§6.3, §12).
+            // data under ~/.local/share, and WebView2 keeps a
+            // profile folder; the ephemeral flag keeps the
+            // diary's webview stateless on both (§6.3, §12).
             // platform-ok: the ephemeral flag is a builder option.
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             let builder = builder.incognito(true);
             let window = builder.build()?;
             let _ = window.set_focus();

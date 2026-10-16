@@ -340,13 +340,32 @@ impl Read for AttachmentReader<'_> {
     }
 }
 
+/// Rename, retrying briefly. On Windows a just-closed file
+/// can stay unrenamable for a moment while an antivirus or
+/// the indexer holds it open (§12); five tries over half a
+/// second cover the realistic holds. Elsewhere the first
+/// result stands.
+pub(crate) fn rename_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut result = fs::rename(from, to);
+    if cfg!(windows) {
+        for _ in 0..4 {
+            if result.is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            result = fs::rename(from, to);
+        }
+    }
+    result
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension("json.tmp");
     let mut file = File::create(&tmp)?;
     file.write_all(bytes)?;
     file.sync_all()?;
     drop(file);
-    fs::rename(&tmp, path)?;
+    rename_retry(&tmp, path)?;
     // Also force the rename itself to disk (directories can be opened on Unix only).
     #[cfg(unix)]
     if let Some(parent) = path.parent() {
