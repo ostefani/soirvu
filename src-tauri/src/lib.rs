@@ -101,12 +101,21 @@ pub fn run() {
             .title("Soirvu")
             .inner_size(1100.0, 760.0)
             .min_inner_size(720.0, 480.0)
+            // The editor handles drops itself (files, block
+            // drags) through the page's own events; Tauri's
+            // native handler replaces WebView2's and would
+            // swallow them on Windows (§12). Nothing in the
+            // app consumes Tauri's drag-drop events.
+            .disable_drag_drop_handler()
             .on_navigation(|url| {
                 // Only the app's own pages may load. Anything else
                 // is blocked; content links go through open_link.
                 url.scheme() == "tauri"
                     || (url.scheme() == "http"
-                        && matches!(url.host_str(), Some("localhost" | "127.0.0.1")))
+                        && matches!(
+                            url.host_str(),
+                            Some("localhost" | "127.0.0.1" | "tauri.localhost")
+                        ))
             });
             // WebKitGTK's default data manager persists site
             // data under ~/.local/share, and WebView2 keeps a
