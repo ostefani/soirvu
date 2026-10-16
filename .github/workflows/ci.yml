@@ -52,6 +52,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install exactly as the lockfile says, no scripts
         run: npm ci --ignore-scripts
+      - name: Check the Touch ID variant compiles
+        run: cargo check --manifest-path src-tauri/Cargo.toml --features touch-id
       - name: Build the app (ad-hoc signed, hardened runtime)
         run: npm run tauri build
       - name: Verify the signature (§9)

@@ -496,13 +496,16 @@ mod tests {
 /// What a finished fork hands back: the copy's new identity
 /// and its NEW recovery key (shown once, like at creation).
 /// Touch ID at the lock screen and in Settings (Phase 8):
-/// `capable` is a property of this build's signature (the
-/// keychain entitlement — spike 6), `enrolled` of the vault
-/// (its header carries a device slot). The UI shows the
-/// Touch ID button only when both are true, and a signing
-/// note instead of the controls when capable is false.
+/// `built_in` says the binary was compiled with the
+/// touch-id feature at all; `capable` adds this build's
+/// signature (the keychain entitlement — spike 6);
+/// `enrolled` is a property of the vault (its header
+/// carries a device slot). The UI shows the Touch ID button
+/// only when all three are true, and explains the specific
+/// gap otherwise.
 #[derive(Serialize)]
 pub struct TouchIdStatus {
+    pub built_in: bool,
     pub capable: bool,
     pub enrolled: bool,
 }
@@ -512,6 +515,7 @@ pub fn touch_id_status(
     state: State<'_, AppState>,
     vault_id: Option<String>,
 ) -> Result<TouchIdStatus, String> {
+    let built_in = cfg!(feature = "touch-id");
     let capable = crate::keychain::capable();
     let enrolled = match &vault_id {
         // The lock screen asks about the selected vault: its
@@ -528,7 +532,7 @@ pub fn touch_id_status(
             .with_vault(|vault| Ok(vault.has_device_slot()))
             .unwrap_or(false),
     };
-    Ok(TouchIdStatus { capable, enrolled })
+    Ok(TouchIdStatus { built_in, capable, enrolled })
 }
 
 enum TouchUnlockError {
@@ -569,11 +573,17 @@ pub async fn vault_unlock_touch_id(
             state.unlock_aborted();
             Err("touch_id_cancelled".into())
         }
+        Ok(Err(TouchUnlockError::Keychain(crate::keychain::KeychainError::NotFound))) => {
+            // A missing item (never stored, or the keychain
+            // was reset) is not a wrong guess either: no
+            // backoff, and the passphrase path is right there.
+            state.unlock_aborted();
+            Err("touch_id_unavailable".into())
+        }
         Ok(Err(TouchUnlockError::Keychain(e))) => {
             state.unlock_failed();
             Err(match e {
-                crate::keychain::KeychainError::NotFound
-                | crate::keychain::KeychainError::Unavailable => "touch_id_unavailable".into(),
+                crate::keychain::KeychainError::Unavailable => "touch_id_unavailable".into(),
                 _ => "storage".into(),
             })
         }

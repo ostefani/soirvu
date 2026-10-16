@@ -121,7 +121,7 @@ export function vaultUnlock(vaultId, kind, secret) {
  * screen asks about the selected diary) or null (Settings
  * asks about the open one). `capable` is a property of this
  * build's signature; `enrolled` of the diary.
- * @returns {Promise<{capable: boolean, enrolled: boolean}>}
+ * @returns {Promise<{built_in: boolean, capable: boolean, enrolled: boolean}>}
  */
 export function touchIdStatus(vaultId) {
     return invoke("touch_id_status", { vaultId });

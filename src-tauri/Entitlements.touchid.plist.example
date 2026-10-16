@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Touch ID build only (tauri.touchid.conf.json): the one
+     restricted entitlement, in its own file so the base
+     Entitlements.plist stays empty and ordinary builds never
+     carry it. The group is <team id>.<bundle id>; the team id
+     below is the Personal Team from spike 6 — another builder
+     uses their own. -->
+<plist version="1.0">
+<dict>
+    <key>keychain-access-groups</key>
+    <array>
+        <string>[put your id here].dev.ostefani.soirvu</string>
+    </array>
+</dict>
+</plist>

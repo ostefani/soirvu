@@ -170,6 +170,7 @@ fn touch_id_status_shape() {
     snap(
         "touch_id_status",
         &TouchIdStatus {
+            built_in: true,
             capable: true,
             enrolled: false,
         },

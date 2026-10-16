@@ -28,7 +28,7 @@ pub enum KeychainError {
     Failed(i32),
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(all(target_os = "macos", feature = "touch-id")))]
 mod imp {
     use super::KeychainError;
 
@@ -49,7 +49,7 @@ mod imp {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "touch-id"))]
 mod imp {
     use super::KeychainError;
     use std::ffi::{c_char, c_void, CString};

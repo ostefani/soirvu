@@ -3,6 +3,7 @@ source: src/commands/contract.rs
 expression: json
 ---
 {
+  "built_in": true,
   "capable": true,
   "enrolled": false
 }

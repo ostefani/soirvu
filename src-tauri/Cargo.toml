@@ -40,3 +40,13 @@ block2 = "0.6"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSPasteboard"] }
 objc2-foundation = { version = "0.3", features = ["NSNotification", "NSDistributedNotificationCenter", "NSOperation", "NSString"] }
+
+[features]
+# Touch ID (Phase 8) is opt-in at build time: it works only
+# in a build signed with a development profile carrying the
+# keychain entitlement, and that profile expires after about
+# a week — so ordinary builds leave it out and never carry
+# the entitlement at all. The Touch ID variant is built with
+# the overlay config:  tauri build --config
+# src-tauri/tauri.touchid.conf.json -- --features touch-id
+touch-id = []

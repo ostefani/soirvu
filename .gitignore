@@ -60,3 +60,5 @@ diary.db-wal
 diary.db-shm
 vault.header.json
 export-output/
+
+Entitlements.touchid.plist

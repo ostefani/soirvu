@@ -1,0 +1,10 @@
+{
+    "bundle": {
+        "macOS": {
+            "entitlements": "Entitlements.touchid.plist",
+            "files": {
+                "embedded.provisionprofile": "touchid.provisionprofile"
+            }
+        }
+    }
+}
