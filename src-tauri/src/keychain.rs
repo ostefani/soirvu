@@ -15,17 +15,31 @@
 
 /// Why a keychain operation did not produce a secret.
 #[derive(Debug)]
+// The stub implementation (any build that is not macOS with
+// the touch-id feature) only ever constructs Unavailable,
+// so the allowance is scoped to exactly those builds — in
+// the real build every variant must stay reachable, and the
+// warning should fire if one stops being produced.
+#[cfg_attr(
+    not(all(target_os = "macos", feature = "touch-id")),
+    allow(dead_code)
+)]
 pub enum KeychainError {
-    /// This build cannot use the data-protection keychain
-    /// (no entitlement, or not macOS).
+    /// This build cannot use the data-protection keychain:
+    /// built without the touch-id feature, not macOS, or
+    /// signed without the keychain entitlement.
     Unavailable,
     /// The user dismissed the fingerprint prompt.
     Cancelled,
     /// No item for this vault (never enrolled, or the item
     /// was invalidated when biometry changed).
     NotFound,
-    /// The Security framework said no, with this status.
-    Failed(i32),
+    /// The Security framework said no for a reason without
+    /// its own variant above. The raw status is not carried:
+    /// the three statuses that matter (-128, -25300, -34018)
+    /// are the other variants, and callers only need to know
+    /// this was none of them.
+    Failed,
 }
 
 #[cfg(not(all(target_os = "macos", feature = "touch-id")))]
@@ -219,7 +233,14 @@ mod imp {
             ERR_USER_CANCELED => KeychainError::Cancelled,
             ERR_ITEM_NOT_FOUND => KeychainError::NotFound,
             ERR_MISSING_ENTITLEMENT => KeychainError::Unavailable,
-            other => KeychainError::Failed(other),
+            other => {
+                // Not content, just the platform's number —
+                // it is what tells -25293 (authentication
+                // failed) apart from -25308 (interaction not
+                // allowed) when Touch ID misbehaves.
+                eprintln!("keychain: unmapped OSStatus {other}");
+                KeychainError::Failed
+            }
         }
     }
 
@@ -295,7 +316,7 @@ mod imp {
             let len = CFDataGetLength(data.as_ref());
             let ptr = CFDataGetBytePtr(data.as_ref());
             if ptr.is_null() || len < 0 {
-                return Err(KeychainError::Failed(status));
+                return Err(KeychainError::Failed);
             }
             Ok(std::slice::from_raw_parts(ptr, len as usize).to_vec())
         }
