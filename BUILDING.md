@@ -97,3 +97,37 @@ builds keep their registry, settings and keychain items
 separate from release builds ("Soirvu Dev" app data,
 `soirvu.device.dev` keychain service), so developing never
 touches real diaries' bookkeeping.
+
+## Releases
+
+Releases are cut from a tag: push `vX.Y.Z` and the release
+workflow builds the installers on all three OSes, runs the
+per-OS release verification and an install/uninstall smoke
+test on each, and publishes a GitHub release with
+`SHA256SUMS` and its minisign signature (`SHA256SUMS.minisig`).
+Uninstalling never touches vault folders, on any OS — the
+smoke tests assert exactly that.
+
+The installers are unsigned (except the macOS ad-hoc
+signature); the checksums plus the signature are how a
+download is verified, and building from source remains
+the trust anchor. The Touch ID macOS variant is not part
+of the release workflow — it needs the local provisioning
+profile, so it is built by hand (see above).
+
+One-time setup: create the signing keypair and add the
+secret half to the repository's Actions secrets
+(`MINISIGN_SECRET_KEY`, and `MINISIGN_PASSWORD` if the key
+has one). Put the public key here and in the README:
+
+```
+minisign -G -p soirvu.pub -s soirvu.key
+# public key: RW… (paste yours here)
+```
+
+Verifying a downloaded release:
+
+```
+sha256sum -c SHA256SUMS
+minisign -Vm SHA256SUMS -p soirvu.pub
+```
