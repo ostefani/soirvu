@@ -18,6 +18,14 @@ use tauri::{Emitter, Manager};
 
 use state::AppState;
 
+/// The app-data folder under the system config dir, holding
+/// app.json (the vault registry and settings) and opened/.
+/// Debug builds (tauri dev) get their own folder, so a dev
+/// session can never see, register over or wipe the release
+/// app's data by accident; release builds — including the
+/// signed Touch ID variant — use the plain name.
+const CONFIG_DIR_NAME: &str = if cfg!(debug_assertions) { "Soirvu Dev" } else { "Soirvu" };
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // §9 release hardening first, before anything opens.
@@ -73,8 +81,8 @@ pub fn run() {
             },
         )
         .setup(|app| {
-            // App config (§3): ~/Library/Application Support/Soirvu/
-            let config_dir = app.path().config_dir()?.join("Soirvu");
+            // App config (§3): ~/Library/Application Support/<name>/
+            let config_dir = app.path().config_dir()?.join(CONFIG_DIR_NAME);
             app.manage(AppState::load(config_dir));
 
             // The main window is built in code, not in

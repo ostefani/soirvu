@@ -153,7 +153,15 @@ mod imp {
     /// SecAccessControlCreateFlags: biometryCurrentSet.
     const BIOMETRY_CURRENT_SET: u64 = 1 << 3;
 
-    const SERVICE: &str = "soirvu.device";
+    // Debug builds use a sibling service, mirroring the
+    // config-dir split in lib.rs: a dev build enrolling a
+    // vault must not overwrite the release build's item (the
+    // keychain keys items by service + account alone).
+    const SERVICE: &str = if cfg!(debug_assertions) {
+        "soirvu.device.dev"
+    } else {
+        "soirvu.device"
+    };
 
     /// An owned CoreFoundation reference, released on drop.
     struct Owned(CFTypeRef);
