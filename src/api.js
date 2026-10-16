@@ -72,6 +72,9 @@ import { listen } from "@tauri-apps/api/event";
  * @property {string | null} backup_location Display name of the backup
  *   folder (never a path). Read-only here: it changes only through
  *   settingsPickBackupDir / settingsClearBackupDir.
+ * @property {string} platform The OS this build runs on
+ *   ("macos", "linux", "windows"); the UI offers only what
+ *   the platform supports.
  */
 
 // ---------------------------------------------------------------------------

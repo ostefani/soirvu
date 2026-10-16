@@ -315,10 +315,12 @@
             <input type="checkbox" bind:checked={stripExif} onchange={saveStrip} />
         </label>
 
-        <label>
-            Clear the clipboard 30 seconds after copying from the diary
-            <input type="checkbox" bind:checked={clipboardClear} onchange={saveClipboard} />
-        </label>
+        {#if settings?.platform === 'macos'}
+            <label>
+                Clear the clipboard 30 seconds after copying from the diary
+                <input type="checkbox" bind:checked={clipboardClear} onchange={saveClipboard} />
+            </label>
+        {/if}
 
         <p>
             Backup location:

@@ -14,5 +14,6 @@ expression: json
     "video_mb": 1024
   },
   "backup_location": null,
-  "vault_location": null
+  "vault_location": null,
+  "platform": ""
 }

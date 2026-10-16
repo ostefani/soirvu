@@ -93,11 +93,19 @@ pub struct Settings {
     /// purpose: the user should always know where it is.
     #[serde(default)]
     pub vault_location: Option<String>,
+    /// The OS this build runs on ("macos", "linux",
+    /// "windows" — std::env::consts::OS), derived on read
+    /// like the two locations above and ignored on set. The
+    /// UI uses it to offer only what the platform supports
+    /// (the clipboard clear is macOS-only: it needs the
+    /// NSPasteboard change counter).
+    #[serde(default)]
+    pub platform: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { lock_timeout_secs: 300, strip_exif: true, clipboard_clear: false, backup_schedule: BackupSchedule::Off, caps: Caps::default(), backup_location: None, vault_location: None }
+        Settings { lock_timeout_secs: 300, strip_exif: true, clipboard_clear: false, backup_schedule: BackupSchedule::Off, platform: String::new(), caps: Caps::default(), backup_location: None, vault_location: None }
     }
 }
 
@@ -208,6 +216,7 @@ impl AppState {
             .backup_dir
             .as_deref()
             .map(folder_display_name);
+        settings.platform = std::env::consts::OS.to_string();
         settings.vault_location = inner.current.as_ref().and_then(|id| {
             inner
                 .config
