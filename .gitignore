@@ -62,3 +62,4 @@ vault.header.json
 export-output/
 
 Entitlements.touchid.plist
+touchid.provisionprofile
