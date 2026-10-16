@@ -164,6 +164,19 @@ export class EditorView {
             const src = node.attrs.src || "";
             if (src.startsWith("attachment:")) {
                 el.setAttribute("src", assetUrl(src.slice("attachment:".length)));
+                // An image this engine cannot decode (HEIC on
+                // WebKitGTK or WebView2, say) fires error: mark
+                // it, and the stylesheet shows a labelled
+                // placeholder instead of the broken-image glyph.
+                // The src stays, so double-click still opens
+                // the file in the OS viewer (EntryEditor).
+                el.addEventListener("error", () => {
+                    el.setAttribute("data-unrenderable", "");
+                    el.setAttribute(
+                        "title",
+                        `${el.getAttribute("alt") || "Image"} — cannot be shown here; double-click to open the file.`,
+                    );
+                });
             } else {
                 el.removeAttribute("src");
                 el.setAttribute("data-blocked-image", "");

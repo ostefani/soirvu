@@ -365,6 +365,19 @@
         height: 1.2em;
         background: #eee;
     }
+    /* An attachment image this engine cannot decode (HEIC
+       off macOS): a labelled placeholder, not a broken glyph.
+       The alt text (the file name) shows inside the box. */
+    :global(.editor-mount img[data-unrenderable]) {
+        display: block;
+        min-width: 12rem;
+        min-height: 4rem;
+        padding: 0.5em;
+        border: 1px dashed #999;
+        background: #f4f4f4;
+        color: #555;
+        font-size: 0.85em;
+    }
     /* Tables (Phase 7): plain grid, header row shaded. */
     .editor-mount :global(table) {
         border-collapse: collapse;
