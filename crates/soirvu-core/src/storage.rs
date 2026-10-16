@@ -1,6 +1,6 @@
 //! The encrypted SQLite database (`soirvu.db`), using SQLCipher, and its schema.
 
-use std::fs::{self, File};
+use std::fs;
 use std::io;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};

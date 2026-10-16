@@ -131,6 +131,7 @@ fn header_info(dir: &Path) -> Result<(), RunError> {
                 );
             }
             soirvu_core::vault::Slot::Recovery { .. } => println!("slot: recovery key"),
+            soirvu_core::vault::Slot::Device { .. } => println!("slot: device (Touch ID)"),
         }
     }
     Ok(())
