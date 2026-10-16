@@ -101,22 +101,30 @@ pub fn run() {
             .title("Soirvu")
             .inner_size(1100.0, 760.0)
             .min_inner_size(720.0, 480.0)
-            // The editor handles drops itself (files, block
-            // drags) through the page's own events; Tauri's
-            // native handler replaces WebView2's and would
-            // swallow them on Windows (§12). Nothing in the
-            // app consumes Tauri's drag-drop events.
-            .disable_drag_drop_handler()
             .on_navigation(|url| {
                 // Only the app's own pages may load. Anything else
                 // is blocked; content links go through open_link.
-                url.scheme() == "tauri"
-                    || (url.scheme() == "http"
-                        && matches!(
-                            url.host_str(),
-                            Some("localhost" | "127.0.0.1" | "tauri.localhost")
-                        ))
+                // The plain localhost allowance is the dev server
+                // only: in a release build the webview must not
+                // be able to navigate to any local service.
+                let is_app_origin = url.scheme() == "tauri"
+                    || (cfg!(target_os = "windows")
+                        && matches!(url.scheme(), "http" | "https")
+                        && url.host_str() == Some("tauri.localhost"));
+                let is_dev_server = cfg!(debug_assertions)
+                    && url.scheme() == "http"
+                    && matches!(url.host_str(), Some("localhost" | "127.0.0.1"));
+                is_app_origin || is_dev_server
             });
+            // The editor handles drops itself (files, block
+            // drags) through the page's own events; Tauri's
+            // native handler replaces WebView2's and would
+            // swallow them on Windows (§12). Gated to Windows:
+            // the other engines deliver the page's events
+            // already, and their native path stays untouched.
+            // platform-ok: a WebView2-specific builder option.
+            #[cfg(target_os = "windows")]
+            let builder = builder.disable_drag_drop_handler();
             // WebKitGTK's default data manager persists site
             // data under ~/.local/share, and WebView2 keeps a
             // profile folder; the ephemeral flag keeps the
