@@ -33,3 +33,15 @@ wildcards = "deny"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+
+# §12: dependencies are audited for every shipped target,
+# not just the host's — a crate that only fails on Windows
+# must fail here first.
+[targets]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]

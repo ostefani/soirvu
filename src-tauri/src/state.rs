@@ -691,6 +691,7 @@ mod availability_tests {
         assert_eq!(availability_of(&vault), "not_found");
     }
 
+    // platform-ok: the test asserts /Volumes mount semantics.
     #[cfg(target_os = "macos")]
     #[test]
     fn missing_volume_is_volume_missing() {

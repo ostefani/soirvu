@@ -1,0 +1,6 @@
+# Fixtures are byte-exact snapshots: no line-ending
+# conversion anywhere under the fixtures tree, on any OS
+# (Windows git would otherwise rewrite the header JSON and
+# any blob that reads as text). The golden fixture's own
+# .gitattributes additionally marks its files binary.
+crates/soirvu-core/tests/fixtures/** -text

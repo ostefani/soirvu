@@ -258,7 +258,9 @@ fn backup_before_migration(
     fs::create_dir_all(backup_dir)?;
     let target = backup_dir.join(format!("soirvu-v{from}-before-v{to}-{}.db", now_ms()));
     fs::copy(path, &target)?;
-    File::open(&target)?.sync_all()?;
+    // Opened writable on purpose: sync_all on a read-only
+    // handle is FlushFileBuffers, which Windows refuses.
+    fs::OpenOptions::new().write(true).open(&target)?.sync_all()?;
     Ok(())
 }
 

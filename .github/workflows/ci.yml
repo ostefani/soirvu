@@ -5,16 +5,93 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Platform cfg stays in the platform files (§12)
+        run: sh scripts/check-platform-cfg.sh
+
   core:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - name: Core and CLI tests
         run: cargo test -p soirvu-core -p soirvu-cli
+      - name: Clippy (core and CLI)
+        run: cargo clippy -p soirvu-core -p soirvu-cli --all-targets
+
+  bridge-check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: WebKitGTK system libraries (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      - name: Check the bridge compiles
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: Check the Touch ID variant compiles (macOS)
+        if: runner.os == 'macOS'
+        run: cargo check --manifest-path src-tauri/Cargo.toml --features touch-id
+
+  vault-exchange:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Create a fixture vault on this OS
+        shell: bash
+        env:
+          SOIRVU_MAKE_FIXTURE: ${{ runner.temp }}/fixture
+        run: cargo test -p soirvu-core --test cross_os -- --exact cross_os_fixture
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixture-${{ matrix.os }}
+          path: ${{ runner.temp }}/fixture
+          retention-days: 1
+
+  vault-exchange-open:
+    needs: vault-exchange
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fixture-*
+          path: ${{ runner.temp }}/incoming
+      - name: Open every OS's fixture vault here
+        shell: bash
+        run: |
+          for d in "${RUNNER_TEMP}"/incoming/*/; do
+            echo "opening $d"
+            SOIRVU_OPEN_FIXTURE="$d" cargo test -p soirvu-core --test cross_os -- --exact cross_os_fixture
+          done
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,7 +109,7 @@ jobs:
         run: sh scripts/check-bundle-hosts.sh dist
 
   deny:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
       - name: Licenses, advisories, bans, sources
@@ -52,8 +129,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install exactly as the lockfile says, no scripts
         run: npm ci --ignore-scripts
-      - name: Check the Touch ID variant compiles
-        run: cargo check --manifest-path src-tauri/Cargo.toml --features touch-id
       - name: Build the app (ad-hoc signed, hardened runtime)
         run: npm run tauri build
       - name: Verify the signature (§9)
