@@ -420,7 +420,7 @@ mod tests {
         vault.lock();
 
         // The copy: same diary, same passphrase, everything in it.
-        let mut copy = Vault::open_with_passphrase(&dest, PASSPHRASE).unwrap();
+        let copy = Vault::open_with_passphrase(&dest, PASSPHRASE).unwrap();
         assert_eq!(copy.header().vault_id, vault_id);
         assert_eq!(read_note(&copy), CANARY);
         assert_eq!(copy.read_attachment(&att.id).unwrap(), b"hello rotation");
