@@ -1,9 +1,0 @@
----
-source: src-tauri/src/commands/contract.rs
-assertion_line: 21
-expression: json
----
-{
-  "vault_id": "a54c38f6a54c38f6a54c38f6a54c38f6",
-  "recovery_key": "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ-2345-567"
-}

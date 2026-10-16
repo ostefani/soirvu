@@ -7,6 +7,8 @@ mod backup;
 mod commands;
 mod error;
 mod keychain;
+#[cfg(target_os = "linux")]
+mod linux_lock;
 #[cfg(target_os = "macos")]
 mod macos_lock;
 mod platform;
@@ -89,7 +91,7 @@ pub fn run() {
             // tauri.conf.json: the navigation guard attaches here,
             // and this is where the non-persistent data store will
             // be set once spike 5 confirms the option (§6.3).
-            let window = tauri::WebviewWindowBuilder::new(
+            let builder = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
                 tauri::WebviewUrl::App("index.html".into()),
@@ -103,8 +105,14 @@ pub fn run() {
                 url.scheme() == "tauri"
                     || (url.scheme() == "http"
                         && matches!(url.host_str(), Some("localhost" | "127.0.0.1")))
-            })
-            .build()?;
+            });
+            // WebKitGTK's default data manager persists site
+            // data under ~/.local/share; the ephemeral one
+            // keeps the diary's webview stateless (§6.3, §12).
+            // platform-ok: the ephemeral flag is a builder option.
+            #[cfg(target_os = "linux")]
+            let builder = builder.incognito(true);
+            let window = builder.build()?;
             let _ = window.set_focus();
 
             // OS lock signals (§9): system sleep, screen lock and

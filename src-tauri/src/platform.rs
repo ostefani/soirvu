@@ -37,6 +37,13 @@ pub fn harden_process() {
     unsafe {
         libc::ptrace(libc::PT_DENY_ATTACH, 0, std::ptr::null_mut(), 0);
     }
+    #[cfg(all(target_os = "linux", not(debug_assertions)))]
+    unsafe {
+        // The Linux deny-attach (§9): a non-dumpable process
+        // cannot be ptraced or have its memory read by a
+        // non-root peer, and produces no core dump either.
+        libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
+    }
     #[cfg(all(unix, not(debug_assertions)))]
     unsafe {
         let limit = libc::rlimit {
@@ -154,10 +161,12 @@ pub enum LockReason {
 /// OS lock signals (§9). Idle expiry and volume loss are timers
 /// in lib.rs; sleep, screen lock and screensaver arrive through
 /// this trait, so the rest of the bridge never names a platform
-/// type. The macOS backend is `crate::macos_lock`.
+/// type. The macOS backend is `crate::macos_lock`, the Linux
+/// one `crate::linux_lock`. Backends may call from a worker
+/// thread; the callback must stay cheap and thread-safe.
 pub trait LockEvents: Send {
-    /// Calls `on_lock` (on the main thread) when the OS says the
-    /// session is no longer private.
+    /// Calls `on_lock` when the OS says the session is no
+    /// longer private.
     fn start(&mut self, on_lock: Box<dyn Fn(LockReason) + Send + Sync>) -> Result<(), String>;
 }
 
@@ -167,17 +176,21 @@ pub fn lock_events() -> Box<dyn LockEvents> {
     {
         Box::new(crate::macos_lock::MacLockEvents::default())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        Box::new(crate::linux_lock::LinuxLockEvents::default())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         Box::new(NoLockEvents)
     }
 }
 
 /// Platforms without a backend yet: no OS signals.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 struct NoLockEvents;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 impl LockEvents for NoLockEvents {
     fn start(&mut self, _on_lock: Box<dyn Fn(LockReason) + Send + Sync>) -> Result<(), String> {
         Ok(())

@@ -22,7 +22,7 @@ for f in $(grep -rl 'cfg(target_os' "$SRC" --include='*.rs' | sort); do
             for (i = 1; i <= NR; i++) {
                 if (lines[i] !~ /cfg\(target_os/) continue
                 if (lines[i-1] ~ /platform-ok:/) continue
-                if (file ~ /lib\.rs$/ && lines[i+1] ~ /mod (macos_lock|keychain|platform);/) continue
+                if (file ~ /lib\.rs$/ && lines[i+1] ~ /mod (macos_lock|linux_lock|keychain|platform);/) continue
                 printf "%s:%d: %s\n", file, i, lines[i]
                 bad = 1
             }
