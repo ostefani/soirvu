@@ -31,7 +31,12 @@
 //! exactly my current state, it is a clean fast-forward;
 //! if both sides moved away from their bases, the loser's text is kept as
 //! a conflict copy entry with a deterministic id, so the
-//! same copy — never two — appears on every device. A
+//! same copy — never two — appears on every device. The
+//! copy starts its own lineage: a deterministic synthetic
+//! author derived from the divergence and a base pointing
+//! at the copy itself, so every device builds the
+//! identical record and an edit of the copy is an ordinary
+//! authorship change that travels like any other edit. A
 //! losing tombstone preserves nothing (it holds no text).
 //! Applying is idempotent: re-running over the same folder
 //! is a no-op, and a device's own bundles are skipped. One
@@ -177,6 +182,24 @@ fn hex(bytes: &[u8]) -> String {
 fn conflict_id(entry_id: &str, loser: &EntryRecord) -> String {
     let mut hash = Sha256::new();
     hash.update(b"soirvu-conflict\n");
+    hash.update(entry_id.as_bytes());
+    hash.update(b"\n");
+    hash.update(loser.device_id.as_bytes());
+    hash.update(b"\n");
+    hash.update(loser.rev.to_string().as_bytes());
+    let digest = hash.finalize();
+    let h = hex(&digest[..16]);
+    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+}
+
+/// The deterministic author of a conflict copy, derived
+/// from the same inputs as the copy's id: every device
+/// resolving this divergence stamps the copy with this
+/// author — never with its own device id — so the records
+/// they build are identical.
+fn conflict_author(entry_id: &str, loser: &EntryRecord) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"soirvu-conflict-author\n");
     hash.update(entry_id.as_bytes());
     hash.update(b"\n");
     hash.update(loser.device_id.as_bytes());
@@ -482,17 +505,29 @@ impl Vault {
                 continue;
             }
             report.bundles_applied += 1;
-            let me = self.device_id.clone();
             let tx = self.db.conn_mut().transaction()?;
-            // Entry rows reference their author device: a
-            // peer's id must exist in the device table
-            // before its records can be inserted.
-            tx.execute(
-                "INSERT OR IGNORE INTO device (id, name, created_at) VALUES (?1, 'sync peer', ?2)",
-                params![header.device_id, crate::storage::now_ms()],
-            )?;
+            // Entry rows reference their author device
+            // (entry.device_id is a foreign key, and
+            // foreign_keys is ON), so EVERY author named
+            // in the bundle needs a device row before its
+            // records can land — not just the header's
+            // device: bundles relay, and a bundle from A
+            // can carry B-authored records to a device that
+            // has never seen a bundle from B.
+            let mut authors: Vec<&str> = vec![header.device_id.as_str()];
             for record in &bundle.entries {
-                apply_entry(&me, &tx, record, &mut report)?;
+                if !authors.contains(&record.device_id.as_str()) {
+                    authors.push(record.device_id.as_str());
+                }
+            }
+            for author in authors {
+                tx.execute(
+                    "INSERT OR IGNORE INTO device (id, name, created_at) VALUES (?1, 'sync peer', ?2)",
+                    params![author, crate::storage::now_ms()],
+                )?;
+            }
+            for record in &bundle.entries {
+                apply_entry(&tx, record, &mut report)?;
             }
             tx.commit()?;
             for record in &bundle.attachments {
@@ -541,7 +576,6 @@ impl Vault {
 }
 
 fn apply_entry(
-    me: &str,
     tx: &Transaction,
     record: &EntryRecord,
     report: &mut SyncReport,
@@ -622,6 +656,15 @@ fn apply_entry(
         // preserve — which is also what stops two devices'
         // independently created copies of the SAME loser
         // from breeding copies of copies: the twins merge.
+        // The copy starts its OWN lineage: a deterministic
+        // synthetic author and a base pointing at itself.
+        // (It used to be stamped with the applying device
+        // and the loser's base — coordinates inside the
+        // ORIGINAL entry's history. A later edit of the
+        // copy kept that base, so the merge rules read the
+        // edited copy as stale on one side and the unedited
+        // copy as a fast-forward on the other, and the
+        // edit silently vanished.)
         let winner_rec = if incoming_wins { record } else { &local };
         let text_differs = loser.body_md != winner_rec.body_md
             || loser.title != winner_rec.title
@@ -635,14 +678,18 @@ fn apply_entry(
                 let mut copy = loser.clone();
                 copy.id = copy_id;
                 copy.rev = 1;
-                copy.device_id = me.to_string();
-                copy.base_device = loser.device_id.clone();
-                copy.base_rev = loser.rev;
+                copy.device_id = conflict_author(&record.id, loser);
+                copy.base_device = copy.device_id.clone();
+                copy.base_rev = 1;
                 copy.deleted_at = None;
                 copy.title = Some(match &loser.title {
                     Some(title) => format!("{title} (conflict)"),
                     None => "Conflict copy".to_string(),
                 });
+                tx.execute(
+                    "INSERT OR IGNORE INTO device (id, name, created_at) VALUES (?1, 'conflict copy', ?2)",
+                    params![copy.device_id, crate::storage::now_ms()],
+                )?;
                 insert_record(tx, &copy)?;
                 report.entries_conflicted += 1;
             }
@@ -1211,5 +1258,66 @@ mod tests {
         let report = b.sync_apply(sync.path()).unwrap();
         assert!(report.problems.is_empty(), "{:?}", report.problems);
         assert_eq!(b.get_entry(&entry.id).unwrap().body_md, "from A");
+    }
+
+    #[test]
+    fn editing_a_conflict_copy_survives() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let entry = a.create_entry(&draft("base")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        a.update_entry(&entry.id, &draft("A's words")).unwrap();
+        b.update_entry(&entry.id, &draft("B's words")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        // The user fixes up the copy on A before any further
+        // exchange: the edit is an authorship change on the
+        // copy's own lineage and must travel like one.
+        let page = a.list_entries(&crate::entries::ListQuery::default()).unwrap();
+        let copy_id = page.items.iter().find(|i| i.id != entry.id).unwrap().id.clone();
+        a.update_entry(&copy_id, &draft("merged by hand")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        assert_eq!(a.get_entry(&copy_id).unwrap().body_md, "merged by hand", "edit lost on A");
+        assert_eq!(b.get_entry(&copy_id).unwrap().body_md, "merged by hand", "edit never reached B");
+    }
+
+    #[test]
+    fn relayed_records_do_not_break_a_third_device() {
+        const DEVICE_C: &str = "cccccccc-3333-4333-8333-cccccccccccc";
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        // C: a copy of A's vault stamped to a third id,
+        // taken before A has ever seen a B bundle (so C's
+        // device table has no row for B).
+        let dir_c = TempDir::new().unwrap();
+        let c_dir = dir_c.path().join("v");
+        copy_dir(a.dir(), &c_dir);
+        let mut c = Vault::open_with_passphrase(&c_dir, PASSPHRASE).unwrap();
+        {
+            let conn = c.db.conn_mut();
+            conn.execute(
+                "INSERT INTO device (id, name, created_at) VALUES (?1, 'test', 0)",
+                [DEVICE_C],
+            )
+            .unwrap();
+            conn.execute("UPDATE meta SET value = ?1 WHERE key = 'device_id'", [DEVICE_C])
+                .unwrap();
+        }
+        drop(c);
+        let mut c = Vault::open_with_passphrase(&c_dir, PASSPHRASE).unwrap();
+        assert_eq!(c.device_id, DEVICE_C);
+        // A creates, B edits: the entry is B-authored.
+        let entry = a.create_entry(&draft("from A")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        b.update_entry(&entry.id, &draft("edited on B")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        // A re-emits into a fresh folder: its bundle carries
+        // the B-authored record under A's header. C must
+        // register B as an author, not die on the foreign
+        // key.
+        let relay = TempDir::new().unwrap();
+        a.sync_emit(relay.path()).unwrap();
+        let report = c.sync_apply(relay.path()).unwrap();
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert_eq!(c.get_entry(&entry.id).unwrap().body_md, "edited on B");
     }
 }
