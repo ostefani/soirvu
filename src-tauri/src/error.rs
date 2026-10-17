@@ -53,6 +53,7 @@ impl From<Error> for AppError {
             TagNotFound => "tag_not_found",
             QueryTooShort => "query_too_short",
             InvalidInput(_) => "invalid_input",
+            Sync(_) => "sync",
             Io(_) | Database(_) => "storage",
             Random(_) | Json(_) => "internal",
         };

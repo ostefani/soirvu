@@ -11,6 +11,7 @@
 //!   soirvu-cli export <vault-dir> <out-dir> [--recovery <key>]
 //!   soirvu-cli sync-emit <vault-dir> <sync-dir> [--recovery <key>]
 //!   soirvu-cli sync-apply <vault-dir> <sync-dir> [--recovery <key>]
+//!   soirvu-cli restamp-device <vault-dir> [--recovery <key>]
 //!
 //! The passphrase comes from the SOIRVU_PASSPHRASE environment variable,
 //! or is asked for at the terminal (with echo off). `--recovery` takes the
@@ -64,6 +65,7 @@ soirvu-cli — create, check and export a Soirvu vault without the app
   soirvu-cli export <vault-dir> <out-dir> [--recovery <key>]
   soirvu-cli sync-emit <vault-dir> <sync-dir> [--recovery <key>]
   soirvu-cli sync-apply <vault-dir> <sync-dir> [--recovery <key>]
+  soirvu-cli restamp-device <vault-dir> [--recovery <key>]
 
 The passphrase is read from SOIRVU_PASSPHRASE, or asked for at the
 terminal with echo off. Export writes PLAINTEXT — see DESIGN §8.
@@ -101,6 +103,13 @@ fn run(args: &[String]) -> Result<(), RunError> {
                 return Err(RunError::Usage);
             }
             sync_apply(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
+        }
+        "restamp-device" if !rest.is_empty() => {
+            let (dirs, recovery) = open_args(rest)?;
+            if dirs.len() != 1 {
+                return Err(RunError::Usage);
+            }
+            restamp_device(Path::new(&dirs[0]), recovery)
         }
         _ => Err(RunError::Usage),
     }
@@ -273,4 +282,11 @@ fn sync_apply(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(),
             report.problems.len()
         )))
     }
+}
+
+fn restamp_device(dir: &Path, recovery: Option<&str>) -> Result<(), RunError> {
+    let mut vault = open(dir, recovery)?;
+    let new_id = vault.restamp_device().map_err(failed)?;
+    println!("new device id: {new_id}");
+    Ok(())
 }

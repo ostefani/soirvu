@@ -35,6 +35,12 @@ pub enum Error {
     /// Something the caller supplied is not acceptable (bad date, bad tag...).
     /// The message never contains diary text.
     InvalidInput(String),
+    /// A sync bundle could not be produced or a sync
+    /// folder is in a state the user must resolve (for
+    /// example two copies of the vault sharing one device
+    /// id). The message names the bundle or the remedy,
+    /// never any content.
+    Sync(String),
     /// No tag with this name is used by a live entry.
     TagNotFound,
     /// A rename would give a tag the name of a different tag that is in use.
@@ -65,6 +71,7 @@ impl fmt::Display for Error {
             Error::AttachmentNotFound => write!(f, "attachment not found"),
             Error::CorruptAttachment(s) => write!(f, "corrupt attachment: {s}"),
             Error::InvalidInput(s) => write!(f, "invalid input: {s}"),
+            Error::Sync(s) => write!(f, "sync failed: {s}"),
             Error::TagNotFound => write!(f, "tag not found"),
             Error::TagExists => write!(f, "a tag with that name already exists"),
             Error::QueryTooShort => write!(f, "search words need at least 3 characters"),

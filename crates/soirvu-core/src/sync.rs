@@ -11,9 +11,13 @@
 //! watermark, JSON-encoded and sealed with XChaCha20-
 //! Poly1305 under a key derived from the vault master
 //! (HKDF label "soirvu/v1/sync"); the header values (vault,
-//! device, lseq range) are bound as AAD, and the filename
-//! carries their first 8 characters so a bundle dropped in
-//! the wrong vault's folder is rejected, never applied.
+//! device, lseq range) are bound as AAD. The filename
+//! carries the vault's first 8 characters and the FULL
+//! device id; at apply time the plaintext header line is
+//! read before any decryption, so a bundle dropped in the
+//! wrong vault's folder is skipped quietly, and a device's
+//! own bundles are recognised by their full device id —
+//! never by a prefix.
 //! Attachment BLOBS travel next to the bundles as the plain
 //! files `blobs/<id>` — they are already ciphertext.
 //!
@@ -30,7 +34,13 @@
 //! same copy — never two — appears on every device. A
 //! losing tombstone preserves nothing (it holds no text).
 //! Applying is idempotent: re-running over the same folder
-//! is a no-op, and a device's own bundles are skipped.
+//! is a no-op, and a device's own bundles are skipped. One
+//! case is loud instead: a bundle carrying MY device id
+//! whose range reaches past my own emit watermark cannot
+//! be mine — another copy of this vault (a folder copy
+//! that was never restamped) is writing under my identity.
+//! Its changes are reported, not applied; the remedy is
+//! `Vault::restamp_device` on one of the copies.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,6 +59,10 @@ use crate::folder::{Vault, rename_retry};
 
 const BUNDLE_FORMAT: u32 = 1;
 const EMITTED_KEY: &str = "sync_emitted_lseq";
+/// Bundle names already reported as a twin's (see
+/// sync_apply): the warning is loud ONCE per file, not on
+/// every run for as long as the stale file sits there.
+const WARNED_KEY: &str = "sync_warned_bundles";
 
 /// What one emit produced (or None when nothing changed).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +139,32 @@ fn header_line(header: &BundleHeader) -> Vec<u8> {
 
 fn short(id: &str) -> &str {
     &id[..8.min(id.len())]
+}
+
+/// Splits a bundle file name, `<vault8>-<device>-<from>-
+/// <to>.sync`. The device part is a full id and contains
+/// '-' itself, so the range is split off from the right.
+/// Returns (vault prefix, from, to).
+fn parse_bundle_name(name: &str) -> Option<(String, i64, i64)> {
+    let stem = name.strip_suffix(".sync")?;
+    let (rest, to) = stem.rsplit_once('-')?;
+    let (rest, from) = rest.rsplit_once('-')?;
+    let (vault, _device) = rest.split_once('-')?;
+    Some((
+        vault.to_string(),
+        from.parse().ok()?,
+        to.parse().ok()?,
+    ))
+}
+
+/// Reads just the plaintext header line of a bundle — the
+/// same bytes `open_bundle` authenticates as AAD, so
+/// anything decided from it in `sync_apply` (skip a
+/// foreign vault, recognise my own bundle) is re-verified
+/// there before a single record is trusted.
+fn header_of(bytes: &[u8]) -> Option<BundleHeader> {
+    let newline = bytes.iter().position(|b| *b == b'\n')?;
+    serde_json::from_slice(&bytes[..newline]).ok()
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -265,16 +305,70 @@ impl Vault {
         bytes.extend_from_slice(&sealed);
 
         fs::create_dir_all(sync_dir)?;
+        // The FULL device id goes in the name: its first 8
+        // characters are the top of a UUIDv7 timestamp and
+        // stay the same for ~65 seconds, so two devices
+        // created in the same window would share a prefix —
+        // and a shared filename — under the short form.
         let file_name = format!(
             "{}-{}-{:08}-{:08}.sync",
             short(&header.vault_id),
-            short(&header.device_id),
+            header.device_id,
             from_lseq,
             to_lseq
         );
-        let tmp = sync_dir.join(format!(".tmp-{file_name}"));
-        fs::write(&tmp, &bytes)?;
-        rename_retry(&tmp, &sync_dir.join(&file_name))?;
+        let dest = sync_dir.join(&file_name);
+        if dest.exists() {
+            // A bundle with this name is already in the
+            // folder: my own earlier write (a crash between
+            // the write and the watermark commit below makes
+            // this emit a re-emit, which must be a no-op), a
+            // torn copy of it — or another copy of this
+            // vault writing under my device id, whose bundle
+            // must never be silently overwritten.
+            let existing = fs::read(&dest)?;
+            match open_bundle(&cipher, &existing) {
+                Ok((old_header, old_bundle)) => {
+                    let identical = old_header.vault_id == header.vault_id
+                        && old_header.device_id == header.device_id
+                        && old_header.from_lseq == from_lseq
+                        && old_header.to_lseq == to_lseq
+                        && serde_json::to_vec(&old_bundle)? == json;
+                    if !identical {
+                        return Err(Error::Sync(format!(
+                            "bundle {file_name} is already in the sync folder with \
+                             different contents — another copy of this vault is using \
+                             this device id; run restamp-device on one of the copies"
+                        )));
+                    }
+                    // Identical: already emitted. Fall
+                    // through to the watermark commit.
+                }
+                Err(_) => {
+                    // Undecryptable: a torn copy of my own
+                    // bundle (its header line still names
+                    // this vault and device) may be replaced;
+                    // anything else may not.
+                    let mine = header_of(&existing).is_some_and(|h| {
+                        h.vault_id == header.vault_id && h.device_id == header.device_id
+                    });
+                    if !mine {
+                        return Err(Error::Sync(format!(
+                            "bundle {file_name} is already in the sync folder and is \
+                             not this device's bundle — another copy of this vault may \
+                             be using this device id; run restamp-device on one of the copies"
+                        )));
+                    }
+                    let tmp = sync_dir.join(format!(".tmp-{file_name}"));
+                    fs::write(&tmp, &bytes)?;
+                    rename_retry(&tmp, &dest)?;
+                }
+            }
+        } else {
+            let tmp = sync_dir.join(format!(".tmp-{file_name}"));
+            fs::write(&tmp, &bytes)?;
+            rename_retry(&tmp, &dest)?;
+        }
 
         // The watermark moves only after the bundle is
         // safely in the folder: a crash before this just
@@ -305,30 +399,40 @@ impl Vault {
         if !sync_dir.is_dir() {
             return Ok(report);
         }
-        let mut files: Vec<(String, String, i64, PathBuf)> = Vec::new();
+        let my_vault = self.header().vault_id.clone();
+        let my_vault_short = short(&my_vault).to_string();
+        let emitted: i64 = self
+            .db
+            .meta(EMITTED_KEY)?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let mut warned: std::collections::BTreeSet<String> = self
+            .db
+            .meta(WARNED_KEY)?
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default();
+        let mut warned_dirty = false;
+        let mut files: Vec<(String, PathBuf)> = Vec::new();
         for item in fs::read_dir(sync_dir)? {
             let item = item?;
             let name = item.file_name().to_string_lossy().into_owned();
-            let parts: Vec<&str> = name.split('-').collect();
-            if parts.len() == 4 && name.ends_with(".sync") {
-                if let (Ok(from), Ok(_to)) = (
-                    parts[2].parse::<i64>(),
-                    parts[3].trim_end_matches(".sync").parse::<i64>(),
-                ) {
-                    files.push((parts[1].to_string(), name.clone(), from, item.path()));
+            // The filename's vault prefix IS read: a bundle
+            // for another vault is not even opened. (The
+            // plaintext header below is the authority; this
+            // is the cheap filter in front of it.)
+            if let Some((prefix, _, _)) = parse_bundle_name(&name) {
+                if prefix == my_vault_short {
+                    files.push((name, item.path()));
                 }
             }
         }
-        files.sort_by(|a, b| a.0.cmp(&b.0).then(a.2.cmp(&b.2)));
-        let my_short = short(&self.device_id).to_string();
+        // The names sort by (device, zero-padded range):
+        // one device's bundles are read in lseq order.
+        files.sort();
         let key = self.sync_key();
         let cipher = XChaCha20Poly1305::new_from_slice(&key[..]).expect("sync key is 32 bytes");
 
-        for (device_short, name, _from, path) in files {
-            if device_short == my_short {
-                continue;
-            }
-            report.bundles_seen += 1;
+        for (name, path) in files {
             let bytes = match fs::read(&path) {
                 Ok(bytes) => bytes,
                 Err(_) => {
@@ -336,6 +440,34 @@ impl Vault {
                     continue;
                 }
             };
+            // The plaintext header line decides whose bundle
+            // this is — exactly, by full ids. open_bundle
+            // re-verifies the same values as AAD below, so
+            // nothing here trusts the line beyond skipping.
+            if let Some(h) = header_of(&bytes) {
+                if h.vault_id != my_vault {
+                    // Another vault sharing the folder: not
+                    // a problem, not mine to report.
+                    continue;
+                }
+                if h.device_id == self.device_id {
+                    // My own bundle — unless it reaches past
+                    // everything I ever emitted, which I
+                    // cannot have written: another copy of
+                    // this vault is using my device id.
+                    if h.to_lseq > emitted && !warned.contains(&name) {
+                        warned.insert(name.clone());
+                        warned_dirty = true;
+                        report.problems.push(format!(
+                            "bundle {name}: another copy of this vault is using this \
+                             device id — its changes were not applied; run \
+                             restamp-device on one of the copies"
+                        ));
+                    }
+                    continue;
+                }
+            }
+            report.bundles_seen += 1;
             let (header, bundle) = match open_bundle(&cipher, &bytes) {
                 Ok(opened) => opened,
                 Err(_) => {
@@ -345,7 +477,7 @@ impl Vault {
                     continue;
                 }
             };
-            if header.format != BUNDLE_FORMAT || header.vault_id != self.header().vault_id {
+            if header.format != BUNDLE_FORMAT || header.vault_id != my_vault {
                 report.problems.push(format!("bundle {name}: not for this vault"));
                 continue;
             }
@@ -367,7 +499,43 @@ impl Vault {
                 self.apply_attachment(sync_dir, record, &mut report)?;
             }
         }
+        if warned_dirty {
+            let tx = self.db.conn_mut().transaction()?;
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![WARNED_KEY, serde_json::to_string(&warned)?],
+            )?;
+            tx.commit()?;
+        }
         Ok(report)
+    }
+
+    /// Gives this vault a NEW device identity and returns
+    /// it: a fresh device id, and the emit watermark reset
+    /// (everything this vault holds will be emitted again
+    /// under the new id, where peers take it as a new
+    /// device's stream). This is the step a folder copy of
+    /// a vault needs before it can sync as a second device:
+    /// without it the copy shares the original's id, its
+    /// bundles are skipped as "own" by every peer (and by
+    /// the original), and its emits can collide with the
+    /// original's bundle names.
+    pub fn restamp_device(&mut self) -> Result<String> {
+        let new_id = uuid::Uuid::now_v7().to_string();
+        let tx = self.db.conn_mut().transaction()?;
+        tx.execute(
+            "INSERT OR IGNORE INTO device (id, name, created_at) VALUES (?1, 'this device', ?2)",
+            params![new_id, crate::storage::now_ms()],
+        )?;
+        tx.execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'device_id'",
+            [&new_id],
+        )?;
+        tx.execute("DELETE FROM meta WHERE key = ?1", [EMITTED_KEY])?;
+        tx.commit()?;
+        self.device_id = new_id.clone();
+        Ok(new_id)
     }
 
 }
@@ -907,15 +1075,141 @@ mod tests {
     }
 
     #[test]
-    fn a_bundle_from_another_vault_is_refused() {
+    fn a_bundle_from_another_vault_is_ignored_quietly() {
         let (_da, _db, mut a, _b) = two_devices();
         let other_dir = TempDir::new().unwrap();
         let (mut other, _) = Vault::create(&other_dir.path().join("v"), PASSPHRASE, fast()).unwrap();
         other.create_entry(&draft("someone else's diary")).unwrap();
         let sync = TempDir::new().unwrap();
         other.sync_emit(sync.path()).unwrap();
+        // Two vaults sharing one folder is a normal setup:
+        // the foreign bundle is skipped on its filename
+        // prefix, never decrypted, never a "problem" (a
+        // problem would make every CLI run exit non-zero).
         let report = a.sync_apply(sync.path()).unwrap();
         assert_eq!(report.entries_applied, 0);
-        assert!(!report.problems.is_empty(), "the refusal is reported");
+        assert_eq!(report.bundles_seen, 0);
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+    }
+
+    #[test]
+    fn devices_sharing_a_name_prefix_still_exchange() {
+        // Device ids are UUIDv7: their first 8 characters
+        // are timestamp bits, identical for ~65 seconds at
+        // a time. Two devices created in that window share
+        // the prefix the old filename/skip logic used —
+        // they must still see each other's bundles.
+        let dir_a = TempDir::new().unwrap();
+        let dir_b = TempDir::new().unwrap();
+        let sync = TempDir::new().unwrap();
+        let (a, _) = Vault::create(&dir_a.path().join("v"), PASSPHRASE, fast()).unwrap();
+        let a_dir = a.dir().to_path_buf();
+        let a_id = a.device_id.clone();
+        drop(a);
+        copy_dir(&a_dir, &dir_b.path().join("v"));
+        let twin_id = format!("{}-2222-4222-8222-222222222222", &a_id[..8]);
+        let mut b = Vault::open_with_passphrase(&dir_b.path().join("v"), PASSPHRASE).unwrap();
+        {
+            let conn = b.db.conn_mut();
+            conn.execute(
+                "INSERT INTO device (id, name, created_at) VALUES (?1, 'test', 0)",
+                [&twin_id],
+            )
+            .unwrap();
+            conn.execute("UPDATE meta SET value = ?1 WHERE key = 'device_id'", [&twin_id])
+                .unwrap();
+        }
+        drop(b);
+        let mut b = Vault::open_with_passphrase(&dir_b.path().join("v"), PASSPHRASE).unwrap();
+        let mut a = Vault::open_with_passphrase(&a_dir, PASSPHRASE).unwrap();
+        assert_eq!(short(&a.device_id), short(&b.device_id), "the prefixes collide");
+        assert_ne!(a.device_id, b.device_id);
+        let entry = a.create_entry(&draft("from A")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        assert_eq!(b.get_entry(&entry.id).unwrap().body_md, "from A");
+    }
+
+    #[test]
+    fn a_copied_vault_is_loud_and_restamp_fixes_it() {
+        let (_da, _db, mut a, _b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let entry = a.create_entry(&draft("original")).unwrap();
+        a.sync_emit(sync.path()).unwrap();
+        // A raw folder copy: same device id, same watermark.
+        let dir_t = TempDir::new().unwrap();
+        let t_dir = dir_t.path().join("v");
+        copy_dir(a.dir(), &t_dir);
+        let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
+        assert_eq!(twin.device_id, a.device_id);
+        twin.update_entry(&entry.id, &draft("twin edit one")).unwrap();
+        twin.update_entry(&entry.id, &draft("twin edit two")).unwrap();
+        twin.sync_emit(sync.path()).unwrap();
+        // A hears about it — loudly — and applies nothing.
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert!(
+            report.problems.iter().any(|p| p.contains("restamp-device")),
+            "{:?}",
+            report.problems
+        );
+        assert_eq!(a.get_entry(&entry.id).unwrap().body_md, "original");
+        // The same stale file does not re-warn on the next run.
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        // Restamp the copy: it becomes a new device and its
+        // whole state flows.
+        let new_id = twin.restamp_device().unwrap();
+        assert_ne!(new_id, a.device_id);
+        twin.sync_emit(sync.path()).unwrap();
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert_eq!(a.get_entry(&entry.id).unwrap().body_md, "twin edit two");
+    }
+
+    #[test]
+    fn emit_never_overwrites_a_twins_bundle() {
+        let dir_a = TempDir::new().unwrap();
+        let sync = TempDir::new().unwrap();
+        let (mut a, _) = Vault::create(&dir_a.path().join("v"), PASSPHRASE, fast()).unwrap();
+        let entry = a.create_entry(&draft("base")).unwrap();
+        // A raw copy taken after the create: same id,
+        // watermark 0 on both sides.
+        let dir_t = TempDir::new().unwrap();
+        let t_dir = dir_t.path().join("v");
+        copy_dir(a.dir(), &t_dir);
+        let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
+        // Both sides edit the entry once, so both emits want
+        // the same range (1..=2) — with different records.
+        a.update_entry(&entry.id, &draft("A's text")).unwrap();
+        a.sync_emit(sync.path()).unwrap();
+        let bundle_name = format!(
+            "{}-{}-00000001-00000002.sync",
+            short(&a.header().vault_id),
+            a.device_id
+        );
+        let before = fs::read(sync.path().join(&bundle_name)).unwrap();
+        twin.update_entry(&entry.id, &draft("twin's text")).unwrap();
+        let err = twin.sync_emit(sync.path()).unwrap_err();
+        assert!(err.to_string().contains("restamp-device"), "{err}");
+        let after = fs::read(sync.path().join(&bundle_name)).unwrap();
+        assert_eq!(before, after, "the original's bundle is untouched");
+    }
+
+    #[test]
+    fn a_reemit_after_a_crash_is_a_no_op() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let entry = a.create_entry(&draft("from A")).unwrap();
+        let first = a.sync_emit(sync.path()).unwrap().unwrap();
+        // The crash: the bundle reached the folder, the
+        // watermark commit did not.
+        a.db
+            .conn_mut()
+            .execute("DELETE FROM meta WHERE key = 'sync_emitted_lseq'", [])
+            .unwrap();
+        let second = a.sync_emit(sync.path()).unwrap().unwrap();
+        assert_eq!(first.file_name, second.file_name);
+        let report = b.sync_apply(sync.path()).unwrap();
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert_eq!(b.get_entry(&entry.id).unwrap().body_md, "from A");
     }
 }
