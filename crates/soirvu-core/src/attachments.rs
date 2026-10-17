@@ -616,7 +616,7 @@ fn bump_entry(tx: &Transaction, entry_rid: i64, device: &str) -> Result<()> {
     let lseq = next_lseq(tx)?;
     tx.execute(
         "UPDATE entry
-            SET updated_at = max(?1, updated_at + 1), rev = rev + 1, device_id = ?2, lseq = ?3
+            SET updated_at = max(?1, updated_at + 1), base_rev = CASE WHEN device_id <> ?2 THEN rev ELSE base_rev END, base_device = CASE WHEN device_id <> ?2 THEN device_id ELSE base_device END, rev = rev + 1, device_id = ?2, lseq = ?3
           WHERE rid = ?4 AND deleted_at IS NULL",
         params![now_ms(), device, lseq, entry_rid],
     )?;

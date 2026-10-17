@@ -6,6 +6,7 @@ pub mod export;
 pub mod folder;
 pub mod import;
 pub mod storage;
+pub mod sync;
 pub mod vault;
 pub mod verify;
 

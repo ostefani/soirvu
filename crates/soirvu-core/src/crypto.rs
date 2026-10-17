@@ -31,6 +31,7 @@ const LABEL_DB: &str = "soirvu/v1/db";
 const LABEL_ATTACHMENTS: &str = "soirvu/v1/attachments";
 const LABEL_RECOVERY_KEK: &str = "soirvu/v1/kek/recovery";
 const LABEL_DEVICE_KEK: &str = "soirvu/v1/kek/device";
+const LABEL_SYNC: &str = "soirvu/v1/sync";
 
 // ---------------------------------------------------------------------------
 // Limits for Argon2id settings read from a header.
@@ -202,6 +203,11 @@ impl MasterKey {
     /// Root key for attachment blobs.
     pub fn attachment_key(&self) -> Key {
         derive_subkey(&self.0, LABEL_ATTACHMENTS)
+    }
+
+    /// Key for sync bundles (Phase 10).
+    pub fn sync_key(&self) -> Key {
+        derive_subkey(&self.0, LABEL_SYNC)
     }
 
     /// Only for tests and comparisons.

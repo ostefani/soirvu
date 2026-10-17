@@ -243,6 +243,11 @@ impl Vault {
     pub fn attachment_key(&self) -> Key {
         self.master.attachment_key()
     }
+
+    /// Key for sync bundles (Phase 10).
+    pub fn sync_key(&self) -> Key {
+        self.master.sync_key()
+    }
 }
 
 /// Makes sure `dir` exists and is empty. A `.DS_Store` file, which Finder adds

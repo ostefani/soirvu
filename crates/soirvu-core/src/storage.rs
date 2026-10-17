@@ -102,7 +102,17 @@ CREATE TABLE attachment (
 CREATE INDEX attachment_entry_idx ON attachment(entry_id) WHERE deleted_at IS NULL;
 ";
 
-const MIGRATIONS: &[&str] = &[MIGRATION_1_META, MIGRATION_2_ENTRIES, MIGRATION_3_ATTACHMENTS];
+const MIGRATION_4_SYNC: &str = "
+ALTER TABLE entry ADD COLUMN base_rev INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE entry ADD COLUMN base_device TEXT NOT NULL DEFAULT '';
+";
+
+const MIGRATIONS: &[&str] = &[
+    MIGRATION_1_META,
+    MIGRATION_2_ENTRIES,
+    MIGRATION_3_ATTACHMENTS,
+    MIGRATION_4_SYNC,
+];
 
 /// The schema version this build of the app understands.
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;

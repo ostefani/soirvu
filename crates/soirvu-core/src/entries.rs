@@ -141,8 +141,8 @@ impl Vault {
         let lseq = next_lseq(&tx)?;
         tx.execute(
             "INSERT INTO entry
-               (id, entry_date, created_at, updated_at, rev, device_id, lseq, title, body_md, mood, tz)
-             VALUES (?1, ?2, ?3, ?3, 1, ?4, ?5, ?6, ?7, ?8, ?9)",
+               (id, entry_date, created_at, updated_at, rev, device_id, lseq, title, body_md, mood, tz, base_rev, base_device)
+             VALUES (?1, ?2, ?3, ?3, 1, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?4)",
             params![
                 id,
                 draft.entry_date,
@@ -236,7 +236,7 @@ impl Vault {
         tx.execute(
             "UPDATE entry
                 SET entry_date = ?1, title = ?2, body_md = ?3, mood = ?4,
-                    updated_at = ?5, rev = rev + 1, device_id = ?6, lseq = ?7
+                    updated_at = ?5, base_rev = CASE WHEN device_id <> ?6 THEN rev ELSE base_rev END, base_device = CASE WHEN device_id <> ?6 THEN device_id ELSE base_device END, rev = rev + 1, device_id = ?6, lseq = ?7
               WHERE rid = ?8 AND deleted_at IS NULL",
             params![
                 draft.entry_date,
@@ -283,7 +283,7 @@ impl Vault {
         tx.execute("DELETE FROM entry_tag WHERE entry_rid = ?1", [rid])?;
         tx.execute(
             "UPDATE entry
-                SET deleted_at = ?1, updated_at = ?1, rev = rev + 1, device_id = ?2, lseq = ?3,
+                SET deleted_at = ?1, updated_at = ?1, base_rev = CASE WHEN device_id <> ?2 THEN rev ELSE base_rev END, base_device = CASE WHEN device_id <> ?2 THEN device_id ELSE base_device END, rev = rev + 1, device_id = ?2, lseq = ?3,
                     title = NULL, body_md = NULL, mood = NULL
               WHERE rid = ?4",
             params![now, device, lseq, rid],
@@ -690,7 +690,7 @@ fn bump_entries(tx: &Transaction, rids: &[i64], device: &str) -> Result<()> {
         let lseq = next_lseq(tx)?;
         tx.execute(
             "UPDATE entry
-                SET updated_at = max(?1, updated_at + 1), rev = rev + 1,
+                SET updated_at = max(?1, updated_at + 1), base_rev = CASE WHEN device_id <> ?2 THEN rev ELSE base_rev END, base_device = CASE WHEN device_id <> ?2 THEN device_id ELSE base_device END, rev = rev + 1,
                     device_id = ?2, lseq = ?3
               WHERE rid = ?4 AND deleted_at IS NULL",
             params![now, device, lseq, rid],
