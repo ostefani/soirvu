@@ -602,6 +602,7 @@ impl Vault {
                 continue;
             }
             report.bundles_applied += 1;
+            let problems_before = report.problems.len();
             let tx = self.db.conn_mut().transaction()?;
             // Entry rows reference their author device
             // (entry.device_id is a foreign key, and
@@ -630,19 +631,31 @@ impl Vault {
             for record in &bundle.attachments {
                 self.apply_attachment(sync_dir, record, &mut report)?;
             }
-            // The bundle is fully incorporated only now —
-            // entries committed and every attachment record
-            // applied (a missing blob aborts above, before
-            // this point). Advance the peer cursor: it is
-            // what this vault's ack publishes, and what
-            // makes the peer's bundles prunable.
+            // The cursor may advance over this bundle only
+            // when it was FULLY incorporated and continues
+            // the peer's stream. Fully: the entries
+            // committed and every attachment record applied
+            // — attachment failures are problems in the
+            // report, not errors (a missing blob, an entry
+            // that has not arrived yet, a hash mismatch), so
+            // the problem count is the test. Continues: the
+            // bundle starts at or below the point already
+            // held (an overlapping re-emit is fine). A
+            // bundle that fails either test leaves the
+            // cursor where it was: apply re-reads the whole
+            // folder, so it is retried on a later run, and
+            // the ack never claims what this database does
+            // not hold.
             let cursor_key = format!("{APPLIED_PREFIX}{}", header.device_id);
             let previous: i64 = self
                 .db
                 .meta(&cursor_key)?
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0);
-            if header.to_lseq > previous {
+            if header.to_lseq > previous
+                && header.from_lseq <= previous + 1
+                && report.problems.len() == problems_before
+            {
                 let tx = self.db.conn_mut().transaction()?;
                 tx.execute(
                     "INSERT INTO meta (key, value) VALUES (?1, ?2)
@@ -727,7 +740,11 @@ impl Vault {
     /// fetched yet can get the bytes); a blob whose
     /// attachment is a tombstone in this vault, with the
     /// tombstone itself covered by every ack, is dead
-    /// weight on every device.
+    /// weight on every device. That a peer's coverage of
+    /// this stream implies it holds the tombstone leans
+    /// on relay: applied records are re-stamped with a
+    /// local lseq and re-emitted, so the tombstone also
+    /// travels in every holder's own stream.
     pub fn sync_prune(&mut self, sync_dir: &Path) -> Result<SyncPruneReport> {
         let mut report = SyncPruneReport::default();
         if !sync_dir.is_dir() {
@@ -1838,5 +1855,67 @@ mod tests {
         let report = a.sync_prune(sync.path()).unwrap();
         assert_eq!(report.blobs_removed, 1);
         assert!(!blob.exists());
+    }
+
+    #[test]
+    fn a_failed_attachment_is_not_acknowledged_and_heals_later() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let entry = a.create_entry(&draft("with file")).unwrap();
+        let att = a
+            .add_attachment(&entry.id, "note.txt", "text/plain", b"blob bytes")
+            .unwrap();
+        let info = a.sync_emit(sync.path()).unwrap().unwrap();
+        // The blob has not reached the folder yet (the
+        // mover is still copying it): the attachment record
+        // fails as a problem, so the bundle must NOT be
+        // acknowledged — pruning has to leave it alone.
+        let blob = sync.path().join("blobs").join(&att.id);
+        let blob_bytes = std::fs::read(&blob).unwrap();
+        std::fs::remove_file(&blob).unwrap();
+        let report = b.sync_apply(sync.path()).unwrap();
+        assert_eq!(report.problems.len(), 1, "{:?}", report.problems);
+        assert!(b.list_attachments(&entry.id).unwrap().is_empty());
+        let pruned = a.sync_prune(sync.path()).unwrap();
+        assert_eq!(pruned.bundles_removed, 0);
+        assert!(sync.path().join(&info.file_name).exists());
+        // When the blob arrives, the retry heals the apply.
+        std::fs::write(&blob, &blob_bytes).unwrap();
+        let report = b.sync_apply(sync.path()).unwrap();
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert_eq!(b.list_attachments(&entry.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_gap_in_a_peers_stream_is_not_acknowledged() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let e1 = a.create_entry(&draft("first")).unwrap();
+        let first = a.sync_emit(sync.path()).unwrap().unwrap();
+        let e2 = a.create_entry(&draft("second")).unwrap();
+        let second = a.sync_emit(sync.path()).unwrap().unwrap();
+        // The first bundle arrives torn (the mover is mid-
+        // copy); the second is intact but must not be
+        // acknowledged over the gap.
+        let p1 = sync.path().join(&first.file_name);
+        let intact = std::fs::read(&p1).unwrap();
+        std::fs::write(&p1, &intact[..intact.len() / 2]).unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        assert!(b.get_entry(&e1.id).is_err(), "e1 cannot be there yet");
+        assert!(b.get_entry(&e2.id).is_ok());
+        a.sync_prune(sync.path()).unwrap();
+        assert!(
+            sync.path().join(&first.file_name).exists(),
+            "the unapplied bundle was pruned on an ack that jumped the gap"
+        );
+        // Once the bundle arrives whole, the stream heals:
+        // both bundles apply in order and the cursor
+        // covers them.
+        std::fs::write(&p1, &intact).unwrap();
+        let report = b.sync_apply(sync.path()).unwrap();
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert!(b.get_entry(&e1.id).is_ok());
+        let cursor = b.db.meta(&format!("sync_applied:{}", a.device_id)).unwrap();
+        assert_eq!(cursor.as_deref(), Some(second.to_lseq.to_string().as_str()));
     }
 }
