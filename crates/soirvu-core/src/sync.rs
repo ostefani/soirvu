@@ -68,6 +68,13 @@ const EMITTED_KEY: &str = "sync_emitted_lseq";
 /// sync_apply): the warning is loud ONCE per file, not on
 /// every run for as long as the stale file sits there.
 const WARNED_KEY: &str = "sync_warned_bundles";
+/// Meta key prefix for the per-peer applied cursors: how
+/// far this vault has incorporated each peer's bundle
+/// stream. Published into the folder as ack files, they
+/// are what makes pruning safe.
+const APPLIED_PREFIX: &str = "sync_applied:";
+const ACK_FORMAT: u32 = 1;
+const ACK_DIR: &str = "acks";
 
 /// What one emit produced (or None when nothing changed).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +95,30 @@ pub struct SyncReport {
     pub entries_conflicted: usize,
     pub attachments_applied: usize,
     pub problems: Vec<String>,
+}
+
+/// What one prune removed from a sync folder.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SyncPruneReport {
+    pub bundles_removed: usize,
+    pub blobs_removed: usize,
+    /// Every known peer has incorporated this vault's
+    /// stream at least this far (0 = nothing is provably
+    /// consumed, so nothing was removed).
+    pub covered_through: i64,
+}
+
+/// One device's published cursors, written to
+/// `acks/<device id>.json` in the sync folder after an
+/// apply: which point of each peer's stream this device
+/// has incorporated. Ids and counters only — the same
+/// metadata class as a bundle header.
+#[derive(Debug, Serialize, Deserialize)]
+struct SyncAck {
+    format: u32,
+    vault_id: String,
+    device_id: String,
+    applied: std::collections::BTreeMap<String, i64>,
 }
 
 /// The plaintext bundle header: metadata only (the same
@@ -151,12 +182,21 @@ fn short(id: &str) -> &str {
 /// '-' itself, so the range is split off from the right.
 /// Returns (vault prefix, from, to).
 fn parse_bundle_name(name: &str) -> Option<(String, i64, i64)> {
+    let (vault, _device, from, to) = parse_bundle_name_full(name)?;
+    Some((vault, from, to))
+}
+
+/// Like `parse_bundle_name`, but also returns the device
+/// part (a full id in current names, its first 8
+/// characters in names written before identity fix).
+fn parse_bundle_name_full(name: &str) -> Option<(String, String, i64, i64)> {
     let stem = name.strip_suffix(".sync")?;
     let (rest, to) = stem.rsplit_once('-')?;
     let (rest, from) = rest.rsplit_once('-')?;
-    let (vault, _device) = rest.split_once('-')?;
+    let (vault, device) = rest.split_once('-')?;
     Some((
         vault.to_string(),
+        device.to_string(),
         from.parse().ok()?,
         to.parse().ok()?,
     ))
@@ -170,6 +210,29 @@ fn parse_bundle_name(name: &str) -> Option<(String, i64, i64)> {
 fn header_of(bytes: &[u8]) -> Option<BundleHeader> {
     let newline = bytes.iter().position(|b| *b == b'\n')?;
     serde_json::from_slice(&bytes[..newline]).ok()
+}
+
+/// Reads every ack file for this vault in the folder.
+/// Files that do not parse — a torn write from a peer, a
+/// stranger's file — are skipped: a missing ack only
+/// ever makes pruning more conservative.
+fn read_acks(sync_dir: &Path, vault_id: &str) -> Vec<SyncAck> {
+    let mut out = Vec::new();
+    let acks_dir = sync_dir.join(ACK_DIR);
+    if let Ok(items) = fs::read_dir(&acks_dir) {
+        for item in items.flatten() {
+            let path = item.path();
+            if path.extension().is_some_and(|e| e == "json")
+                && let Ok(bytes) = fs::read(&path)
+                && let Ok(ack) = serde_json::from_slice::<SyncAck>(&bytes)
+                && ack.format == ACK_FORMAT
+                && ack.vault_id == vault_id
+            {
+                out.push(ack);
+            }
+        }
+    }
+    out
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -468,6 +531,7 @@ impl Vault {
             .and_then(|v| serde_json::from_str(&v).ok())
             .unwrap_or_default();
         let mut warned_dirty = false;
+        let mut cursors_dirty = false;
         let mut files: Vec<(String, PathBuf)> = Vec::new();
         for item in fs::read_dir(sync_dir)? {
             let item = item?;
@@ -566,6 +630,28 @@ impl Vault {
             for record in &bundle.attachments {
                 self.apply_attachment(sync_dir, record, &mut report)?;
             }
+            // The bundle is fully incorporated only now —
+            // entries committed and every attachment record
+            // applied (a missing blob aborts above, before
+            // this point). Advance the peer cursor: it is
+            // what this vault's ack publishes, and what
+            // makes the peer's bundles prunable.
+            let cursor_key = format!("{APPLIED_PREFIX}{}", header.device_id);
+            let previous: i64 = self
+                .db
+                .meta(&cursor_key)?
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            if header.to_lseq > previous {
+                let tx = self.db.conn_mut().transaction()?;
+                tx.execute(
+                    "INSERT INTO meta (key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params![cursor_key, header.to_lseq.to_string()],
+                )?;
+                tx.commit()?;
+                cursors_dirty = true;
+            }
         }
         if warned_dirty {
             let tx = self.db.conn_mut().transaction()?;
@@ -575,6 +661,146 @@ impl Vault {
                 params![WARNED_KEY, serde_json::to_string(&warned)?],
             )?;
             tx.commit()?;
+        }
+        if cursors_dirty {
+            // Best effort: a missing ack only ever makes
+            // peers prune less — the safe direction — so a
+            // publish failure never fails the apply.
+            let _ = self.publish_ack(sync_dir);
+        }
+        Ok(report)
+    }
+
+    /// Writes this vault's ack file into the sync folder:
+    /// the per-peer cursors, so peers can tell which of
+    /// their bundles every device has consumed.
+    fn publish_ack(&self, sync_dir: &Path) -> Result<()> {
+        let mut applied = std::collections::BTreeMap::new();
+        {
+            let conn = self.db.connection();
+            let mut stmt =
+                conn.prepare("SELECT key, value FROM meta WHERE key LIKE 'sync_applied:%'")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (key, value) = row?;
+                if let (Some(peer), Ok(to)) =
+                    (key.strip_prefix(APPLIED_PREFIX), value.parse::<i64>())
+                {
+                    applied.insert(peer.to_string(), to);
+                }
+            }
+        }
+        let ack = SyncAck {
+            format: ACK_FORMAT,
+            vault_id: self.header().vault_id.clone(),
+            device_id: self.device_id.clone(),
+            applied,
+        };
+        let acks_dir = sync_dir.join(ACK_DIR);
+        fs::create_dir_all(&acks_dir)?;
+        let tmp = acks_dir.join(format!(".tmp-{}", self.device_id));
+        fs::write(&tmp, serde_json::to_vec(&ack)?)?;
+        let dest = acks_dir.join(format!("{}.json", self.device_id));
+        rename_retry(&tmp, &dest)?;
+        Ok(())
+    }
+
+    /// Removes this vault's own consumed bundles — and
+    /// the blobs of attachments whose deletion is equally
+    /// consumed — from the sync folder.
+    ///
+    /// A bundle is removed only when EVERY peer known to
+    /// the folder has published an ack covering it: the
+    /// peers are the devices that publish acks here plus
+    /// the authors of bundles present here, and a peer
+    /// with no ack counts as having consumed nothing.
+    /// With no peers, or no acks, nothing is removed —
+    /// pruning must never guess. A device that joins the
+    /// folder later is NOT covered by this rule: it can
+    /// only receive what the folder and its peers still
+    /// hold, so prune only once the peer set is settled.
+    ///
+    /// Blobs of LIVE attachments are never removed (the
+    /// folder is the only place a peer that has not
+    /// fetched yet can get the bytes); a blob whose
+    /// attachment is a tombstone in this vault, with the
+    /// tombstone itself covered by every ack, is dead
+    /// weight on every device.
+    pub fn sync_prune(&mut self, sync_dir: &Path) -> Result<SyncPruneReport> {
+        let mut report = SyncPruneReport::default();
+        if !sync_dir.is_dir() {
+            return Ok(report);
+        }
+        let my_vault = self.header().vault_id.clone();
+        let my_vault_short = short(&my_vault).to_string();
+        let acks = read_acks(sync_dir, &my_vault);
+        let mut peers: std::collections::BTreeSet<String> =
+            acks.iter().map(|a| a.device_id.clone()).collect();
+        let mut mine: Vec<(PathBuf, i64)> = Vec::new();
+        for item in fs::read_dir(sync_dir)? {
+            let item = item?;
+            let name = item.file_name().to_string_lossy().into_owned();
+            if let Some((prefix, device, _from, to)) = parse_bundle_name_full(&name) {
+                if prefix != my_vault_short {
+                    continue;
+                }
+                if device == self.device_id || device == short(&self.device_id) {
+                    mine.push((item.path(), to));
+                } else if device.len() == 36 {
+                    peers.insert(device);
+                }
+            }
+        }
+        peers.remove(&self.device_id);
+        if peers.is_empty() {
+            return Ok(report);
+        }
+        let covered = peers
+            .iter()
+            .map(|peer| {
+                acks.iter()
+                    .find(|a| &a.device_id == peer)
+                    .and_then(|a| a.applied.get(&self.device_id).copied())
+                    .unwrap_or(0)
+            })
+            .min()
+            .unwrap_or(0);
+        report.covered_through = covered;
+        if covered == 0 {
+            return Ok(report);
+        }
+        for (path, to) in mine {
+            if to <= covered && fs::remove_file(&path).is_ok() {
+                report.bundles_removed += 1;
+            }
+        }
+        let blobs_dir = sync_dir.join("blobs");
+        if blobs_dir.is_dir() {
+            for item in fs::read_dir(&blobs_dir)? {
+                let item = item?;
+                let path = item.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let id = item.file_name().to_string_lossy().into_owned();
+                let row: Option<(Option<i64>, i64)> = self
+                    .db
+                    .connection()
+                    .query_row(
+                        "SELECT deleted_at, lseq FROM attachment WHERE id = ?1",
+                        [&id],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .ok();
+                if let Some((Some(_deleted_at), lseq)) = row
+                    && lseq <= covered
+                    && fs::remove_file(&path).is_ok()
+                {
+                    report.blobs_removed += 1;
+                }
+            }
         }
         Ok(report)
     }
@@ -1494,5 +1720,123 @@ mod tests {
             .filter(|i| b.get_entry(&i.id).unwrap().body_md == "A's edited")
             .count();
         assert_eq!(copies, 1, "the same loser produced {copies} copies");
+    }
+
+    fn bundle_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|i| i.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".sync"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn apply_records_cursors_and_publishes_an_ack() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        a.create_entry(&draft("one")).unwrap();
+        let info = a.sync_emit(sync.path()).unwrap().unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        let cursor = b.db.meta(&format!("sync_applied:{}", a.device_id)).unwrap();
+        assert_eq!(cursor.as_deref(), Some(info.to_lseq.to_string().as_str()));
+        // The ack file is in the folder, addressed by B's
+        // full device id, carrying the same cursor.
+        let ack_path = sync
+            .path()
+            .join("acks")
+            .join(format!("{}.json", b.device_id));
+        let ack: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&ack_path).unwrap()).unwrap();
+        assert_eq!(ack["device_id"], b.device_id.as_str());
+        assert_eq!(ack["applied"][a.device_id.as_str()], info.to_lseq);
+    }
+
+    #[test]
+    fn prune_waits_for_every_peer_then_removes_bundles() {
+        const DEVICE_C: &str = "cccccccc-3333-4333-8333-cccccccccccc";
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let dir_c = TempDir::new().unwrap();
+        let c_dir = dir_c.path().join("v");
+        copy_dir(a.dir(), &c_dir);
+        let mut c = Vault::open_with_passphrase(&c_dir, PASSPHRASE).unwrap();
+        {
+            let conn = c.db.conn_mut();
+            conn.execute(
+                "INSERT INTO device (id, name, created_at) VALUES (?1, 'test', 0)",
+                [DEVICE_C],
+            )
+            .unwrap();
+            conn.execute("UPDATE meta SET value = ?1 WHERE key = 'device_id'", [DEVICE_C])
+                .unwrap();
+        }
+        drop(c);
+        let mut c = Vault::open_with_passphrase(&c_dir, PASSPHRASE).unwrap();
+
+        let entry = a.create_entry(&draft("one")).unwrap();
+        let first = a.sync_emit(sync.path()).unwrap().unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        c.sync_apply(sync.path()).unwrap();
+        a.update_entry(&entry.id, &draft("two")).unwrap();
+        let second = a.sync_emit(sync.path()).unwrap().unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        // C has not consumed the second bundle: only the
+        // first is covered by every ack.
+        let report = a.sync_prune(sync.path()).unwrap();
+        assert_eq!(report.covered_through, first.to_lseq);
+        assert_eq!(report.bundles_removed, 1);
+        let names = bundle_names(sync.path());
+        assert!(!names.contains(&first.file_name), "{names:?}");
+        assert!(names.contains(&second.file_name), "{names:?}");
+        // Once C catches up, the second bundle goes too —
+        // and the entry itself lives on in C's database.
+        c.sync_apply(sync.path()).unwrap();
+        let report = a.sync_prune(sync.path()).unwrap();
+        assert_eq!(report.bundles_removed, 1);
+        assert!(bundle_names(sync.path()).is_empty());
+        assert_eq!(c.get_entry(&entry.id).unwrap().body_md, "two");
+    }
+
+    #[test]
+    fn prune_without_peers_removes_nothing() {
+        let (_da, _db, mut a, _b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        a.create_entry(&draft("one")).unwrap();
+        a.sync_emit(sync.path()).unwrap();
+        let report = a.sync_prune(sync.path()).unwrap();
+        assert_eq!(report.bundles_removed, 0);
+        assert_eq!(report.covered_through, 0);
+        assert_eq!(bundle_names(sync.path()).len(), 1);
+    }
+
+    #[test]
+    fn prune_removes_only_covered_tombstone_blobs() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let entry = a.create_entry(&draft("with file")).unwrap();
+        let att = a
+            .add_attachment(&entry.id, "note.txt", "text/plain", b"blob bytes")
+            .unwrap();
+        a.sync_emit(sync.path()).unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        let blob = sync.path().join("blobs").join(&att.id);
+        assert!(blob.exists());
+        // Covered by B's ack — but the attachment is LIVE,
+        // so its blob stays: the folder is where a peer
+        // that has not fetched yet gets the bytes.
+        let report = a.sync_prune(sync.path()).unwrap();
+        assert_eq!(report.blobs_removed, 0);
+        assert!(blob.exists());
+        // Delete it, sync the tombstone, and the blob is
+        // dead weight everywhere: pruned.
+        a.delete_attachment(&att.id).unwrap();
+        a.sync_emit(sync.path()).unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        let report = a.sync_prune(sync.path()).unwrap();
+        assert_eq!(report.blobs_removed, 1);
+        assert!(!blob.exists());
     }
 }

@@ -11,6 +11,7 @@
 //!   soirvu-cli export <vault-dir> <out-dir> [--recovery <key>]
 //!   soirvu-cli sync-emit <vault-dir> <sync-dir> [--recovery <key>]
 //!   soirvu-cli sync-apply <vault-dir> <sync-dir> [--recovery <key>]
+//!   soirvu-cli sync-prune <vault-dir> <sync-dir> [--recovery <key>]
 //!   soirvu-cli restamp-device <vault-dir> [--recovery <key>]
 //!
 //! The passphrase comes from the SOIRVU_PASSPHRASE environment variable,
@@ -65,6 +66,7 @@ soirvu-cli — create, check and export a Soirvu vault without the app
   soirvu-cli export <vault-dir> <out-dir> [--recovery <key>]
   soirvu-cli sync-emit <vault-dir> <sync-dir> [--recovery <key>]
   soirvu-cli sync-apply <vault-dir> <sync-dir> [--recovery <key>]
+  soirvu-cli sync-prune <vault-dir> <sync-dir> [--recovery <key>]
   soirvu-cli restamp-device <vault-dir> [--recovery <key>]
 
 The passphrase is read from SOIRVU_PASSPHRASE, or asked for at the
@@ -103,6 +105,13 @@ fn run(args: &[String]) -> Result<(), RunError> {
                 return Err(RunError::Usage);
             }
             sync_apply(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
+        }
+        "sync-prune" if rest.len() >= 2 => {
+            let (dirs, recovery) = open_args(rest)?;
+            if dirs.len() != 2 {
+                return Err(RunError::Usage);
+            }
+            sync_prune(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
         }
         "restamp-device" if !rest.is_empty() => {
             let (dirs, recovery) = open_args(rest)?;
@@ -282,6 +291,16 @@ fn sync_apply(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(),
             report.problems.len()
         )))
     }
+}
+
+fn sync_prune(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(), RunError> {
+    let mut vault = open(dir, recovery)?;
+    let report = vault.sync_prune(sync_dir).map_err(failed)?;
+    println!(
+        "pruned {} bundle(s), {} blob(s); every known peer has consumed through lseq {}",
+        report.bundles_removed, report.blobs_removed, report.covered_through
+    );
+    Ok(())
 }
 
 fn restamp_device(dir: &Path, recovery: Option<&str>) -> Result<(), RunError> {
