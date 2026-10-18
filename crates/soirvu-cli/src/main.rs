@@ -283,6 +283,9 @@ fn sync_apply(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(),
     for problem in &report.problems {
         println!("problem: {problem}");
     }
+    for warning in &report.warnings {
+        println!("warning: {warning}");
+    }
     if report.problems.is_empty() {
         Ok(())
     } else {

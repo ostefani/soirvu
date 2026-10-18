@@ -125,6 +125,7 @@
     let pruneArm = $state(false);
     let syncNote = $state('');
     let syncProblems = $state([]);
+    let syncWarnings = $state([]);
     let restampArm = $state(false);
     let restampNote = $state('');
 
@@ -174,6 +175,7 @@
             syncInfo = null;
             syncNote = '';
             syncProblems = [];
+            syncWarnings = [];
         } catch (e) {
             error = `Something went wrong (${e}).`;
         }
@@ -182,6 +184,7 @@
     async function runSyncEmit() {
         syncNote = '';
         syncProblems = [];
+        syncWarnings = [];
         syncBusy = true;
         try {
             const bundle = await api.syncEmit();
@@ -205,6 +208,7 @@
     async function runSyncApply() {
         syncNote = '';
         syncProblems = [];
+        syncWarnings = [];
         syncBusy = true;
         try {
             const report = await api.syncApply();
@@ -221,6 +225,7 @@
                 report.attachments_applied +
                 ' attachments.';
             syncProblems = report.problems;
+            syncWarnings = report.warnings;
             if (report.entries_applied > 0) {
                 onImported?.();
             }
@@ -235,6 +240,7 @@
     async function runSyncPrune() {
         syncNote = '';
         syncProblems = [];
+        syncWarnings = [];
         syncBusy = true;
         try {
             const report = await api.syncPrune();
@@ -677,6 +683,9 @@
         {#if syncNote}<p class="note">{syncNote}</p>{/if}
         {#each syncProblems as problem}
             <p class="error">{problem}</p>
+        {/each}
+        {#each syncWarnings as warning}
+            <p class="note">{warning}</p>
         {/each}
         <p class="note">
             If this diary is a copy of a folder from another device, both copies share one device identity and cannot

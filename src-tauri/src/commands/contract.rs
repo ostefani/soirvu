@@ -301,6 +301,7 @@ fn sync_shapes() {
             problems: vec![
                 "attachment 0190a1b2: its blob is missing from the sync folder".into(),
             ],
+            warnings: vec![],
         },
     );
     snap(

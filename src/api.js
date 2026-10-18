@@ -548,6 +548,9 @@ export function settingsClearBackupDir() {
  * @property {number} entries_conflicted
  * @property {number} attachments_applied
  * @property {string[]} problems
+ * @property {string[]} warnings Notes that are not
+ *   failures (the ack could not be published, say); the
+ *   sync itself still succeeded.
  */
 
 /**

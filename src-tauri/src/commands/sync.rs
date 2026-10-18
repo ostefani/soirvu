@@ -76,6 +76,7 @@ pub struct SyncReportDto {
     pub entries_conflicted: usize,
     pub attachments_applied: usize,
     pub problems: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 impl From<SyncReport> for SyncReportDto {
@@ -87,6 +88,7 @@ impl From<SyncReport> for SyncReportDto {
             entries_conflicted: report.entries_conflicted,
             attachments_applied: report.attachments_applied,
             problems: report.problems,
+            warnings: report.warnings,
         }
     }
 }

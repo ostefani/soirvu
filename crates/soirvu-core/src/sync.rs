@@ -95,6 +95,11 @@ pub struct SyncReport {
     pub entries_conflicted: usize,
     pub attachments_applied: usize,
     pub problems: Vec<String>,
+    /// Notes that are not failures: the sync itself did
+    /// its work (an ack that could not be published, say).
+    /// Callers show them without treating the run as
+    /// failed — the CLI, in particular, still exits 0.
+    pub warnings: Vec<String>,
 }
 
 /// What one prune removed from a sync folder.
@@ -696,7 +701,7 @@ impl Vault {
         // unexplained prune stall is worse than a repeated
         // note.
         if let Err(e) = self.publish_ack(sync_dir) {
-            report.problems.push(format!(
+            report.warnings.push(format!(
                 "this device's ack could not be published ({e}); \
                  peers will prune less until it can be"
             ));
@@ -704,14 +709,6 @@ impl Vault {
         Ok(report)
     }
 
-    /// Writes this vault's ack file into the sync folder:
-    /// the per-peer cursors, so peers can tell which of
-    /// their bundles every device has consumed. Cursors
-    /// are trusted per device id: under a shared
-    /// (unrestamped) id, a bit-identical copy's cursors
-    /// are indistinguishable from this device's — the
-    /// design's answer there is bundle-level detection
-    /// plus restamp, not the ack.
     /// Every per-peer cursor this vault holds, by peer.
     fn applied_cursors(&self) -> Result<std::collections::BTreeMap<String, i64>> {
         let mut applied = std::collections::BTreeMap::new();
@@ -750,6 +747,25 @@ impl Vault {
         })
     }
 
+    /// Writes this vault's ack file into the sync folder:
+    /// the per-peer cursors, so peers can tell which of
+    /// their bundles every device has consumed.
+    ///
+    /// The ack cannot be trusted while a device identity
+    /// is shared. A bit-identical copy's cursors are
+    /// indistinguishable from this device's, so under an
+    /// unrestamped copy the file can claim consumption
+    /// that never happened on the original — and nothing
+    /// in the ack can tell the copies apart, because a
+    /// copy holds everything the original holds. Restamp
+    /// ends the sharing; the durable fix is the device
+    /// id moving out of the database (Phase 10b step 3).
+    /// Until then this is a known gap, not a guarantee.
+    ///
+    /// Writes are monotone: a file that already claims
+    /// more — a further-along copy, or this device's own
+    /// later state — is left alone, so two copies cannot
+    /// keep overwriting each other with less.
     fn publish_ack(&self, sync_dir: &Path) -> Result<()> {
         let applied = self.applied_cursors()?;
         let ack = SyncAck {
@@ -761,12 +777,25 @@ impl Vault {
         let bytes = serde_json::to_vec(&ack)?;
         let acks_dir = sync_dir.join(ACK_DIR);
         let dest = acks_dir.join(format!("{}.json", self.device_id));
-        // Write only what changed: republishing an identical
-        // ack would make folder mirrors re-copy the file on
-        // every sync, and the repair case (missing or stale
-        // file) is exactly the differing one.
-        if fs::read(&dest).is_ok_and(|existing| existing == bytes) {
-            return Ok(());
+        if let Ok(existing) = fs::read(&dest) {
+            // Write only what changed: republishing an
+            // identical ack would make folder mirrors
+            // re-copy the file on every sync, and the
+            // repair case (missing or stale file) is
+            // exactly the differing one.
+            if existing == bytes {
+                return Ok(());
+            }
+            if let Ok(file_ack) = serde_json::from_slice::<SyncAck>(&existing) {
+                let ahead = file_ack.vault_id == ack.vault_id
+                    && file_ack
+                        .applied
+                        .iter()
+                        .any(|(peer, to)| *to > *ack.applied.get(peer).unwrap_or(&0));
+                if ahead {
+                    return Ok(());
+                }
+            }
         }
         fs::create_dir_all(&acks_dir)?;
         let tmp = acks_dir.join(format!(".tmp-{}", self.device_id));
@@ -2055,8 +2084,8 @@ mod tests {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
         // "acks" exists as a FILE: publishing must fail.
-        // (B's emit writes its bundle regardless — publish
-        // there is best-effort — but A's apply must note it.)
+        // A's apply carries that as a warning, not a
+        // problem — the data itself applied fine.
         fs::write(sync.path().join("acks"), b"not a dir").unwrap();
         b.create_entry(&draft("y1")).unwrap();
         b.sync_emit(sync.path()).unwrap();
@@ -2064,11 +2093,75 @@ mod tests {
         assert_eq!(report.entries_applied, 1);
         assert!(
             report
-                .problems
+                .warnings
                 .iter()
-                .any(|p| p.contains("ack could not be published")),
+                .any(|w| w.contains("ack could not be published")),
             "{:?}",
-            report.problems
+            report.warnings
+        );
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+    }
+
+    #[test]
+    fn publish_ack_never_regresses_a_further_along_file() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        b.create_entry(&draft("y1")).unwrap();
+        b.sync_emit(sync.path()).unwrap();
+        a.sync_apply(sync.path()).unwrap();
+        // A further-along writer (a copy that consumed
+        // more, or this device's own later state) left a
+        // higher ack under A's id. A's next apply must not
+        // overwrite it with less: peers would prune less,
+        // and two copies would fight over the file.
+        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
+        let mut file_ack: SyncAck =
+            serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
+        file_ack.applied.insert(b.device_id.clone(), 99);
+        fs::write(&ack_path, serde_json::to_vec(&file_ack).unwrap()).unwrap();
+        a.sync_apply(sync.path()).unwrap();
+        let after: SyncAck =
+            serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
+        assert_eq!(after.applied.get(&b.device_id), Some(&99));
+    }
+
+    #[test]
+    fn an_unrestamped_twin_can_still_move_the_shared_ack() {
+        // The accepted gap, pinned until the device id
+        // leaves the database (step 3): a bit-identical
+        // copy that applies a peer's bundle publishes its
+        // cursor under the shared id. The ack then claims
+        // consumption the original never did, and a prune
+        // on the peer would trust it. Nothing in the ack
+        // can tell the copies apart — restamp is the only
+        // remedy, and an apply-only twin never triggers
+        // the bundle-level detection.
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        b.create_entry(&draft("y1")).unwrap();
+        let info1 = b.sync_emit(sync.path()).unwrap().unwrap();
+        a.sync_apply(sync.path()).unwrap();
+        let dir_t = TempDir::new().unwrap();
+        let t_dir = dir_t.path().join("v");
+        copy_dir(a.dir(), &t_dir);
+        let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
+        b.create_entry(&draft("y2")).unwrap();
+        b.sync_emit(sync.path()).unwrap();
+        twin.sync_apply(sync.path()).unwrap();
+        let ack: SyncAck = serde_json::from_slice(
+            &fs::read(sync.path().join("acks").join(format!("{}.json", a.device_id)))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(ack.applied.get(&b.device_id), Some(&(info1.to_lseq + 1)));
+        // ...while the original's own cursor never moved.
+        let over_a = a.sync_overview().unwrap();
+        assert_eq!(
+            over_a.peers,
+            vec![SyncPeerCursor {
+                device_id: b.device_id.clone(),
+                applied_lseq: info1.to_lseq,
+            }]
         );
     }
 }
