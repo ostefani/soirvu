@@ -132,6 +132,8 @@
         switch (String(e)) {
             case 'sync_shared_identity':
                 return 'Another copy of this diary is using this device identity — restamp this copy below to fix it.';
+            case 'sync_folder_missing':
+                return 'The sync folder is not there — is the drive mounted?';
             case 'sync_not_configured':
                 return 'Choose a sync folder first.';
             case 'locked':

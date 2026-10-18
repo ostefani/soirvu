@@ -397,10 +397,6 @@ impl Vault {
             (entries, attachments, max_lseq)
         };
         if entries.is_empty() && attachments.is_empty() {
-            // Even with nothing to emit, being here means
-            // this device is active in the folder: publish
-            // the ack below before returning.
-            let _ = self.publish_ack(sync_dir);
             return Ok(None);
         }
         let from_lseq = watermark + 1;
@@ -697,8 +693,15 @@ impl Vault {
         if cursors_dirty {
             // Best effort: a missing ack only ever makes
             // peers prune less — the safe direction — so a
-            // publish failure never fails the apply.
-            let _ = self.publish_ack(sync_dir);
+            // publish failure never fails the apply. It is
+            // not silent, though: an unexplained stall is
+            // worse than a named one.
+            if let Err(e) = self.publish_ack(sync_dir) {
+                report.problems.push(format!(
+                    "this device's ack could not be published ({e}); \
+                     peers will prune less until it can be"
+                ));
+            }
         }
         Ok(report)
     }
@@ -2018,10 +2021,11 @@ mod tests {
         a.sync_emit(sync.path()).unwrap();
         let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
         assert!(ack_path.exists());
-        // A lost ack is repaired by the next emit, even one
-        // with nothing new to send.
+        // A lost ack is repaired by the next emit that
+        // carries a bundle (a no-op emit writes nothing).
         fs::remove_file(&ack_path).unwrap();
-        assert!(a.sync_emit(sync.path()).unwrap().is_none());
+        a.create_entry(&draft("two")).unwrap();
+        assert!(a.sync_emit(sync.path()).unwrap().is_some());
         assert!(ack_path.exists());
         // And the ack still does its real job: once B has
         // applied and emitted, its ack names A's stream.
@@ -2032,5 +2036,64 @@ mod tests {
         )
         .unwrap();
         assert!(String::from_utf8(b_ack).unwrap().contains(&a.device_id));
+    }
+
+    #[test]
+    fn a_no_op_emit_writes_nothing() {
+        let (_da, _db, mut a, _b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        // Into an existing folder: no bundles, no acks dir.
+        assert!(a.sync_emit(sync.path()).unwrap().is_none());
+        assert!(!sync.path().join("acks").exists());
+        // Into a missing path: still nothing, no phantom
+        // folder tree where a drive used to be mounted.
+        let missing = sync.path().join("gone");
+        assert!(a.sync_emit(&missing).unwrap().is_none());
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn a_twins_no_op_emit_does_not_republish_the_ack() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        b.create_entry(&draft("y1")).unwrap();
+        b.sync_emit(sync.path()).unwrap();
+        a.sync_apply(sync.path()).unwrap();
+        a.create_entry(&draft("x")).unwrap();
+        a.sync_emit(sync.path()).unwrap();
+        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
+        let before = fs::read(&ack_path).unwrap();
+        // A fresh twin copy (same device id) with nothing
+        // of its own to send must not touch the ack: the
+        // step2-fix widening let it republish its own —
+        // possibly ahead — cursors under the shared id.
+        let dir_t = TempDir::new().unwrap();
+        let t_dir = dir_t.path().join("v");
+        copy_dir(a.dir(), &t_dir);
+        let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
+        assert!(twin.sync_emit(sync.path()).unwrap().is_none());
+        assert_eq!(fs::read(&ack_path).unwrap(), before);
+    }
+
+    #[test]
+    fn a_failed_ack_publish_is_noted_in_the_apply_report() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        // "acks" exists as a FILE: publishing must fail.
+        // (B's emit writes its bundle regardless — publish
+        // there is best-effort — but A's apply must note it.)
+        fs::write(sync.path().join("acks"), b"not a dir").unwrap();
+        b.create_entry(&draft("y1")).unwrap();
+        b.sync_emit(sync.path()).unwrap();
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert_eq!(report.entries_applied, 1);
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|p| p.contains("ack could not be published")),
+            "{:?}",
+            report.problems
+        );
     }
 }

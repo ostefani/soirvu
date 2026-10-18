@@ -108,12 +108,21 @@ impl From<SyncPruneReport> for SyncPruneDto {
     }
 }
 
-/// The open vault's sync folder, or the not-configured
-/// code: the action commands need one, the picker sets it.
+/// The open vault's sync folder, or a code saying why
+/// not: the action commands need one, the picker sets it.
+/// The app always picks an existing folder, so a missing
+/// one here means it vanished (an unmounted drive). Core
+/// cannot tell that from a first use — its emit creates
+/// a fresh folder on purpose — but the app can, so the
+/// check lives here.
 fn configured_dir(state: &AppState) -> Result<PathBuf, String> {
-    state
+    let dir = state
         .current_sync_dir()
-        .ok_or_else(|| "sync_not_configured".to_string())
+        .ok_or_else(|| "sync_not_configured".to_string())?;
+    if !dir.is_dir() {
+        return Err("sync_folder_missing".to_string());
+    }
+    Ok(dir)
 }
 
 #[tauri::command(async)]
