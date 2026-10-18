@@ -511,11 +511,6 @@ impl Vault {
             )?;
             tx.commit()?;
         }
-        // Presence is part of the protocol: peers prune by
-        // the acks in the folder, so a device that only ever
-        // emits must still publish (and repair) its ack
-        // here, not only when an apply moves a cursor.
-        let _ = self.publish_ack(sync_dir);
         Ok(Some(SyncBundleInfo {
             file_name,
             from_lseq,
@@ -690,25 +685,33 @@ impl Vault {
             )?;
             tx.commit()?;
         }
-        if cursors_dirty {
-            // Best effort: a missing ack only ever makes
-            // peers prune less — the safe direction — so a
-            // publish failure never fails the apply. It is
-            // not silent, though: an unexplained stall is
-            // worse than a named one.
-            if let Err(e) = self.publish_ack(sync_dir) {
-                report.problems.push(format!(
-                    "this device's ack could not be published ({e}); \
-                     peers will prune less until it can be"
-                ));
-            }
+        // Every apply republishes the ack — the write is
+        // skipped when the file is already current, so
+        // this also repairs a lost ack on an apply where
+        // no cursor moved. Best effort: a missing ack only
+        // ever makes peers prune less — the safe direction
+        // — so a failure never fails the apply. It is not
+        // silent, and not one-shot: the note repeats on
+        // every apply until the publish lands, because an
+        // unexplained prune stall is worse than a repeated
+        // note.
+        if let Err(e) = self.publish_ack(sync_dir) {
+            report.problems.push(format!(
+                "this device's ack could not be published ({e}); \
+                 peers will prune less until it can be"
+            ));
         }
         Ok(report)
     }
 
     /// Writes this vault's ack file into the sync folder:
     /// the per-peer cursors, so peers can tell which of
-    /// their bundles every device has consumed.
+    /// their bundles every device has consumed. Cursors
+    /// are trusted per device id: under a shared
+    /// (unrestamped) id, a bit-identical copy's cursors
+    /// are indistinguishable from this device's — the
+    /// design's answer there is bundle-level detection
+    /// plus restamp, not the ack.
     /// Every per-peer cursor this vault holds, by peer.
     fn applied_cursors(&self) -> Result<std::collections::BTreeMap<String, i64>> {
         let mut applied = std::collections::BTreeMap::new();
@@ -2011,31 +2014,26 @@ mod tests {
     }
 
     #[test]
-    fn emit_publishes_and_repairs_this_devices_ack() {
+    fn apply_publishes_and_repairs_this_devices_ack() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
         a.create_entry(&draft("one")).unwrap();
-        // Emitting alone publishes the ack (no apply needed):
-        // peers prune by the acks in the folder, so a device
-        // that only emits must still be present there.
+        // Emit alone does not publish: the ack belongs to
+        // apply, the only operation that moves cursors.
         a.sync_emit(sync.path()).unwrap();
-        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
-        assert!(ack_path.exists());
-        // A lost ack is repaired by the next emit that
-        // carries a bundle (a no-op emit writes nothing).
-        fs::remove_file(&ack_path).unwrap();
-        a.create_entry(&draft("two")).unwrap();
-        assert!(a.sync_emit(sync.path()).unwrap().is_some());
-        assert!(ack_path.exists());
-        // And the ack still does its real job: once B has
-        // applied and emitted, its ack names A's stream.
+        let a_ack = sync.path().join("acks").join(format!("{}.json", a.device_id));
+        assert!(!a_ack.exists());
+        // B applies: B's ack appears, naming A's stream.
         b.sync_apply(sync.path()).unwrap();
-        b.sync_emit(sync.path()).unwrap();
-        let b_ack = fs::read(
-            sync.path().join("acks").join(format!("{}.json", b.device_id)),
-        )
-        .unwrap();
+        let b_ack_path = sync.path().join("acks").join(format!("{}.json", b.device_id));
+        let b_ack = fs::read(&b_ack_path).unwrap();
         assert!(String::from_utf8(b_ack).unwrap().contains(&a.device_id));
+        // A lost ack is repaired by the next apply, even
+        // one where no cursor moves.
+        fs::remove_file(&b_ack_path).unwrap();
+        let report = b.sync_apply(sync.path()).unwrap();
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert!(b_ack_path.exists());
     }
 
     #[test]
@@ -2050,29 +2048,6 @@ mod tests {
         let missing = sync.path().join("gone");
         assert!(a.sync_emit(&missing).unwrap().is_none());
         assert!(!missing.exists());
-    }
-
-    #[test]
-    fn a_twins_no_op_emit_does_not_republish_the_ack() {
-        let (_da, _db, mut a, mut b) = two_devices();
-        let sync = TempDir::new().unwrap();
-        b.create_entry(&draft("y1")).unwrap();
-        b.sync_emit(sync.path()).unwrap();
-        a.sync_apply(sync.path()).unwrap();
-        a.create_entry(&draft("x")).unwrap();
-        a.sync_emit(sync.path()).unwrap();
-        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
-        let before = fs::read(&ack_path).unwrap();
-        // A fresh twin copy (same device id) with nothing
-        // of its own to send must not touch the ack: the
-        // step2-fix widening let it republish its own —
-        // possibly ahead — cursors under the shared id.
-        let dir_t = TempDir::new().unwrap();
-        let t_dir = dir_t.path().join("v");
-        copy_dir(a.dir(), &t_dir);
-        let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
-        assert!(twin.sync_emit(sync.path()).unwrap().is_none());
-        assert_eq!(fs::read(&ack_path).unwrap(), before);
     }
 
     #[test]
