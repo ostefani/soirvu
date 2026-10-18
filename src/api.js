@@ -529,6 +529,8 @@ export function settingsClearBackupDir() {
  * @property {number} emitted_lseq
  * @property {number} bundles_in_folder
  * @property {SyncPeer[]} peers
+ * @property {boolean} ack_ahead_seen An ack ahead of
+ *   this vault was detected and not yet dismissed.
  */
 
 /**
@@ -551,6 +553,10 @@ export function settingsClearBackupDir() {
  * @property {string[]} warnings Notes that are not
  *   failures (the ack could not be published, say); the
  *   sync itself still succeeded.
+ * @property {string | null} ack_ahead Set when the
+ *   folder's ack claimed more than this vault holds: a
+ *   shared identity or a restore. A failure, not a
+ *   warning.
  */
 
 /**
@@ -608,6 +614,15 @@ export function syncPrune() {
  */
 export function restampDevice() {
     return invoke('restamp_device');
+}
+
+/**
+ * Clears the durable ahead-of-vault flag (see
+ * syncOverview's ack_ahead_seen) without restamping.
+ * @returns {Promise<SyncOverview>}
+ */
+export function syncDismissAckAhead() {
+    return invoke('sync_dismiss_ack_ahead');
 }
 
 /**

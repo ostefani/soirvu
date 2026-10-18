@@ -281,12 +281,19 @@ fn sync_apply(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(),
         report.attachments_applied
     );
     for problem in &report.problems {
-        println!("problem: {problem}");
+        eprintln!("problem: {problem}");
     }
     for warning in &report.warnings {
-        println!("warning: {warning}");
+        eprintln!("warning: {warning}");
     }
-    if report.problems.is_empty() {
+    if let Some(ahead) = &report.ack_ahead {
+        eprintln!("error: {ahead}");
+    }
+    if report.ack_ahead.is_some() {
+        Err(RunError::Failed(
+            "sync-apply detected an ack ahead of this vault".into(),
+        ))
+    } else if report.problems.is_empty() {
         Ok(())
     } else {
         Err(RunError::Failed(format!(

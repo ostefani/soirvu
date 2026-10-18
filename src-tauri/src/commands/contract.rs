@@ -278,6 +278,7 @@ fn sync_shapes() {
                 applied_lseq: 40,
                 waiting: 1,
             }],
+            ack_ahead_seen: false,
         },
     );
     snap(
@@ -302,6 +303,7 @@ fn sync_shapes() {
                 "attachment 0190a1b2: its blob is missing from the sync folder".into(),
             ],
             warnings: vec![],
+            ack_ahead: None,
         },
     );
     snap(

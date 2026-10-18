@@ -32,6 +32,7 @@ pub struct SyncOverviewDto {
     /// Bundle files for this vault currently in the folder.
     pub bundles_in_folder: usize,
     pub peers: Vec<SyncPeerDto>,
+    pub ack_ahead_seen: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -77,6 +78,7 @@ pub struct SyncReportDto {
     pub attachments_applied: usize,
     pub problems: Vec<String>,
     pub warnings: Vec<String>,
+    pub ack_ahead: Option<String>,
 }
 
 impl From<SyncReport> for SyncReportDto {
@@ -89,6 +91,7 @@ impl From<SyncReport> for SyncReportDto {
             attachments_applied: report.attachments_applied,
             problems: report.problems,
             warnings: report.warnings,
+            ack_ahead: report.ack_ahead,
         }
     }
 }
@@ -125,6 +128,21 @@ fn configured_dir(state: &AppState) -> Result<PathBuf, String> {
         return Err("sync_folder_missing".to_string());
     }
     Ok(dir)
+}
+
+/// Clears the durable ahead-of-vault flag without
+/// restamping; the refreshed overview comes back.
+#[tauri::command(async)]
+pub fn sync_dismiss_ack_ahead(
+    state: State<'_, AppState>,
+) -> Result<SyncOverviewDto, String> {
+    let dir = state.current_sync_dir();
+    ipc(state.with_vault(|vault| {
+        vault.clear_ack_ahead()?;
+        let overview = vault.sync_overview()?;
+        let vault_id = vault.header().vault_id.clone();
+        Ok(assemble_overview(&overview, dir.as_deref(), &vault_id))
+    }))
 }
 
 #[tauri::command(async)]
@@ -196,6 +214,7 @@ fn assemble_overview(overview: &SyncOverview, dir: Option<&Path>, vault_id: &str
         emitted_lseq: overview.emitted_lseq,
         bundles_in_folder,
         peers,
+        ack_ahead_seen: overview.ack_ahead_seen,
     }
 }
 

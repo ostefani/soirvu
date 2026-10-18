@@ -46,6 +46,7 @@ fn main() {
         "sync_emit",
         "sync_apply",
         "sync_prune",
+        "sync_dismiss_ack_ahead",
         "restamp_device",
         "attachment_begin",
         "attachment_chunk",

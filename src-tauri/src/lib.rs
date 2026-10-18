@@ -228,6 +228,7 @@ pub fn run() {
             commands::sync::sync_emit,
             commands::sync::sync_apply,
             commands::sync::sync_prune,
+            commands::sync::sync_dismiss_ack_ahead,
             commands::sync::restamp_device,
             commands::attachments::attachment_begin,
             commands::attachments::attachment_chunk,

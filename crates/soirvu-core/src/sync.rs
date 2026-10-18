@@ -68,6 +68,7 @@ const EMITTED_KEY: &str = "sync_emitted_lseq";
 /// sync_apply): the warning is loud ONCE per file, not on
 /// every run for as long as the stale file sits there.
 const WARNED_KEY: &str = "sync_warned_bundles";
+const ACK_AHEAD_KEY: &str = "sync_ack_ahead";
 /// Meta key prefix for the per-peer applied cursors: how
 /// far this vault has incorporated each peer's bundle
 /// stream. Published into the folder as ack files, they
@@ -100,6 +101,13 @@ pub struct SyncReport {
     /// Callers show them without treating the run as
     /// failed — the CLI, in particular, still exits 0.
     pub warnings: Vec<String>,
+    /// The strongest shared-identity signal there is:
+    /// the folder's ack for this device claimed more
+    /// than this database holds, and was corrected. Kept
+    /// apart from warnings on purpose — callers treat it
+    /// as a failure (the CLI exits non-zero, the UI
+    /// shows it as an error).
+    pub ack_ahead: Option<String>,
 }
 
 /// What one prune removed from a sync folder.
@@ -121,6 +129,10 @@ pub struct SyncOverview {
     pub device_id: String,
     pub emitted_lseq: i64,
     pub peers: Vec<SyncPeerCursor>,
+    /// An ack ahead of this vault was detected at some
+    /// point (see `SyncReport::ack_ahead`) and not yet
+    /// dismissed or restamped away.
+    pub ack_ahead_seen: bool,
 }
 
 /// How far this vault has incorporated one peer's
@@ -701,7 +713,20 @@ impl Vault {
         // unexplained prune stall is worse than a repeated
         // note.
         match self.publish_ack(sync_dir) {
-            Ok(Some(warning)) => report.warnings.push(warning),
+            Ok(Some(warning)) => {
+                // Durable: the publish just corrected the
+                // file, so without a flag the signal would
+                // vanish with the apply that found it. It
+                // rides in sync_overview until restamp or
+                // an explicit dismiss clears it.
+                let conn = self.db.connection();
+                let _ = conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?1, '1')
+                     ON CONFLICT(key) DO UPDATE SET value = '1'",
+                    params![ACK_AHEAD_KEY],
+                );
+                report.ack_ahead = Some(warning);
+            }
             Ok(None) => {}
             Err(e) => report.warnings.push(format!(
                 "this device's ack could not be published ({e}); \
@@ -746,7 +771,17 @@ impl Vault {
                 .into_iter()
                 .map(|(device_id, applied_lseq)| SyncPeerCursor { device_id, applied_lseq })
                 .collect(),
+            ack_ahead_seen: self.db.meta(ACK_AHEAD_KEY)?.is_some(),
         })
+    }
+
+    /// Clears the durable ahead-of-vault flag (the one
+    /// `sync_overview` reports) without restamping.
+    pub fn clear_ack_ahead(&mut self) -> Result<()> {
+        let tx = self.db.conn_mut().transaction()?;
+        tx.execute("DELETE FROM meta WHERE key = ?1", [ACK_AHEAD_KEY])?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Writes this vault's ack file into the sync folder:
@@ -806,7 +841,10 @@ impl Vault {
                     warning = Some(
                         "this device's ack in the folder is ahead of this vault — \
                          another copy may share its identity, or the vault was \
-                         restored; if a copy shares it, restamp the copy"
+                         restored. Bundles a peer already pruned on the strength \
+                         of it are lost to this vault until that peer re-emits \
+                         its full state (restamping that peer does this); if a \
+                         copy shares this identity, restamp the copy"
                             .to_string(),
                     );
                 }
@@ -943,6 +981,7 @@ impl Vault {
             [&new_id],
         )?;
         tx.execute("DELETE FROM meta WHERE key = ?1", [EMITTED_KEY])?;
+        tx.execute("DELETE FROM meta WHERE key = ?1", [ACK_AHEAD_KEY])?;
         tx.commit()?;
         self.device_id = new_id.clone();
         Ok(new_id)
@@ -2135,14 +2174,12 @@ mod tests {
         file_ack.applied.insert(b.device_id.clone(), 99);
         fs::write(&ack_path, serde_json::to_vec(&file_ack).unwrap()).unwrap();
         let report = a.sync_apply(sync.path()).unwrap();
-        assert!(
-            report
-                .warnings
-                .iter()
-                .any(|w| w.contains("ahead of this vault")),
-            "{:?}",
-            report.warnings
-        );
+        let ahead = report.ack_ahead.as_deref().unwrap_or_default();
+        assert!(ahead.contains("ahead of this vault"), "{ahead}");
+        // The detection is durable, not one-shot.
+        assert!(a.sync_overview().unwrap().ack_ahead_seen);
+        a.clear_ack_ahead().unwrap();
+        assert!(!a.sync_overview().unwrap().ack_ahead_seen);
         let after: SyncAck =
             serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
         assert_eq!(after.applied.get(&b.device_id), Some(&info1.to_lseq));
@@ -2172,10 +2209,12 @@ mod tests {
         b.create_entry(&draft("y2")).unwrap();
         let info2 = b.sync_emit(sync.path()).unwrap().unwrap();
         twin.sync_apply(sync.path()).unwrap();
-        // The harm lands first: B trusts the moved ack
-        // and prunes y2's bundle, so the original can
-        // never consume it now.
-        fs::remove_file(sync.path().join(&info2.file_name)).unwrap();
+        // The harm lands through the real chain: B
+        // prunes, trusting the ack the twin moved, and
+        // y2's bundle goes with it.
+        let pruned = b.sync_prune(sync.path()).unwrap();
+        assert!(pruned.bundles_removed >= 1);
+        assert!(!sync.path().join(&info2.file_name).exists());
         let ack: SyncAck = serde_json::from_slice(
             &fs::read(sync.path().join("acks").join(format!("{}.json", a.device_id)))
                 .unwrap(),
@@ -2192,16 +2231,12 @@ mod tests {
             }]
         );
         // The original's next apply detects the ahead
-        // file, warns, and corrects it downward.
+        // file, reports it in the failure channel, and
+        // corrects it downward.
         let report = a.sync_apply(sync.path()).unwrap();
-        assert!(
-            report
-                .warnings
-                .iter()
-                .any(|w| w.contains("ahead of this vault")),
-            "{:?}",
-            report.warnings
-        );
+        let ahead = report.ack_ahead.as_deref().unwrap_or_default();
+        assert!(ahead.contains("ahead of this vault"), "{ahead}");
+        assert!(a.sync_overview().unwrap().ack_ahead_seen);
         let ack: SyncAck = serde_json::from_slice(
             &fs::read(sync.path().join("acks").join(format!("{}.json", a.device_id)))
                 .unwrap(),

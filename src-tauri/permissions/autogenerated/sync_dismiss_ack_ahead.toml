@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sync-dismiss-ack-ahead"
+description = "Enables the sync_dismiss_ack_ahead command without any pre-configured scope."
+commands.allow = ["sync_dismiss_ack_ahead"]
+
+[[permission]]
+identifier = "deny-sync-dismiss-ack-ahead"
+description = "Denies the sync_dismiss_ack_ahead command without any pre-configured scope."
+commands.deny = ["sync_dismiss_ack_ahead"]

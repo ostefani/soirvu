@@ -126,6 +126,7 @@
     let syncNote = $state('');
     let syncProblems = $state([]);
     let syncWarnings = $state([]);
+    let syncAckAhead = $state(null);
     let restampArm = $state(false);
     let restampNote = $state('');
 
@@ -143,6 +144,17 @@
                 return 'Sync failed.';
             default:
                 return 'Something went wrong (' + String(e) + ').';
+        }
+    }
+
+    async function dismissAckAhead() {
+        syncBusy = true;
+        try {
+            syncInfo = await api.syncDismissAckAhead();
+        } catch (e) {
+            syncProblems = [syncError(e)];
+        } finally {
+            syncBusy = false;
         }
     }
 
@@ -176,6 +188,7 @@
             syncNote = '';
             syncProblems = [];
             syncWarnings = [];
+            syncAckAhead = null;
         } catch (e) {
             error = `Something went wrong (${e}).`;
         }
@@ -185,6 +198,7 @@
         syncNote = '';
         syncProblems = [];
         syncWarnings = [];
+        syncAckAhead = null;
         syncBusy = true;
         try {
             const bundle = await api.syncEmit();
@@ -209,6 +223,7 @@
         syncNote = '';
         syncProblems = [];
         syncWarnings = [];
+        syncAckAhead = null;
         syncBusy = true;
         try {
             const report = await api.syncApply();
@@ -226,6 +241,7 @@
                 ' attachments.';
             syncProblems = report.problems;
             syncWarnings = report.warnings;
+            syncAckAhead = report.ack_ahead;
             if (report.entries_applied > 0) {
                 onImported?.();
             }
@@ -241,6 +257,7 @@
         syncNote = '';
         syncProblems = [];
         syncWarnings = [];
+        syncAckAhead = null;
         syncBusy = true;
         try {
             const report = await api.syncPrune();
@@ -654,6 +671,13 @@
             {/if}
         </div>
         {#if settings.sync_location && syncInfo}
+            {#if syncInfo.ack_ahead_seen}
+                <p class="error">
+                    An ack in this folder has claimed more than this vault holds — a copy may share its identity,
+                    or this vault was restored.
+                    <button class="quiet" onclick={dismissAckAhead} disabled={syncBusy}>Dismiss</button>
+                </p>
+            {/if}
             <p class="note">This device: <code>{syncInfo.device_id}</code></p>
             {#each syncInfo.peers as peer}
                 <p class="note">
@@ -687,6 +711,9 @@
         {#each syncWarnings as warning}
             <p class="warning">{warning}</p>
         {/each}
+        {#if syncAckAhead}
+            <p class="error">{syncAckAhead}</p>
+        {/if}
         <p class="note">
             If this diary is a copy of a folder from another device, both copies share one device identity and cannot
             sync with each other. Restamping gives THIS copy a new identity — the other device is untouched, and this
