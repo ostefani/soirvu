@@ -180,13 +180,40 @@ fn hex(bytes: &[u8]) -> String {
 /// record: every device resolving the same pair derives
 /// the same id, so the copies merge instead of multiplying.
 fn conflict_id(entry_id: &str, loser: &EntryRecord) -> String {
+    conflict_digest("soirvu-conflict\n", entry_id, loser)
+}
+
+/// The shared derivation behind `conflict_id` and
+/// `conflict_author`: a hash of the divergence — the
+/// entry, the loser's author and rev, and the loser's
+/// CONTENT. The content matters: two copies of one vault
+/// share a device id, so their losers can agree on
+/// (author, rev) while carrying different text; without
+/// the content they would map to one copy id, and the
+/// second text would be dropped as "already existing".
+fn conflict_digest(domain: &str, entry_id: &str, loser: &EntryRecord) -> String {
     let mut hash = Sha256::new();
-    hash.update(b"soirvu-conflict\n");
+    hash.update(domain.as_bytes());
     hash.update(entry_id.as_bytes());
     hash.update(b"\n");
     hash.update(loser.device_id.as_bytes());
     hash.update(b"\n");
     hash.update(loser.rev.to_string().as_bytes());
+    hash.update(b"\n");
+    // Serialised as JSON so the field boundaries are
+    // unambiguous. Timestamps are provenance, not
+    // content, and stay out.
+    let content = serde_json::to_vec(&(
+        &loser.entry_date,
+        &loser.title,
+        &loser.body_md,
+        loser.mood,
+        &loser.tz,
+        loser.deleted_at.is_some(),
+        &loser.tags,
+    ))
+    .expect("record content always serializes");
+    hash.update(&content);
     let digest = hash.finalize();
     let h = hex(&digest[..16]);
     format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
@@ -198,16 +225,7 @@ fn conflict_id(entry_id: &str, loser: &EntryRecord) -> String {
 /// author — never with its own device id — so the records
 /// they build are identical.
 fn conflict_author(entry_id: &str, loser: &EntryRecord) -> String {
-    let mut hash = Sha256::new();
-    hash.update(b"soirvu-conflict-author\n");
-    hash.update(entry_id.as_bytes());
-    hash.update(b"\n");
-    hash.update(loser.device_id.as_bytes());
-    hash.update(b"\n");
-    hash.update(loser.rev.to_string().as_bytes());
-    let digest = hash.finalize();
-    let h = hex(&digest[..16]);
-    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+    conflict_digest("soirvu-conflict-author\n", entry_id, loser)
 }
 
 impl Vault {
@@ -656,15 +674,13 @@ fn apply_entry(
         // preserve — which is also what stops two devices'
         // independently created copies of the SAME loser
         // from breeding copies of copies: the twins merge.
-        // The copy starts its OWN lineage: a deterministic
-        // synthetic author and a base pointing at itself.
-        // (It used to be stamped with the applying device
-        // and the loser's base — coordinates inside the
-        // ORIGINAL entry's history. A later edit of the
-        // copy kept that base, so the merge rules read the
-        // edited copy as stale on one side and the unedited
-        // copy as a fast-forward on the other, and the
-        // edit silently vanished.)
+        // The copy starts its OWN lineage — a deterministic
+        // synthetic author and a base pointing at itself —
+        // because a base inside the original entry's
+        // history would share that entry's coordinates: an
+        // edit of such a copy would read as stale on one
+        // peer and as a fast-forward on the other, and
+        // vanish between them.
         let winner_rec = if incoming_wins { record } else { &local };
         let text_differs = loser.body_md != winner_rec.body_md
             || loser.title != winner_rec.title
@@ -1319,5 +1335,88 @@ mod tests {
         let report = c.sync_apply(relay.path()).unwrap();
         assert!(report.problems.is_empty(), "{:?}", report.problems);
         assert_eq!(c.get_entry(&entry.id).unwrap().body_md, "edited on B");
+    }
+
+    #[test]
+    fn twin_copies_of_one_vault_lose_no_loser_text() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let entry = a.create_entry(&draft("base")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        // A twin: a raw copy of A's vault, still DEVICE_A.
+        let dir_t = TempDir::new().unwrap();
+        let t_dir = dir_t.path().join("v");
+        copy_dir(a.dir(), &t_dir);
+        let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
+        assert_eq!(twin.device_id, a.device_id);
+        // Three-way divergence at the same rev: A/2, twin's
+        // A/2 (different text, same author and rev), B/2.
+        // The twin makes a filler entry first so its emit
+        // range differs from A's and the emit guard stays
+        // out of this scenario.
+        a.update_entry(&entry.id, &draft("A one")).unwrap();
+        twin.create_entry(&draft("filler")).unwrap();
+        twin.update_entry(&entry.id, &draft("twin words")).unwrap();
+        b.update_entry(&entry.id, &draft("B words")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        exchange(&mut b, &mut twin, sync.path());
+        // Both losers survive as copies: their ids differ
+        // because the content is part of the derivation.
+        let page = b.list_entries(&crate::entries::ListQuery::default()).unwrap();
+        let bodies: Vec<String> = page
+            .items
+            .iter()
+            .map(|i| b.get_entry(&i.id).unwrap().body_md)
+            .collect();
+        assert!(bodies.iter().any(|x| x == "A one"), "A's loser kept: {bodies:?}");
+        assert!(bodies.iter().any(|x| x == "twin words"), "twin's loser kept: {bodies:?}");
+    }
+
+    #[test]
+    fn editing_a_conflict_copy_on_the_winner_device_survives() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let entry = a.create_entry(&draft("base")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        a.update_entry(&entry.id, &draft("A's words")).unwrap();
+        b.update_entry(&entry.id, &draft("B's words")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        // The copy is edited on B — the device whose edit
+        // WON the entry (A edited it in the other test).
+        let page = b.list_entries(&crate::entries::ListQuery::default()).unwrap();
+        let copy_id = page.items.iter().find(|i| i.id != entry.id).unwrap().id.clone();
+        b.update_entry(&copy_id, &draft("merged by hand")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        assert_eq!(a.get_entry(&copy_id).unwrap().body_md, "merged by hand");
+        assert_eq!(b.get_entry(&copy_id).unwrap().body_md, "merged by hand");
+    }
+
+    #[test]
+    fn an_edited_copy_arriving_before_resolution_converges() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let entry = a.create_entry(&draft("base")).unwrap();
+        a.sync_emit(sync.path()).unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        a.update_entry(&entry.id, &draft("A's words")).unwrap();
+        b.update_entry(&entry.id, &draft("B's words")).unwrap();
+        // B resolves first and edits the copy.
+        a.sync_emit(sync.path()).unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        let page = b.list_entries(&crate::entries::ListQuery::default()).unwrap();
+        let copy_id = page.items.iter().find(|i| i.id != entry.id).unwrap().id.clone();
+        b.update_entry(&copy_id, &draft("merged by hand")).unwrap();
+        // B edits the entry once more, so in B's next
+        // bundle the edited copy precedes the winning
+        // entry record (by lseq): A meets the copy before
+        // it has resolved the entry at all.
+        b.update_entry(&entry.id, &draft("B words v2")).unwrap();
+        b.sync_emit(sync.path()).unwrap();
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert_eq!(a.get_entry(&entry.id).unwrap().body_md, "B words v2");
+        assert_eq!(a.get_entry(&copy_id).unwrap().body_md, "merged by hand");
+        let page = a.list_entries(&crate::entries::ListQuery::default()).unwrap();
+        assert_eq!(page.items.len(), 2, "no duplicate copy");
     }
 }
