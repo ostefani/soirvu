@@ -75,6 +75,9 @@ import { listen } from "@tauri-apps/api/event";
  * @property {string} platform The OS this build runs on
  *   ("macos", "linux", "windows"); the UI offers only what
  *   the platform supports.
+ * @property {string | null} sync_location Display name of the
+ *   open diary's sync folder (never a path). Read-only here:
+ *   it changes only through syncPickFolder / syncClearFolder.
  */
 
 // ---------------------------------------------------------------------------
@@ -502,6 +505,106 @@ export function settingsPickBackupDir() {
 /** @returns {Promise<Settings>} */
 export function settingsClearBackupDir() {
     return invoke("settings_clear_backup_dir");
+}
+
+// ---------------------------------------------------------------------------
+// Sync (Phase 10): bundle files in a folder another tool
+// carries between devices. The folder path stays in Rust.
+
+/**
+ * @typedef {object} SyncPeer
+ * @property {string} device_id
+ * @property {number} applied_lseq How far this device has
+ *   incorporated that peer's stream (0 when it never has).
+ * @property {number} waiting That peer's bundles in the
+ *   folder past the cursor.
+ */
+
+/**
+ * @typedef {object} SyncOverview
+ * @property {string | null} folder_name Display name of the
+ *   sync folder (never a path); null when not set.
+ * @property {string} device_id This device's identity in
+ *   the sync folder.
+ * @property {number} emitted_lseq
+ * @property {number} bundles_in_folder
+ * @property {SyncPeer[]} peers
+ */
+
+/**
+ * @typedef {object} SyncBundle
+ * @property {string} file_name
+ * @property {number} from_lseq
+ * @property {number} to_lseq
+ * @property {number} entries
+ * @property {number} attachments
+ */
+
+/**
+ * @typedef {object} SyncReport
+ * @property {number} bundles_seen
+ * @property {number} bundles_applied
+ * @property {number} entries_applied
+ * @property {number} entries_conflicted
+ * @property {number} attachments_applied
+ * @property {string[]} problems
+ */
+
+/**
+ * @typedef {object} SyncPrune
+ * @property {number} bundles_removed
+ * @property {number} blobs_removed
+ * @property {number} covered_through
+ */
+
+/** @returns {Promise<SyncOverview>} */
+export function syncOverview() {
+    return invoke('sync_overview');
+}
+
+/**
+ * Opens the native folder picker for the open diary's sync
+ * folder; the path stays in Rust. Resolves to the updated
+ * Settings, or null when the user cancels the picker.
+ * @returns {Promise<Settings | null>}
+ */
+export function syncPickFolder() {
+    return invoke('sync_pick_folder');
+}
+
+/** @returns {Promise<Settings>} */
+export function syncClearFolder() {
+    return invoke('sync_clear_folder');
+}
+
+/**
+ * Writes this device's new changes as one bundle into the
+ * sync folder. Resolves null when nothing changed. Rejects
+ * with "sync_not_configured" when no folder is set.
+ * @returns {Promise<SyncBundle | null>}
+ */
+export function syncEmit() {
+    return invoke('sync_emit');
+}
+
+/** @returns {Promise<SyncReport>} */
+export function syncApply() {
+    return invoke('sync_apply');
+}
+
+/** @returns {Promise<SyncPrune>} */
+export function syncPrune() {
+    return invoke('sync_prune');
+}
+
+/**
+ * Gives THIS copy of the diary a new device identity — the
+ * remedy when a vault folder was copied from another
+ * device and both copies share one identity.
+ * @returns {Promise<string>} The new device id.
+ */
+export function restampDevice() {
+    return invoke('restamp_device');
 }
 
 /**

@@ -4,6 +4,7 @@ mod contract;
 pub mod attachments;
 pub mod entries;
 pub mod misc;
+pub mod sync;
 pub mod vault;
 
 use tauri::{AppHandle, Emitter};

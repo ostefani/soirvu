@@ -120,6 +120,152 @@
     let impBusy = $state(false);
     let impNote = $state('');
 
+    let syncInfo = $state(null);
+    let syncBusy = $state(false);
+    let syncNote = $state('');
+    let syncProblems = $state([]);
+    let restampArm = $state(false);
+    let restampNote = $state('');
+
+    function syncError(e) {
+        switch (String(e)) {
+            case 'sync_not_configured':
+                return 'Choose a sync folder first.';
+            case 'locked':
+                return 'The diary is locked.';
+            default:
+                return 'Something went wrong (' + String(e) + ').';
+        }
+    }
+
+    async function loadSync() {
+        try {
+            syncInfo = await api.syncOverview();
+        } catch {
+            syncInfo = null;
+        }
+    }
+
+    async function pickSync() {
+        error = '';
+        try {
+            const updated = await api.syncPickFolder();
+            if (updated) {
+                settings = updated;
+                await loadSync();
+            }
+        } catch (e) {
+            error = `Something went wrong (${e}).`;
+        }
+    }
+
+    async function clearSync() {
+        error = '';
+        try {
+            settings = await api.syncClearFolder();
+            syncInfo = null;
+            syncNote = '';
+            syncProblems = [];
+        } catch (e) {
+            error = `Something went wrong (${e}).`;
+        }
+    }
+
+    async function runSyncEmit() {
+        syncNote = '';
+        syncProblems = [];
+        syncBusy = true;
+        try {
+            const bundle = await api.syncEmit();
+            syncNote = bundle
+                ? 'Wrote ' +
+                  bundle.file_name +
+                  ' — ' +
+                  bundle.entries +
+                  ' entries, ' +
+                  bundle.attachments +
+                  ' attachments.'
+                : 'Nothing new to emit.';
+            await loadSync();
+        } catch (e) {
+            syncNote = syncError(e);
+        } finally {
+            syncBusy = false;
+        }
+    }
+
+    async function runSyncApply() {
+        syncNote = '';
+        syncProblems = [];
+        syncBusy = true;
+        try {
+            const report = await api.syncApply();
+            syncNote =
+                'Applied ' +
+                report.bundles_applied +
+                ' of ' +
+                report.bundles_seen +
+                ' bundles: ' +
+                report.entries_applied +
+                ' entries, ' +
+                report.entries_conflicted +
+                ' conflict copies, ' +
+                report.attachments_applied +
+                ' attachments.';
+            syncProblems = report.problems;
+            if (report.entries_applied > 0) {
+                onImported?.();
+            }
+            await loadSync();
+        } catch (e) {
+            syncNote = syncError(e);
+        } finally {
+            syncBusy = false;
+        }
+    }
+
+    async function runSyncPrune() {
+        syncNote = '';
+        syncProblems = [];
+        syncBusy = true;
+        try {
+            const report = await api.syncPrune();
+            syncNote =
+                report.covered_through > 0
+                    ? 'Removed ' +
+                      report.bundles_removed +
+                      ' bundles and ' +
+                      report.blobs_removed +
+                      ' blobs — every peer has consumed this device through ' +
+                      report.covered_through +
+                      '.'
+                    : 'Nothing pruned — no peer has acknowledged this device yet.';
+            await loadSync();
+        } catch (e) {
+            syncNote = syncError(e);
+        } finally {
+            syncBusy = false;
+        }
+    }
+
+    async function doRestamp() {
+        restampNote = '';
+        syncBusy = true;
+        try {
+            const id = await api.restampDevice();
+            restampArm = false;
+            restampNote =
+                'This copy now syncs as a new device (' +
+                id.slice(0, 8) +
+                '…). Its changes will be emitted again under the new identity.';
+            await loadSync();
+        } catch (e) {
+            restampNote = syncError(e);
+        } finally {
+            syncBusy = false;
+        }
+    }
+
     async function runImport(which) {
         impNote = '';
         impBusy = true;
@@ -208,6 +354,9 @@
             clipboardClear = settings.clipboard_clear;
             backupSchedule = settings.backup_schedule;
             refreshTouchId();
+            if (settings.sync_location) {
+                loadSync();
+            }
         } catch (e) {
             error = `Something went wrong (${e}).`;
         }
@@ -469,6 +618,59 @@
             <button onclick={() => runImport('json')} disabled={impBusy}> Import JSON file… </button>
         </div>
         {#if impNote}<p class="note">{impNote}</p>{/if}
+
+        <h3>Sync</h3>
+        <p class="note">
+            Sync writes this diary's changes as encrypted bundles into a folder. Another tool — Syncthing, a cloud
+            folder, a USB stick — carries the folder between your devices; Soirvu itself never uses the network.
+        </p>
+        <p>
+            Sync folder:
+            {#if settings.sync_location}
+                <strong>{settings.sync_location}</strong>
+            {:else}
+                <span class="note">not set</span>
+            {/if}
+        </p>
+        <div class="row">
+            <button onclick={pickSync}>Choose sync folder…</button>
+            {#if settings.sync_location}
+                <button class="quiet" onclick={clearSync}>Clear</button>
+            {/if}
+        </div>
+        {#if settings.sync_location && syncInfo}
+            <p class="note">This device: <code>{syncInfo.device_id}</code></p>
+            {#each syncInfo.peers as peer}
+                <p class="note">
+                    Peer <code>{peer.device_id.slice(0, 8)}…</code>: their changes incorporated through
+                    {peer.applied_lseq}{#if peer.waiting > 0}
+                        — {peer.waiting} bundle{peer.waiting === 1 ? '' : 's'} waiting{/if}
+                </p>
+            {/each}
+            <div class="row">
+                <button onclick={runSyncEmit} disabled={syncBusy}>Emit changes</button>
+                <button onclick={runSyncApply} disabled={syncBusy}>Apply</button>
+                <button class="quiet" onclick={runSyncPrune} disabled={syncBusy}>Prune old bundles</button>
+            </div>
+        {/if}
+        {#if syncNote}<p class="note">{syncNote}</p>{/if}
+        {#each syncProblems as problem}
+            <p class="error">{problem}</p>
+        {/each}
+        <p class="note">
+            If this diary is a copy of a folder from another device, both copies share one device identity and cannot
+            sync with each other. Restamping gives THIS copy a new identity — the other device is untouched, and this
+            copy's changes are emitted again under the new identity.
+        </p>
+        <div class="row">
+            {#if restampArm}
+                <button onclick={doRestamp} disabled={syncBusy}>Yes — give this copy a new identity</button>
+                <button class="quiet" onclick={() => (restampArm = false)}>Cancel</button>
+            {:else}
+                <button class="quiet" onclick={() => (restampArm = true)}>Restamp device identity…</button>
+            {/if}
+        </div>
+        {#if restampNote}<p class="note">{restampNote}</p>{/if}
     {:else if !error}
         <p class="note">Loading…</p>
     {/if}

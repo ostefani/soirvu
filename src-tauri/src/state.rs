@@ -41,6 +41,13 @@ pub struct VaultRef {
     /// the app's own app.json and never crosses the IPC boundary —
     /// `VaultInfo` below is what the UI gets.
     pub path: PathBuf,
+    /// The folder this vault syncs through (Phase 10):
+    /// bundles and acks live there; another tool carries
+    /// the folder between devices. A path, so like `path`
+    /// it never crosses the IPC boundary — Settings sees
+    /// only its display name (Settings::sync_location).
+    #[serde(default)]
+    pub sync_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,11 +108,18 @@ pub struct Settings {
     /// NSPasteboard change counter).
     #[serde(default)]
     pub platform: String,
+    /// Display name of the OPEN vault's sync folder (never
+    /// a path). Derived from the vault's registry entry
+    /// whenever settings are read, like backup_location;
+    /// the value sent back by settings_set is ignored.
+    /// Null until a sync folder is picked for this vault.
+    #[serde(default)]
+    pub sync_location: Option<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { lock_timeout_secs: 300, strip_exif: true, clipboard_clear: false, backup_schedule: BackupSchedule::Off, platform: String::new(), caps: Caps::default(), backup_location: None, vault_location: None }
+        Settings { lock_timeout_secs: 300, strip_exif: true, clipboard_clear: false, backup_schedule: BackupSchedule::Off, platform: String::new(), caps: Caps::default(), backup_location: None, vault_location: None, sync_location: None }
     }
 }
 
@@ -225,6 +239,15 @@ impl AppState {
                 .find(|v| &v.id == id)
                 .map(|v| v.path.to_string_lossy().into_owned())
         });
+        settings.sync_location = inner.current.as_ref().and_then(|id| {
+            inner
+                .config
+                .vaults
+                .iter()
+                .find(|v| &v.id == id)
+                .and_then(|v| v.sync_dir.as_deref())
+                .map(folder_display_name)
+        });
         settings
     }
 
@@ -256,6 +279,43 @@ impl AppState {
     pub fn set_backup_dir(&self, dir: Option<PathBuf>) -> AppResult<()> {
         let mut inner = self.inner.lock().unwrap();
         inner.config.backup_dir = dir;
+        self.save_config(&inner)
+    }
+
+    /// A registered vault's sync folder (a path: Rust only).
+    pub fn sync_dir(&self, vault_id: &str) -> Option<PathBuf> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .config
+            .vaults
+            .iter()
+            .find(|v| v.id == vault_id)
+            .and_then(|v| v.sync_dir.clone())
+    }
+
+    /// The open vault's sync folder, if one is set.
+    pub fn current_sync_dir(&self) -> Option<PathBuf> {
+        let inner = self.inner.lock().unwrap();
+        let current = inner.current.as_ref()?;
+        inner
+            .config
+            .vaults
+            .iter()
+            .find(|v| &v.id == current)
+            .and_then(|v| v.sync_dir.clone())
+    }
+
+    /// Stores (or clears) a vault's sync folder, chosen
+    /// through the native picker. Only Rust sees the path.
+    pub fn set_sync_dir(&self, vault_id: &str, dir: Option<PathBuf>) -> AppResult<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let entry = inner
+            .config
+            .vaults
+            .iter_mut()
+            .find(|v| v.id == vault_id)
+            .ok_or_else(|| AppError::Code("vault_not_found".into()))?;
+        entry.sync_dir = dir;
         self.save_config(&inner)
     }
 
@@ -291,7 +351,7 @@ impl AppState {
             self.save_config(&inner)?;
             return Ok(entry);
         }
-        let entry = VaultRef { id, name, path };
+        let entry = VaultRef { id, name, path, sync_dir: None };
         inner.config.vaults.push(entry.clone());
         self.save_config(&inner)?;
         Ok(entry)
@@ -650,6 +710,23 @@ mod tests {
         assert!(state.idle_expired());
         state.lock();
         assert!(!state.idle_expired(), "a locked vault is never idle-expired");
+    }
+
+    #[test]
+    fn a_vaults_sync_folder_is_per_vault_and_survives_reload() {
+        let (dir, state, id) = state_with_vault();
+        assert_eq!(state.sync_dir(&id), None);
+        assert_eq!(state.settings().sync_location, None);
+        let sync = dir.path().join("sync-folder");
+        state.set_sync_dir(&id, Some(sync.clone())).unwrap();
+        assert_eq!(state.sync_dir(&id), Some(sync));
+        assert_eq!(state.current_sync_dir(), state.sync_dir(&id));
+        assert_eq!(state.settings().sync_location.as_deref(), Some("sync-folder"));
+        let reloaded = AppState::load(dir.path().join("config"));
+        assert_eq!(reloaded.sync_dir(&id), state.sync_dir(&id));
+        state.set_sync_dir(&id, None).unwrap();
+        assert_eq!(state.sync_dir(&id), None);
+        assert_eq!(state.settings().sync_location, None);
     }
 
     #[test]

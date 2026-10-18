@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sync-prune"
+description = "Enables the sync_prune command without any pre-configured scope."
+commands.allow = ["sync_prune"]
+
+[[permission]]
+identifier = "deny-sync-prune"
+description = "Denies the sync_prune command without any pre-configured scope."
+commands.deny = ["sync_prune"]

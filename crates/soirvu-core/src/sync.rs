@@ -108,6 +108,24 @@ pub struct SyncPruneReport {
     pub covered_through: i64,
 }
 
+/// Where this vault stands in the sync folder: its own
+/// device identity, how far it has emitted, and how far
+/// it has incorporated each peer's stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncOverview {
+    pub device_id: String,
+    pub emitted_lseq: i64,
+    pub peers: Vec<SyncPeerCursor>,
+}
+
+/// How far this vault has incorporated one peer's
+/// stream (the cursor its ack publishes for that peer).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncPeerCursor {
+    pub device_id: String,
+    pub applied_lseq: i64,
+}
+
 /// One device's published cursors, written to
 /// `acks/<device id>.json` in the sync folder after an
 /// apply: which point of each peer's stream this device
@@ -687,24 +705,46 @@ impl Vault {
     /// Writes this vault's ack file into the sync folder:
     /// the per-peer cursors, so peers can tell which of
     /// their bundles every device has consumed.
-    fn publish_ack(&self, sync_dir: &Path) -> Result<()> {
+    /// Every per-peer cursor this vault holds, by peer.
+    fn applied_cursors(&self) -> Result<std::collections::BTreeMap<String, i64>> {
         let mut applied = std::collections::BTreeMap::new();
-        {
-            let conn = self.db.connection();
-            let mut stmt =
-                conn.prepare("SELECT key, value FROM meta WHERE key LIKE 'sync_applied:%'")?;
-            let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?;
-            for row in rows {
-                let (key, value) = row?;
-                if let (Some(peer), Ok(to)) =
-                    (key.strip_prefix(APPLIED_PREFIX), value.parse::<i64>())
-                {
-                    applied.insert(peer.to_string(), to);
-                }
+        let conn = self.db.connection();
+        let mut stmt =
+            conn.prepare("SELECT key, value FROM meta WHERE key LIKE 'sync_applied:%'")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (key, value) = row?;
+            if let (Some(peer), Ok(to)) =
+                (key.strip_prefix(APPLIED_PREFIX), value.parse::<i64>())
+            {
+                applied.insert(peer.to_string(), to);
             }
         }
+        Ok(applied)
+    }
+
+    /// This vault's sync standing (see `SyncOverview`):
+    /// identity, emit point, and the per-peer cursors.
+    pub fn sync_overview(&self) -> Result<SyncOverview> {
+        Ok(SyncOverview {
+            device_id: self.device_id.clone(),
+            emitted_lseq: self
+                .db
+                .meta(EMITTED_KEY)?
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            peers: self
+                .applied_cursors()?
+                .into_iter()
+                .map(|(device_id, applied_lseq)| SyncPeerCursor { device_id, applied_lseq })
+                .collect(),
+        })
+    }
+
+    fn publish_ack(&self, sync_dir: &Path) -> Result<()> {
+        let applied = self.applied_cursors()?;
         let ack = SyncAck {
             format: ACK_FORMAT,
             vault_id: self.header().vault_id.clone(),
@@ -1932,5 +1972,28 @@ mod tests {
         assert!(b.get_entry(&e1.id).is_ok());
         let cursor = b.db.meta(&format!("sync_applied:{}", a.device_id)).unwrap();
         assert_eq!(cursor.as_deref(), Some(second.to_lseq.to_string().as_str()));
+    }
+
+    #[test]
+    fn overview_reports_identity_emit_point_and_cursors() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        a.create_entry(&draft("one")).unwrap();
+        let info = a.sync_emit(sync.path()).unwrap().unwrap();
+        let over_a = a.sync_overview().unwrap();
+        assert_eq!(over_a.device_id, a.device_id);
+        assert_eq!(over_a.emitted_lseq, info.to_lseq);
+        assert!(over_a.peers.is_empty());
+        b.sync_apply(sync.path()).unwrap();
+        let over_b = b.sync_overview().unwrap();
+        assert_eq!(over_b.device_id, b.device_id);
+        assert_eq!(over_b.emitted_lseq, 0);
+        assert_eq!(
+            over_b.peers,
+            vec![SyncPeerCursor {
+                device_id: a.device_id.clone(),
+                applied_lseq: info.to_lseq,
+            }]
+        );
     }
 }

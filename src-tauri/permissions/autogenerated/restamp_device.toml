@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-restamp-device"
+description = "Enables the restamp_device command without any pre-configured scope."
+commands.allow = ["restamp_device"]
+
+[[permission]]
+identifier = "deny-restamp-device"
+description = "Denies the restamp_device command without any pre-configured scope."
+commands.deny = ["restamp_device"]

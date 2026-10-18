@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sync-clear-folder"
+description = "Enables the sync_clear_folder command without any pre-configured scope."
+commands.allow = ["sync_clear_folder"]
+
+[[permission]]
+identifier = "deny-sync-clear-folder"
+description = "Denies the sync_clear_folder command without any pre-configured scope."
+commands.deny = ["sync_clear_folder"]

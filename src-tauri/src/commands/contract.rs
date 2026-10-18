@@ -11,6 +11,7 @@
 use serde::Serialize;
 
 use super::attachments::{AttachmentAdded, AttachmentInfo};
+use super::sync::{SyncBundleDto, SyncOverviewDto, SyncPeerDto, SyncPruneDto, SyncReportDto};
 use super::entries::{CalendarDay, EntryDto, EntryPage, EntrySummary, HitDto, SaveDraft, TagDto};
 use super::vault::{Created, Forked, Picked, TouchIdStatus};
 use crate::error::AppError;
@@ -259,6 +260,55 @@ fn picked_and_created() {
         &Created {
             vault_id: "0123456789abcdef0123456789abcdef".into(),
             recovery_key: "sample recovery key words".into(),
+        },
+    );
+}
+
+#[test]
+fn sync_shapes() {
+    snap(
+        "sync_overview",
+        &SyncOverviewDto {
+            folder_name: Some("DiarySync".into()),
+            device_id: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa".into(),
+            emitted_lseq: 42,
+            bundles_in_folder: 3,
+            peers: vec![SyncPeerDto {
+                device_id: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb".into(),
+                applied_lseq: 40,
+                waiting: 1,
+            }],
+        },
+    );
+    snap(
+        "sync_bundle",
+        &SyncBundleDto {
+            file_name: "01234567-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa-41-42.sync".into(),
+            from_lseq: 41,
+            to_lseq: 42,
+            entries: 2,
+            attachments: 1,
+        },
+    );
+    snap(
+        "sync_report",
+        &SyncReportDto {
+            bundles_seen: 2,
+            bundles_applied: 2,
+            entries_applied: 5,
+            entries_conflicted: 1,
+            attachments_applied: 1,
+            problems: vec![
+                "attachment 0190a1b2: its blob is missing from the sync folder".into(),
+            ],
+        },
+    );
+    snap(
+        "sync_prune",
+        &SyncPruneDto {
+            bundles_removed: 1,
+            blobs_removed: 0,
+            covered_through: 40,
         },
     );
 }
