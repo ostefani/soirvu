@@ -397,6 +397,10 @@ impl Vault {
             (entries, attachments, max_lseq)
         };
         if entries.is_empty() && attachments.is_empty() {
+            // Even with nothing to emit, being here means
+            // this device is active in the folder: publish
+            // the ack below before returning.
+            let _ = self.publish_ack(sync_dir);
             return Ok(None);
         }
         let from_lseq = watermark + 1;
@@ -511,6 +515,11 @@ impl Vault {
             )?;
             tx.commit()?;
         }
+        // Presence is part of the protocol: peers prune by
+        // the acks in the folder, so a device that only ever
+        // emits must still publish (and repair) its ack
+        // here, not only when an apply moves a cursor.
+        let _ = self.publish_ack(sync_dir);
         Ok(Some(SyncBundleInfo {
             file_name,
             from_lseq,
@@ -743,11 +752,19 @@ impl Vault {
             device_id: self.device_id.clone(),
             applied,
         };
+        let bytes = serde_json::to_vec(&ack)?;
         let acks_dir = sync_dir.join(ACK_DIR);
+        let dest = acks_dir.join(format!("{}.json", self.device_id));
+        // Write only what changed: republishing an identical
+        // ack would make folder mirrors re-copy the file on
+        // every sync, and the repair case (missing or stale
+        // file) is exactly the differing one.
+        if fs::read(&dest).is_ok_and(|existing| existing == bytes) {
+            return Ok(());
+        }
         fs::create_dir_all(&acks_dir)?;
         let tmp = acks_dir.join(format!(".tmp-{}", self.device_id));
-        fs::write(&tmp, serde_json::to_vec(&ack)?)?;
-        let dest = acks_dir.join(format!("{}.json", self.device_id));
+        fs::write(&tmp, &bytes)?;
         rename_retry(&tmp, &dest)?;
         Ok(())
     }
@@ -1988,5 +2005,32 @@ mod tests {
                 applied_lseq: info.to_lseq,
             }]
         );
+    }
+
+    #[test]
+    fn emit_publishes_and_repairs_this_devices_ack() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        a.create_entry(&draft("one")).unwrap();
+        // Emitting alone publishes the ack (no apply needed):
+        // peers prune by the acks in the folder, so a device
+        // that only emits must still be present there.
+        a.sync_emit(sync.path()).unwrap();
+        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
+        assert!(ack_path.exists());
+        // A lost ack is repaired by the next emit, even one
+        // with nothing new to send.
+        fs::remove_file(&ack_path).unwrap();
+        assert!(a.sync_emit(sync.path()).unwrap().is_none());
+        assert!(ack_path.exists());
+        // And the ack still does its real job: once B has
+        // applied and emitted, its ack names A's stream.
+        b.sync_apply(sync.path()).unwrap();
+        b.sync_emit(sync.path()).unwrap();
+        let b_ack = fs::read(
+            sync.path().join("acks").join(format!("{}.json", b.device_id)),
+        )
+        .unwrap();
+        assert!(String::from_utf8(b_ack).unwrap().contains(&a.device_id));
     }
 }

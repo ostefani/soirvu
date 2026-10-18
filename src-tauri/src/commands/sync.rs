@@ -116,7 +116,7 @@ fn configured_dir(state: &AppState) -> Result<PathBuf, String> {
         .ok_or_else(|| "sync_not_configured".to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn sync_overview(state: State<'_, AppState>) -> Result<SyncOverviewDto, String> {
     let dir = state.current_sync_dir();
     ipc(state.with_vault(|vault| {
@@ -260,21 +260,11 @@ pub fn sync_prune(state: State<'_, AppState>) -> Result<SyncPruneDto, String> {
 /// Gives THIS copy of the vault a new device identity —
 /// the remedy when a vault folder was copied from another
 /// device and both copies share one identity. Returns the
-/// new device id. The old identity's ack file is removed
-/// from the sync folder best-effort: that identity will
-/// never publish again, and leaving its frozen cursors in
-/// place would cap every peer's prune coverage forever.
-#[tauri::command]
+/// new device id. The old identity's ack file is NOT
+/// touched: while two copies share an id they also share
+/// that file, and it belongs to the surviving original,
+/// which keeps publishing under the old id.
+#[tauri::command(async)]
 pub fn restamp_device(state: State<'_, AppState>) -> Result<String, String> {
-    let dir = state.current_sync_dir();
-    let (old_id, new_id) = ipc(state.with_vault(|vault| {
-        let old_id = vault.sync_overview()?.device_id;
-        let new_id = vault.restamp_device()?;
-        Ok((old_id, new_id))
-    }))?;
-    if let Some(dir) = dir {
-        let ack = dir.join("acks").join(format!("{old_id}.json"));
-        let _ = std::fs::remove_file(ack);
-    }
-    Ok(new_id)
+    ipc(state.with_vault(|vault| Ok(vault.restamp_device()?)))
 }

@@ -236,7 +236,6 @@
         syncBusy = true;
         try {
             const report = await api.syncPrune();
-            pruneArm = false;
             syncNote =
                 report.covered_through > 0
                     ? 'Removed ' +
@@ -251,6 +250,7 @@
         } catch (e) {
             syncNote = syncError(e);
         } finally {
+            pruneArm = false;
             syncBusy = false;
         }
     }
