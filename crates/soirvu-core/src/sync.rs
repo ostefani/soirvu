@@ -1876,6 +1876,15 @@ mod tests {
         let report = b.sync_apply(sync.path()).unwrap();
         assert_eq!(report.problems.len(), 1, "{:?}", report.problems);
         assert!(b.list_attachments(&entry.id).unwrap().is_empty());
+        // The invariant itself, at its source: no cursor
+        // was recorded for A. The prune assertions below
+        // follow from this — they must not be the only
+        // thing standing between the cursor and a claim it
+        // never earned.
+        assert_eq!(
+            b.db.meta(&format!("sync_applied:{}", a.device_id)).unwrap(),
+            None
+        );
         let pruned = a.sync_prune(sync.path()).unwrap();
         assert_eq!(pruned.bundles_removed, 0);
         assert!(sync.path().join(&info.file_name).exists());
@@ -1903,6 +1912,12 @@ mod tests {
         b.sync_apply(sync.path()).unwrap();
         assert!(b.get_entry(&e1.id).is_err(), "e1 cannot be there yet");
         assert!(b.get_entry(&e2.id).is_ok());
+        // The intact second bundle must not be acknowledged
+        // over the gap either: still no cursor for A.
+        assert_eq!(
+            b.db.meta(&format!("sync_applied:{}", a.device_id)).unwrap(),
+            None
+        );
         a.sync_prune(sync.path()).unwrap();
         assert!(
             sync.path().join(&first.file_name).exists(),
