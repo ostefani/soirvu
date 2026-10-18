@@ -700,11 +700,13 @@ impl Vault {
         // every apply until the publish lands, because an
         // unexplained prune stall is worse than a repeated
         // note.
-        if let Err(e) = self.publish_ack(sync_dir) {
-            report.warnings.push(format!(
+        match self.publish_ack(sync_dir) {
+            Ok(Some(warning)) => report.warnings.push(warning),
+            Ok(None) => {}
+            Err(e) => report.warnings.push(format!(
                 "this device's ack could not be published ({e}); \
                  peers will prune less until it can be"
-            ));
+            )),
         }
         Ok(report)
     }
@@ -762,11 +764,18 @@ impl Vault {
     /// id moving out of the database (Phase 10b step 3).
     /// Until then this is a known gap, not a guarantee.
     ///
-    /// Writes are monotone: a file that already claims
-    /// more — a further-along copy, or this device's own
-    /// later state — is left alone, so two copies cannot
-    /// keep overwriting each other with less.
-    fn publish_ack(&self, sync_dir: &Path) -> Result<()> {
+    /// The invariant is that the ack never claims more
+    /// than this database holds, so the file is always
+    /// rewritten to this vault's cursors. A file found
+    /// AHEAD of this database can only have been written
+    /// by another copy sharing the identity, left behind
+    /// by a restore from backup, or planted — the caller
+    /// is told (the return value) and the file is
+    /// corrected downward in the same write. That makes
+    /// the apply path a detector the bundle index can't
+    /// be: an apply-only copy leaves no bundle behind,
+    /// but it moves the ack, and the move shows here.
+    fn publish_ack(&self, sync_dir: &Path) -> Result<Option<String>> {
         let applied = self.applied_cursors()?;
         let ack = SyncAck {
             format: ACK_FORMAT,
@@ -777,6 +786,7 @@ impl Vault {
         let bytes = serde_json::to_vec(&ack)?;
         let acks_dir = sync_dir.join(ACK_DIR);
         let dest = acks_dir.join(format!("{}.json", self.device_id));
+        let mut warning = None;
         if let Ok(existing) = fs::read(&dest) {
             // Write only what changed: republishing an
             // identical ack would make folder mirrors
@@ -784,7 +794,7 @@ impl Vault {
             // repair case (missing or stale file) is
             // exactly the differing one.
             if existing == bytes {
-                return Ok(());
+                return Ok(None);
             }
             if let Ok(file_ack) = serde_json::from_slice::<SyncAck>(&existing) {
                 let ahead = file_ack.vault_id == ack.vault_id
@@ -793,7 +803,12 @@ impl Vault {
                         .iter()
                         .any(|(peer, to)| *to > *ack.applied.get(peer).unwrap_or(&0));
                 if ahead {
-                    return Ok(());
+                    warning = Some(
+                        "this device's ack in the folder is ahead of this vault — \
+                         another copy may share its identity, or the vault was \
+                         restored; if a copy shares it, restamp the copy"
+                            .to_string(),
+                    );
                 }
             }
         }
@@ -801,7 +816,7 @@ impl Vault {
         let tmp = acks_dir.join(format!(".tmp-{}", self.device_id));
         fs::write(&tmp, &bytes)?;
         rename_retry(&tmp, &dest)?;
-        Ok(())
+        Ok(warning)
     }
 
     /// Removes this vault's own consumed bundles — and
@@ -2103,39 +2118,48 @@ mod tests {
     }
 
     #[test]
-    fn publish_ack_never_regresses_a_further_along_file() {
+    fn an_ack_ahead_of_this_vault_is_reported_and_corrected() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
         b.create_entry(&draft("y1")).unwrap();
-        b.sync_emit(sync.path()).unwrap();
+        let info1 = b.sync_emit(sync.path()).unwrap().unwrap();
         a.sync_apply(sync.path()).unwrap();
-        // A further-along writer (a copy that consumed
-        // more, or this device's own later state) left a
-        // higher ack under A's id. A's next apply must not
-        // overwrite it with less: peers would prune less,
-        // and two copies would fight over the file.
+        // The file claims consumption this vault never
+        // made (a copy, a restore, or a plant). The next
+        // apply must say so AND put the file back to this
+        // database's truth: the ack never claims more
+        // than this vault holds.
         let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
         let mut file_ack: SyncAck =
             serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
         file_ack.applied.insert(b.device_id.clone(), 99);
         fs::write(&ack_path, serde_json::to_vec(&file_ack).unwrap()).unwrap();
-        a.sync_apply(sync.path()).unwrap();
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("ahead of this vault")),
+            "{:?}",
+            report.warnings
+        );
         let after: SyncAck =
             serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
-        assert_eq!(after.applied.get(&b.device_id), Some(&99));
+        assert_eq!(after.applied.get(&b.device_id), Some(&info1.to_lseq));
     }
 
     #[test]
-    fn an_unrestamped_twin_can_still_move_the_shared_ack() {
-        // The accepted gap, pinned until the device id
-        // leaves the database (step 3): a bit-identical
-        // copy that applies a peer's bundle publishes its
-        // cursor under the shared id. The ack then claims
-        // consumption the original never did, and a prune
-        // on the peer would trust it. Nothing in the ack
-        // can tell the copies apart — restamp is the only
-        // remedy, and an apply-only twin never triggers
-        // the bundle-level detection.
+    fn an_ack_moved_by_a_twin_is_detected_and_corrected() {
+        // The residual gap, until the device id leaves
+        // the database (step 3): a bit-identical copy that
+        // applies a peer's bundle still publishes its
+        // cursor under the shared id, and until the
+        // original next applies, a prune on the peer
+        // would trust the claim. What changed: the
+        // original's next apply now DETECTS the moved
+        // ack (the bundle index never could — an
+        // apply-only copy writes no bundle), warns, and
+        // corrects the file back to its own cursors.
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
         b.create_entry(&draft("y1")).unwrap();
@@ -2146,8 +2170,12 @@ mod tests {
         copy_dir(a.dir(), &t_dir);
         let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
         b.create_entry(&draft("y2")).unwrap();
-        b.sync_emit(sync.path()).unwrap();
+        let info2 = b.sync_emit(sync.path()).unwrap().unwrap();
         twin.sync_apply(sync.path()).unwrap();
+        // The harm lands first: B trusts the moved ack
+        // and prunes y2's bundle, so the original can
+        // never consume it now.
+        fs::remove_file(sync.path().join(&info2.file_name)).unwrap();
         let ack: SyncAck = serde_json::from_slice(
             &fs::read(sync.path().join("acks").join(format!("{}.json", a.device_id)))
                 .unwrap(),
@@ -2163,5 +2191,22 @@ mod tests {
                 applied_lseq: info1.to_lseq,
             }]
         );
+        // The original's next apply detects the ahead
+        // file, warns, and corrects it downward.
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("ahead of this vault")),
+            "{:?}",
+            report.warnings
+        );
+        let ack: SyncAck = serde_json::from_slice(
+            &fs::read(sync.path().join("acks").join(format!("{}.json", a.device_id)))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(ack.applied.get(&b.device_id), Some(&info1.to_lseq));
     }
 }

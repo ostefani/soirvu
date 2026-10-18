@@ -685,7 +685,7 @@
             <p class="error">{problem}</p>
         {/each}
         {#each syncWarnings as warning}
-            <p class="note">{warning}</p>
+            <p class="warning">{warning}</p>
         {/each}
         <p class="note">
             If this diary is a copy of a folder from another device, both copies share one device identity and cannot
@@ -750,5 +750,8 @@
         to {
             transform: rotate(360deg);
         }
+    }
+    .warning {
+        color: #8a5a00;
     }
 </style>
