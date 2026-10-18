@@ -234,19 +234,24 @@ pub fn sync_clear_folder(state: State<'_, AppState>) -> Result<Settings, String>
     Ok(state.settings())
 }
 
-#[tauri::command]
+// Emit, apply and prune read and write the whole sync
+// folder: they run on the async runtime, not the main
+// thread (#[tauri::command(async)]). The vault mutex
+// still serializes them against every other command —
+// one writer (§6.1) — but the UI stays responsive.
+#[tauri::command(async)]
 pub fn sync_emit(state: State<'_, AppState>) -> Result<Option<SyncBundleDto>, String> {
     let dir = configured_dir(&state)?;
     ipc(state.with_vault(|vault| Ok(vault.sync_emit(&dir)?.map(SyncBundleDto::from))))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn sync_apply(state: State<'_, AppState>) -> Result<SyncReportDto, String> {
     let dir = configured_dir(&state)?;
     ipc(state.with_vault(|vault| Ok(SyncReportDto::from(vault.sync_apply(&dir)?))))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn sync_prune(state: State<'_, AppState>) -> Result<SyncPruneDto, String> {
     let dir = configured_dir(&state)?;
     ipc(state.with_vault(|vault| Ok(SyncPruneDto::from(vault.sync_prune(&dir)?))))
@@ -255,8 +260,21 @@ pub fn sync_prune(state: State<'_, AppState>) -> Result<SyncPruneDto, String> {
 /// Gives THIS copy of the vault a new device identity —
 /// the remedy when a vault folder was copied from another
 /// device and both copies share one identity. Returns the
-/// new device id.
+/// new device id. The old identity's ack file is removed
+/// from the sync folder best-effort: that identity will
+/// never publish again, and leaving its frozen cursors in
+/// place would cap every peer's prune coverage forever.
 #[tauri::command]
 pub fn restamp_device(state: State<'_, AppState>) -> Result<String, String> {
-    ipc(state.with_vault(|vault| Ok(vault.restamp_device()?)))
+    let dir = state.current_sync_dir();
+    let (old_id, new_id) = ipc(state.with_vault(|vault| {
+        let old_id = vault.sync_overview()?.device_id;
+        let new_id = vault.restamp_device()?;
+        Ok((old_id, new_id))
+    }))?;
+    if let Some(dir) = dir {
+        let ack = dir.join("acks").join(format!("{old_id}.json"));
+        let _ = std::fs::remove_file(ack);
+    }
+    Ok(new_id)
 }

@@ -41,6 +41,12 @@ pub enum Error {
     /// id). The message names the bundle or the remedy,
     /// never any content.
     Sync(String),
+    /// Another copy of this vault is writing under this
+    /// device id (the classic case: the vault folder was
+    /// copied to a second device and never restamped).
+    /// Kept apart from `Sync` so the app can point at the
+    /// restamp remedy instead of a generic failure.
+    SharedDeviceId,
     /// No tag with this name is used by a live entry.
     TagNotFound,
     /// A rename would give a tag the name of a different tag that is in use.
@@ -72,6 +78,11 @@ impl fmt::Display for Error {
             Error::CorruptAttachment(s) => write!(f, "corrupt attachment: {s}"),
             Error::InvalidInput(s) => write!(f, "invalid input: {s}"),
             Error::Sync(s) => write!(f, "sync failed: {s}"),
+            Error::SharedDeviceId => write!(
+                f,
+                "another copy of this vault is using this device id; \
+                 run restamp-device on one of the copies"
+            ),
             Error::TagNotFound => write!(f, "tag not found"),
             Error::TagExists => write!(f, "a tag with that name already exists"),
             Error::QueryTooShort => write!(f, "search words need at least 3 characters"),

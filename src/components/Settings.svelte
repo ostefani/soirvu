@@ -122,6 +122,7 @@
 
     let syncInfo = $state(null);
     let syncBusy = $state(false);
+    let pruneArm = $state(false);
     let syncNote = $state('');
     let syncProblems = $state([]);
     let restampArm = $state(false);
@@ -129,10 +130,14 @@
 
     function syncError(e) {
         switch (String(e)) {
+            case 'sync_shared_identity':
+                return 'Another copy of this diary is using this device identity — restamp this copy below to fix it.';
             case 'sync_not_configured':
                 return 'Choose a sync folder first.';
             case 'locked':
                 return 'The diary is locked.';
+            case 'sync':
+                return 'Sync failed.';
             default:
                 return 'Something went wrong (' + String(e) + ').';
         }
@@ -163,6 +168,7 @@
         error = '';
         try {
             settings = await api.syncClearFolder();
+            pruneArm = false;
             syncInfo = null;
             syncNote = '';
             syncProblems = [];
@@ -230,6 +236,7 @@
         syncBusy = true;
         try {
             const report = await api.syncPrune();
+            pruneArm = false;
             syncNote =
                 report.covered_through > 0
                     ? 'Removed ' +
@@ -650,8 +657,20 @@
             <div class="row">
                 <button onclick={runSyncEmit} disabled={syncBusy}>Emit changes</button>
                 <button onclick={runSyncApply} disabled={syncBusy}>Apply</button>
-                <button class="quiet" onclick={runSyncPrune} disabled={syncBusy}>Prune old bundles</button>
+                {#if pruneArm}
+                    <button onclick={runSyncPrune} disabled={syncBusy}>Yes — prune</button>
+                    <button class="quiet" onclick={() => (pruneArm = false)}>Cancel</button>
+                {:else}
+                    <button class="quiet" onclick={() => (pruneArm = true)}>Prune old bundles</button>
+                {/if}
             </div>
+            {#if pruneArm}
+                <p class="note">
+                    Prune removes the bundles and blobs every known peer has already consumed. A device that uses this
+                    folder but has not synced yet — a fresh copy, for instance — can lose changes it never received.
+                    Prune only once every device has synced.
+                </p>
+            {/if}
         {/if}
         {#if syncNote}<p class="note">{syncNote}</p>{/if}
         {#each syncProblems as problem}

@@ -472,11 +472,7 @@ impl Vault {
                         && old_header.to_lseq == to_lseq
                         && serde_json::to_vec(&old_bundle)? == json;
                     if !identical {
-                        return Err(Error::Sync(format!(
-                            "bundle {file_name} is already in the sync folder with \
-                             different contents — another copy of this vault is using \
-                             this device id; run restamp-device on one of the copies"
-                        )));
+                        return Err(Error::SharedDeviceId);
                     }
                     // Identical: already emitted. Fall
                     // through to the watermark commit.
@@ -490,11 +486,7 @@ impl Vault {
                         h.vault_id == header.vault_id && h.device_id == header.device_id
                     });
                     if !mine {
-                        return Err(Error::Sync(format!(
-                            "bundle {file_name} is already in the sync folder and is \
-                             not this device's bundle — another copy of this vault may \
-                             be using this device id; run restamp-device on one of the copies"
-                        )));
+                        return Err(Error::SharedDeviceId);
                     }
                     let tmp = sync_dir.join(format!(".tmp-{file_name}"));
                     fs::write(&tmp, &bytes)?;
@@ -1551,6 +1543,7 @@ mod tests {
         twin.update_entry(&entry.id, &draft("twin's text")).unwrap();
         let err = twin.sync_emit(sync.path()).unwrap_err();
         assert!(err.to_string().contains("restamp-device"), "{err}");
+        assert!(matches!(err, Error::SharedDeviceId), "{err}");
         let after = fs::read(sync.path().join(&bundle_name)).unwrap();
         assert_eq!(before, after, "the original's bundle is untouched");
     }

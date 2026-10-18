@@ -54,6 +54,7 @@ impl From<Error> for AppError {
             QueryTooShort => "query_too_short",
             InvalidInput(_) => "invalid_input",
             Sync(_) => "sync",
+            SharedDeviceId => "sync_shared_identity",
             Io(_) | Database(_) => "storage",
             Random(_) | Json(_) => "internal",
         };
