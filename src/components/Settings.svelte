@@ -194,6 +194,25 @@
         }
     }
 
+    async function runSyncReemit() {
+        syncNote = '';
+        syncProblems = [];
+        syncWarnings = [];
+        syncAckAhead = null;
+        syncBusy = true;
+        try {
+            const bundle = await api.syncReemit();
+            syncNote = bundle
+                ? 'Re-emitted everything as ' + bundle.file_name + ' — peers that lost bundles to a prune recover them on their next apply.'
+                : 'Nothing to re-emit.';
+            await loadSync();
+        } catch (e) {
+            syncNote = syncError(e);
+        } finally {
+            syncBusy = false;
+        }
+    }
+
     async function runSyncEmit() {
         syncNote = '';
         syncProblems = [];
@@ -674,7 +693,9 @@
             {#if syncInfo.ack_ahead_seen}
                 <p class="error">
                     An ack in this folder has claimed more than this vault holds — a copy may share its identity,
-                    or this vault was restored.
+                    or this vault was restored. Entries a peer pruned on the strength of it return when that peer
+                    re-emits everything. If THIS diary is the copy, restamp it below; if it is the original, the
+                    copy is the one to restamp.
                     <button class="quiet" onclick={dismissAckAhead} disabled={syncBusy}>Dismiss</button>
                 </p>
             {/if}
@@ -688,6 +709,7 @@
             {/each}
             <div class="row">
                 <button onclick={runSyncEmit} disabled={syncBusy}>Emit changes</button>
+                <button class="quiet" onclick={runSyncReemit} disabled={syncBusy}>Re-emit everything</button>
                 <button onclick={runSyncApply} disabled={syncBusy}>Apply</button>
                 {#if pruneArm}
                     <button onclick={runSyncPrune} disabled={syncBusy}>Yes — prune</button>
@@ -711,7 +733,7 @@
         {#each syncWarnings as warning}
             <p class="warning">{warning}</p>
         {/each}
-        {#if syncAckAhead}
+        {#if syncAckAhead && !syncInfo?.ack_ahead_seen}
             <p class="error">{syncAckAhead}</p>
         {/if}
         <p class="note">

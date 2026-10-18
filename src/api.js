@@ -626,6 +626,17 @@ export function syncDismissAckAhead() {
 }
 
 /**
+ * Re-emits this vault's whole sync state as one
+ * full-range bundle, under the same identity: the
+ * recovery when a peer lost bundles to a prune.
+ * @returns {Promise<SyncBundle | null>} Null when there
+ *   is nothing to emit.
+ */
+export function syncReemit() {
+    return invoke('sync_reemit');
+}
+
+/**
  * Fires whenever the lock status changes (unlock, manual lock,
  * idle auto-lock), so the UI never polls.
  * @param {(payload: { status: string, vault_id: string | null }) => void} cb

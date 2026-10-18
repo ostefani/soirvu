@@ -275,6 +275,15 @@ pub fn sync_emit(state: State<'_, AppState>) -> Result<Option<SyncBundleDto>, St
     ipc(state.with_vault(|vault| Ok(vault.sync_emit(&dir)?.map(SyncBundleDto::from))))
 }
 
+/// Re-emits the whole sync state under the SAME
+/// identity: the recovery when a peer lost bundles to
+/// a prune. (Restamp is the shared-identity remedy.)
+#[tauri::command(async)]
+pub fn sync_reemit(state: State<'_, AppState>) -> Result<Option<SyncBundleDto>, String> {
+    let dir = configured_dir(&state)?;
+    ipc(state.with_vault(|vault| Ok(vault.sync_reemit(&dir)?.map(SyncBundleDto::from))))
+}
+
 #[tauri::command(async)]
 pub fn sync_apply(state: State<'_, AppState>) -> Result<SyncReportDto, String> {
     let dir = configured_dir(&state)?;

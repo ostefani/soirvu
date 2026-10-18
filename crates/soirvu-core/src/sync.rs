@@ -537,6 +537,26 @@ impl Vault {
         }))
     }
 
+    /// Re-emits this vault's whole sync state: the emit
+    /// watermark is reset and the next bundle covers
+    /// every record from lseq 1. The recovery when a peer
+    /// lost bundles to a prune (an overstated ack, a
+    /// restore): the full-range bundle satisfies the
+    /// peer's contiguity check, so its cursor unsticks
+    /// and the missing records land. Identity is NOT
+    /// touched — that is restamp's job, and restamp as a
+    /// recovery tool strands the old identity's ack file
+    /// and cursor in the folder as a phantom peer.
+    pub fn sync_reemit(&mut self, sync_dir: &Path) -> Result<Option<SyncBundleInfo>> {
+        {
+            let tx = self.db.conn_mut().transaction()?;
+            tx.execute("DELETE FROM meta WHERE key = ?1", [EMITTED_KEY])?;
+            tx.commit()?;
+        }
+        self.sync_emit(sync_dir)
+    }
+
+
     /// Applies every bundle in `sync_dir` this vault has not
     /// incorporated yet. Safe to re-run: incorporated records
     /// are recognised and skipped.
@@ -712,6 +732,10 @@ impl Vault {
         // every apply until the publish lands, because an
         // unexplained prune stall is worse than a repeated
         // note.
+        // If the publish itself fails, no check ran: a
+        // folder that cannot be written cannot be
+        // corrected either, so the failure warning below
+        // is the whole signal for that case.
         match self.publish_ack(sync_dir) {
             Ok(Some(warning)) => {
                 // Durable: the publish just corrected the
@@ -719,12 +743,13 @@ impl Vault {
                 // vanish with the apply that found it. It
                 // rides in sync_overview until restamp or
                 // an explicit dismiss clears it.
-                let conn = self.db.connection();
-                let _ = conn.execute(
+                let tx = self.db.conn_mut().transaction()?;
+                tx.execute(
                     "INSERT INTO meta (key, value) VALUES (?1, '1')
                      ON CONFLICT(key) DO UPDATE SET value = '1'",
                     params![ACK_AHEAD_KEY],
-                );
+                )?;
+                tx.commit()?;
                 report.ack_ahead = Some(warning);
             }
             Ok(None) => {}
@@ -843,8 +868,9 @@ impl Vault {
                          another copy may share its identity, or the vault was \
                          restored. Bundles a peer already pruned on the strength \
                          of it are lost to this vault until that peer re-emits \
-                         its full state (restamping that peer does this); if a \
-                         copy shares this identity, restamp the copy"
+                         everything (sync re-emit); restamp is for the shared- \
+                         identity case only — as a recovery tool it strands the \
+                         old identity's ack and cursor in the folder"
                             .to_string(),
                     );
                 }
@@ -2243,5 +2269,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ack.applied.get(&b.device_id), Some(&info1.to_lseq));
+    }
+
+    #[test]
+    fn a_reemit_heals_what_a_prune_took() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        b.create_entry(&draft("y1")).unwrap();
+        let info1 = b.sync_emit(sync.path()).unwrap().unwrap();
+        a.sync_apply(sync.path()).unwrap();
+        // A twin of A moves A's ack past y2; B prunes on
+        // the strength of it; y2 never reaches A.
+        let dir_t = TempDir::new().unwrap();
+        let t_dir = dir_t.path().join("v");
+        copy_dir(a.dir(), &t_dir);
+        let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
+        b.create_entry(&draft("y2")).unwrap();
+        b.sync_emit(sync.path()).unwrap();
+        twin.sync_apply(sync.path()).unwrap();
+        b.sync_prune(sync.path()).unwrap();
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert!(report.ack_ahead.is_some());
+        // The peer re-emits everything, same identity:
+        // the full-range bundle lands, y2 arrives, and
+        // A's cursor for B unsticks to the end.
+        let full = b.sync_reemit(sync.path()).unwrap().unwrap();
+        assert_eq!(full.from_lseq, 1);
+        let healed = a.sync_apply(sync.path()).unwrap();
+        assert_eq!(healed.entries_applied, 1);
+        let over_a = a.sync_overview().unwrap();
+        assert_eq!(
+            over_a.peers,
+            vec![SyncPeerCursor {
+                device_id: b.device_id.clone(),
+                applied_lseq: full.to_lseq,
+            }]
+        );
+        let _ = info1;
     }
 }

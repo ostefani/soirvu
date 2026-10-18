@@ -1,0 +1,19 @@
+---
+source: src-tauri/src/commands/contract.rs
+assertion_line: 22
+expression: json
+---
+{
+  "folder_name": "DiarySync",
+  "device_id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+  "emitted_lseq": 42,
+  "bundles_in_folder": 3,
+  "peers": [
+    {
+      "device_id": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "applied_lseq": 40,
+      "waiting": 1
+    }
+  ],
+  "ack_ahead_seen": false
+}

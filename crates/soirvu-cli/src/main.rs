@@ -99,6 +99,20 @@ fn run(args: &[String]) -> Result<(), RunError> {
             }
             sync_emit(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
         }
+        "sync-reemit" if rest.len() >= 2 => {
+            let (dirs, recovery) = open_args(rest)?;
+            if dirs.len() != 2 {
+                return Err(RunError::Usage);
+            }
+            sync_reemit(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
+        }
+        "sync-dismiss-ack-ahead" if rest.len() >= 2 => {
+            let (dirs, recovery) = open_args(rest)?;
+            if dirs.len() != 1 {
+                return Err(RunError::Usage);
+            }
+            sync_dismiss_ack_ahead(Path::new(&dirs[0]), recovery)
+        }
         "sync-apply" if rest.len() >= 2 => {
             let (dirs, recovery) = open_args(rest)?;
             if dirs.len() != 2 {
@@ -269,6 +283,30 @@ fn sync_emit(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(), 
     }
 }
 
+fn sync_reemit(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(), RunError> {
+    let mut vault = open(dir, recovery)?;
+    match vault.sync_reemit(sync_dir).map_err(failed)? {
+        Some(info) => {
+            println!(
+                "bundle: {} (lseq {}..={}, {} entries, {} attachments)",
+                info.file_name, info.from_lseq, info.to_lseq, info.entries, info.attachments
+            );
+            Ok(())
+        }
+        None => {
+            println!("nothing to re-emit");
+            Ok(())
+        }
+    }
+}
+
+fn sync_dismiss_ack_ahead(dir: &Path, recovery: Option<&str>) -> Result<(), RunError> {
+    let mut vault = open(dir, recovery)?;
+    vault.clear_ack_ahead().map_err(failed)?;
+    println!("ahead-of-vault flag cleared");
+    Ok(())
+}
+
 fn sync_apply(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(), RunError> {
     let mut vault = open(dir, recovery)?;
     let report = vault.sync_apply(sync_dir).map_err(failed)?;
@@ -286,14 +324,22 @@ fn sync_apply(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(),
     for warning in &report.warnings {
         eprintln!("warning: {warning}");
     }
+    // One error line per condition: main prints the
+    // returned message, so the ahead text travels in it
+    // instead of being printed here as well. The flag
+    // also keeps later runs failing until it is
+    // dismissed (sync-dismiss-ack-ahead) or restamped
+    // away — a cron user must not see one failure and
+    // then silence.
     if let Some(ahead) = &report.ack_ahead {
-        eprintln!("error: {ahead}");
+        return Err(RunError::Failed(ahead.clone()));
     }
-    if report.ack_ahead.is_some() {
-        Err(RunError::Failed(
-            "sync-apply detected an ack ahead of this vault".into(),
-        ))
-    } else if report.problems.is_empty() {
+    if vault.sync_overview().map_err(failed)?.ack_ahead_seen {
+        return Err(RunError::Failed(
+            "an ack ahead of this vault was detected earlier and not dismissed".into(),
+        ));
+    }
+    if report.problems.is_empty() {
         Ok(())
     } else {
         Err(RunError::Failed(format!(

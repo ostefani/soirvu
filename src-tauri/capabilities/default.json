@@ -50,6 +50,7 @@
         "allow-sync-emit",
         "allow-sync-apply",
         "allow-sync-prune",
+        "allow-sync-reemit",
         "allow-sync-dismiss-ack-ahead",
         "allow-restamp-device",
         "allow-attachment-begin",
