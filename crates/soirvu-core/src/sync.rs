@@ -200,6 +200,21 @@ fn conflict_digest(domain: &str, entry_id: &str, loser: &EntryRecord) -> String 
     hash.update(b"\n");
     hash.update(loser.rev.to_string().as_bytes());
     hash.update(b"\n");
+    // Tags enter by their name KEY, not their display
+    // spelling: the display is per-device — the first
+    // spelling a device saw wins its tag table, and emit
+    // reads tags back through that table — so the same
+    // record can carry "Foo" from one device and "foo"
+    // from another, and the same loser would derive a
+    // different copy id on each. The key (lowercase,
+    // NFC) is the derivation write_record_tags stores by.
+    let mut tag_keys: Vec<String> = loser
+        .tags
+        .iter()
+        .map(|t| t.to_lowercase().nfc().collect())
+        .collect();
+    tag_keys.sort();
+    tag_keys.dedup();
     // Serialised as JSON so the field boundaries are
     // unambiguous. Timestamps are provenance, not
     // content, and stay out.
@@ -210,7 +225,7 @@ fn conflict_digest(domain: &str, entry_id: &str, loser: &EntryRecord) -> String 
         loser.mood,
         &loser.tz,
         loser.deleted_at.is_some(),
-        &loser.tags,
+        &tag_keys,
     ))
     .expect("record content always serializes");
     hash.update(&content);
@@ -1418,5 +1433,66 @@ mod tests {
         assert_eq!(a.get_entry(&copy_id).unwrap().body_md, "merged by hand");
         let page = a.list_entries(&crate::entries::ListQuery::default()).unwrap();
         assert_eq!(page.items.len(), 2, "no duplicate copy");
+    }
+
+    #[test]
+    fn one_loser_one_copy_regardless_of_tag_spelling() {
+        const DEVICE_C: &str = "cccccccc-3333-4333-8333-cccccccccccc";
+        fn tagged(body: &str, tag: &str) -> EntryDraft {
+            EntryDraft {
+                entry_date: "2026-10-16".into(),
+                title: Some("Note".into()),
+                body_md: body.into(),
+                mood: None,
+                tz: None,
+                tags: vec![tag.into()],
+            }
+        }
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        // C: a third device whose tag table learns "foo"
+        // (lowercase) before it ever sees the entry.
+        let dir_c = TempDir::new().unwrap();
+        let c_dir = dir_c.path().join("v");
+        copy_dir(a.dir(), &c_dir);
+        let mut c = Vault::open_with_passphrase(&c_dir, PASSPHRASE).unwrap();
+        {
+            let conn = c.db.conn_mut();
+            conn.execute(
+                "INSERT INTO device (id, name, created_at) VALUES (?1, 'test', 0)",
+                [DEVICE_C],
+            )
+            .unwrap();
+            conn.execute("UPDATE meta SET value = ?1 WHERE key = 'device_id'", [DEVICE_C])
+                .unwrap();
+        }
+        drop(c);
+        let mut c = Vault::open_with_passphrase(&c_dir, PASSPHRASE).unwrap();
+        c.create_entry(&tagged("C's own", "foo")).unwrap();
+        // A authors the entry with the spelling "Foo".
+        let entry = a.create_entry(&tagged("base", "Foo")).unwrap();
+        a.sync_emit(sync.path()).unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        c.sync_apply(sync.path()).unwrap();
+        // A and B diverge on it; B resolves (loser seen with
+        // A's spelling), then C resolves (loser is C's local
+        // record, whose tag reads "foo" from C's table).
+        a.update_entry(&entry.id, &tagged("A's edited", "Foo")).unwrap();
+        b.update_entry(&entry.id, &tagged("B's words", "Foo")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        b.sync_emit(sync.path()).unwrap();
+        c.sync_apply(sync.path()).unwrap();
+        c.sync_emit(sync.path()).unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        // One loser, one text — exactly one copy of it on B,
+        // because the copy's identity is derived from the
+        // tag's name key, not from any device's spelling.
+        let page = b.list_entries(&crate::entries::ListQuery::default()).unwrap();
+        let copies = page
+            .items
+            .iter()
+            .filter(|i| b.get_entry(&i.id).unwrap().body_md == "A's edited")
+            .count();
+        assert_eq!(copies, 1, "the same loser produced {copies} copies");
     }
 }
