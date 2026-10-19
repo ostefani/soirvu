@@ -10,9 +10,10 @@ use std::io::Read;
 use std::ops::Range;
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::AppHandle;
+use zeroize::Zeroize;
 
-use crate::error::{ipc, AppError};
+use crate::error::{AppError, ipc};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -85,45 +86,69 @@ fn cap_for(mime: &str, caps: &crate::state::Caps) -> Option<u64> {
 /// chunks accumulate in memory, so a runaway client must not be able
 /// to grow this without bound. Matches the largest §6.4 cap.
 pub const MAX_UPLOAD_HARD_CAP: usize = 1024 * 1024 * 1024;
+/// Uploads remain in memory until finish. Bound both aggregate memory and
+/// the number of outstanding upload records, even when IPC calls overlap.
+pub const MAX_UPLOAD_TOTAL: usize = 1024 * 1024 * 1024;
+pub const MAX_ACTIVE_UPLOADS: usize = 8;
 
 // ---------------------------------------------------------------------------
 // Chunked upload (§6.1)
 
 #[tauri::command]
-pub fn attachment_begin(
-    state: State<'_, AppState>,
+pub async fn attachment_begin(
+    app: AppHandle,
     entry_id: String,
     name: String,
     mime_hint: Option<String>,
 ) -> Result<String, String> {
-    ipc(state.begin_upload(entry_id, name, mime_hint))
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.begin_upload(entry_id, name, mime_hint))
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn attachment_chunk(
-    state: State<'_, AppState>,
+pub async fn attachment_chunk(
+    app: AppHandle,
     upload_id: String,
     data_base64: String,
 ) -> Result<(), String> {
-    let bytes = match decode_base64(&data_base64) {
-        Ok(b) => b,
-        Err(()) => return Err("invalid_input".into()),
-    };
-    ipc(state.push_chunk(&upload_id, &bytes))
-}
-
-#[tauri::command(async)]
-pub fn attachment_finish(
-    state: State<'_, AppState>,
-    upload_id: String,
-) -> Result<AttachmentAdded, String> {
-    let upload = ipc(state.take_upload(&upload_id))?;
-    ipc(finish_upload(&state, upload.entry_id, upload.name, upload.bytes))
+    crate::commands::run_blocking_state(app, move |state| {
+        let data_base64 = zeroize::Zeroizing::new(data_base64);
+        let mut bytes = decode_base64(&data_base64).map_err(|()| "invalid_input".to_string())?;
+        let result = ipc(state.push_chunk(&upload_id, &bytes));
+        use zeroize::Zeroize;
+        bytes.zeroize();
+        result
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn attachment_abort(state: State<'_, AppState>, upload_id: String) {
-    state.drop_upload(&upload_id);
+pub async fn attachment_finish(
+    app: AppHandle,
+    upload_id: String,
+) -> Result<AttachmentAdded, String> {
+    crate::commands::run_blocking_state(app, move |state| {
+        let mut upload = ipc(state.take_upload(&upload_id))?;
+        let bytes = std::mem::take(&mut upload.bytes);
+        ipc(finish_upload(
+            state,
+            upload.entry_id.clone(),
+            upload.name.clone(),
+            bytes,
+        ))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn attachment_abort(app: AppHandle, upload_id: String) {
+    let _ = crate::commands::run_blocking_state(app, move |state| {
+        state.drop_upload(&upload_id);
+        Ok(())
+    })
+    .await;
 }
 
 /// Sniff, cap, strip, commit — shared by the chunked upload and the
@@ -132,38 +157,49 @@ fn finish_upload(
     state: &AppState,
     entry_id: String,
     name: String,
-    mut bytes: Vec<u8>,
+    bytes: Vec<u8>,
 ) -> Result<AttachmentAdded, AppError> {
+    let mut bytes = zeroize::Zeroizing::new(bytes);
     let settings = state.settings();
     let mime = sniff_mime(&bytes).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
-    let cap = cap_for(mime, &settings.caps).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
+    let cap =
+        cap_for(mime, &settings.caps).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
     if bytes.len() as u64 > cap {
         return Err(AppError::Code("too_large".into()));
     }
     if settings.strip_exif {
-        bytes = strip_metadata(&bytes, mime);
+        let stripped = strip_metadata(&bytes, mime);
+        bytes.zeroize();
+        bytes = zeroize::Zeroizing::new(stripped);
     }
     let added = state.with_vault(|vault| {
         let a = vault.add_attachment(&entry_id, &name, mime, &bytes)?;
         Ok(a)
     })?;
-    Ok(AttachmentAdded { id: added.id, mime: added.mime, size: added.size })
+    Ok(AttachmentAdded {
+        id: added.id,
+        mime: added.mime,
+        size: added.size,
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Info, import, save a copy
 
-#[tauri::command(async)]
-pub fn attachment_info(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<AttachmentInfo, String> {
-    ipc(
-        state.with_vault(|vault| {
+#[tauri::command]
+pub async fn attachment_info(app: AppHandle, id: String) -> Result<AttachmentInfo, String> {
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| {
             let a = vault.get_attachment(&id)?;
-            Ok(AttachmentInfo { id: a.id, name: a.name, mime: a.mime, size: a.size })
-        }),
-    )
+            Ok(AttachmentInfo {
+                id: a.id,
+                name: a.name,
+                mime: a.mime,
+                size: a.size,
+            })
+        }))
+    })
+    .await
 }
 
 /// Optional §6.1 path for very large files: Rust opens the picker
@@ -172,7 +208,6 @@ pub fn attachment_info(
 #[tauri::command]
 pub async fn attachment_import(
     app: AppHandle,
-    state: State<'_, AppState>,
     entry_id: String,
 ) -> Result<Option<AttachmentAdded>, String> {
     let Some(path) = pick_file(&app).await else {
@@ -182,7 +217,10 @@ pub async fn attachment_import(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "file".to_string());
-    ipc(import_path(&state, &entry_id, &path, &name).map(Some))
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(import_path(state, &entry_id, &path, &name).map(Some))
+    })
+    .await
 }
 
 pub fn import_path(
@@ -195,9 +233,14 @@ pub fn import_path(
     let mut file = std::fs::File::open(path).map_err(|_| AppError::Code("io".into()))?;
     let mut head = [0u8; 8192];
     let head_len = read_up_to(&mut file, &mut head)?;
-    let mime = sniff_mime(&head[..head_len]).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
-    let cap = cap_for(mime, &settings.caps).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
-    let total = file.metadata().map_err(|_| AppError::Code("io".into()))?.len();
+    let mime =
+        sniff_mime(&head[..head_len]).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
+    let cap =
+        cap_for(mime, &settings.caps).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
+    let total = file
+        .metadata()
+        .map_err(|_| AppError::Code("io".into()))?
+        .len();
     if total > cap {
         return Err(AppError::Code("too_large".into()));
     }
@@ -205,22 +248,33 @@ pub fn import_path(
     if strip {
         // Strippable kinds are images: their cap (25 MB default)
         // keeps the in-memory pass reasonable.
-        let mut bytes = Vec::with_capacity(total as usize);
+        let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(total as usize));
         bytes.extend_from_slice(&head[..head_len]);
-        file.read_to_end(&mut bytes).map_err(|_| AppError::Code("io".into()))?;
-        let bytes = strip_metadata(&bytes, mime);
+        file.read_to_end(&mut bytes)
+            .map_err(|_| AppError::Code("io".into()))?;
+        let stripped = strip_metadata(&bytes, mime);
+        bytes.zeroize();
+        let bytes = zeroize::Zeroizing::new(stripped);
         let added = state.with_vault(|vault| {
             let a = vault.add_attachment(entry_id, name, mime, &bytes)?;
             Ok(a)
         })?;
-        return Ok(AttachmentAdded { id: added.id, mime: added.mime, size: added.size });
+        return Ok(AttachmentAdded {
+            id: added.id,
+            mime: added.mime,
+            size: added.size,
+        });
     }
     let mut reader = std::io::Cursor::new(head[..head_len].to_vec()).chain(file);
     let added = state.with_vault(|vault| {
         let a = vault.add_attachment_from_reader(entry_id, name, mime, &mut reader)?;
         Ok(a)
     })?;
-    Ok(AttachmentAdded { id: added.id, mime: added.mime, size: added.size })
+    Ok(AttachmentAdded {
+        id: added.id,
+        mime: added.mime,
+        size: added.size,
+    })
 }
 
 fn read_up_to(file: &mut std::fs::File, buf: &mut [u8]) -> Result<usize, AppError> {
@@ -244,49 +298,34 @@ async fn pick_file(app: &AppHandle) -> Option<std::path::PathBuf> {
     rx.await.ok().flatten()
 }
 
-/// Writes the decrypted attachment to `path`, one range read at
-/// a time (the whole file is never held in memory).
-pub fn write_copy(state: &AppState, id: &str, path: &std::path::Path) -> Result<(), AppError> {
-    use std::io::Write;
-    let size = state.with_vault(|vault| {
-        let a = vault.get_attachment(id)?;
-        Ok(a.size)
-    })?;
-    let mut out = std::fs::File::create(path).map_err(|_| AppError::Code("io".into()))?;
-    let mut offset: u64 = 0;
-    let total = size.max(0) as u64;
-    while offset < total {
-        let end = (offset + 1024 * 1024).min(total);
-        let bytes = state.with_vault(|vault| {
-            let b = vault.read_attachment_range(id, Range { start: offset, end })?;
-            Ok(b)
-        })?;
-        if bytes.is_empty() {
-            break;
-        }
-        out.write_all(&bytes).map_err(|_| AppError::Code("io".into()))?;
-        offset = end;
-    }
-    Ok(())
-}
-
 /// Opens an attachment in the OS default app: the decrypted
 /// bytes are written to the app-managed opened folder (wiped on
 /// lock) under the file's own name, and the OS takes it from
 /// there. The webview never sees the path.
-#[tauri::command(async)]
-pub fn attachment_open(state: State<'_, AppState>, id: String) -> Result<bool, String> {
-    let path = ipc(materialize_open_copy(&state, &id))?;
-    Ok(crate::platform::open_external(&path.to_string_lossy()).is_ok())
+#[tauri::command]
+pub async fn attachment_open(app: AppHandle, id: String) -> Result<bool, String> {
+    if !valid_attachment_id(&id) {
+        return Err("invalid_input".into());
+    }
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault_exclusive(|vault| {
+            let path = materialize_open_copy_locked(vault, state, &id)?;
+            Ok(crate::platform::open_external(&path.to_string_lossy()).is_ok())
+        }))
+    })
+    .await
 }
 
-/// Writes the decrypted attachment into opened/<id>/<name> and
-/// returns the path (Rust-side only).
-pub fn materialize_open_copy(
+pub fn valid_attachment_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+fn materialize_open_copy_locked(
+    vault: &mut soirvu_core::Vault,
     state: &AppState,
     id: &str,
 ) -> Result<std::path::PathBuf, AppError> {
-    let info = state.with_vault(|vault| vault.get_attachment(id).map_err(AppError::from))?;
+    let info = vault.get_attachment(id).map_err(AppError::from)?;
     let safe_name = std::path::Path::new(&info.name)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -295,8 +334,51 @@ pub fn materialize_open_copy(
     let dir = state.opened_dir().join(id);
     std::fs::create_dir_all(&dir).map_err(|_| AppError::Code("io".into()))?;
     let path = dir.join(safe_name);
-    write_copy(state, id, &path)?;
+    let temp_name = format!(
+        ".{}.tmp",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    );
+    let temp = dir.join(temp_name);
+    if let Err(error) = write_copy_from_vault(vault, id, &temp) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error);
+    }
+    if crate::platform::rename_retry(&temp, &path).is_err() {
+        let _ = std::fs::remove_file(&temp);
+        return Err(AppError::Code("io".into()));
+    }
     Ok(path)
+}
+
+fn write_copy_from_vault(
+    vault: &mut soirvu_core::Vault,
+    id: &str,
+    path: &std::path::Path,
+) -> Result<(), AppError> {
+    use std::io::Write;
+    let size = vault
+        .get_attachment(id)
+        .map_err(AppError::from)?
+        .size
+        .max(0) as u64;
+    let mut out = std::fs::File::create(path).map_err(|_| AppError::Code("io".into()))?;
+    let mut offset = 0;
+    while offset < size {
+        let end = (offset + 1024 * 1024).min(size);
+        let bytes = zeroize::Zeroizing::new(
+            vault
+                .read_attachment_range(id, Range { start: offset, end })
+                .map_err(AppError::from)?,
+        );
+        if bytes.is_empty() {
+            break;
+        }
+        out.write_all(&bytes)
+            .map_err(|_| AppError::Code("io".into()))?;
+        offset = end;
+    }
+    out.sync_all().map_err(|_| AppError::Code("io".into()))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -319,7 +401,11 @@ fn asset(status: u16, mime: &str, body: Vec<u8>, extra: &[(&str, String)]) -> As
     for (k, v) in extra {
         headers.push((k.to_string(), v.clone()));
     }
-    AssetResponse { status, headers, body }
+    AssetResponse {
+        status,
+        headers,
+        body,
+    }
 }
 
 /// Serves one attachment by id. Locked vault → 403; unknown or
@@ -349,7 +435,13 @@ pub fn serve_asset(state: &AppState, id: &str, range_header: Option<&str>) -> As
     match range {
         Some((start, end)) => {
             let bytes = state.with_vault(|vault| {
-                let b = vault.read_attachment_range(id, Range { start, end: end + 1 })?;
+                let b = vault.read_attachment_range(
+                    id,
+                    Range {
+                        start,
+                        end: end + 1,
+                    },
+                )?;
                 Ok(b)
             });
             match bytes {
@@ -364,7 +456,13 @@ pub fn serve_asset(state: &AppState, id: &str, range_header: Option<&str>) -> As
         }
         None => {
             let bytes = state.with_vault(|vault| {
-                let b = vault.read_attachment_range(id, Range { start: 0, end: total })?;
+                let b = vault.read_attachment_range(
+                    id,
+                    Range {
+                        start: 0,
+                        end: total,
+                    },
+                )?;
                 Ok(b)
             });
             match bytes {
@@ -483,7 +581,8 @@ fn strip_webp(bytes: &[u8]) -> Option<Vec<u8>> {
     let mut vp8x_at: Option<usize> = None;
     while i + 8 <= bytes.len() {
         let kind = &bytes[i..i + 4];
-        let len = u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]) as usize;
+        let len =
+            u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]) as usize;
         let total = 8 + len + (len % 2);
         if i + total > bytes.len() {
             return None;
@@ -511,7 +610,11 @@ fn strip_webp(bytes: &[u8]) -> Option<Vec<u8>> {
 // Base64 decode (the chunk argument; standard alphabet, padded)
 
 pub fn decode_base64(text: &str) -> Result<Vec<u8>, ()> {
-    let clean: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    let clean = zeroize::Zeroizing::new(
+        text.bytes()
+            .filter(|b| !b.is_ascii_whitespace())
+            .collect::<Vec<_>>(),
+    );
     if clean.is_empty() || clean.len() % 4 != 0 {
         return Err(());
     }
@@ -525,7 +628,7 @@ pub fn decode_base64(text: &str) -> Result<Vec<u8>, ()> {
             _ => Err(()),
         }
     };
-    let mut out = Vec::with_capacity(clean.len() / 4 * 3);
+    let mut out = zeroize::Zeroizing::new(Vec::with_capacity(clean.len() / 4 * 3));
     for group in clean.chunks(4) {
         let pad = group.iter().filter(|&&c| c == b'=').count();
         if pad > 2 {
@@ -543,5 +646,18 @@ pub fn decode_base64(text: &str) -> Result<Vec<u8>, ()> {
             out.push(n as u8);
         }
     }
-    Ok(out)
+    Ok(std::mem::take(&mut *out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_attachment_id;
+
+    #[test]
+    fn attachment_ids_cannot_escape_the_opened_directory() {
+        assert!(valid_attachment_id("0190a1b2-1234-7abc-8def-0123456789ab"));
+        assert!(!valid_attachment_id("../outside"));
+        assert!(!valid_attachment_id(""));
+        assert!(!valid_attachment_id(&"a".repeat(65)));
+    }
 }

@@ -141,33 +141,41 @@ fn configured_dir(state: &AppState) -> Result<PathBuf, String> {
 
 /// Clears the durable ahead-of-vault flag without
 /// restamping; the refreshed overview comes back.
-#[tauri::command(async)]
-pub fn sync_dismiss_ack_ahead(
-    state: State<'_, AppState>,
-) -> Result<SyncOverviewDto, String> {
-    let dir = state.current_sync_dir();
-    ipc(state.with_vault(|vault| {
-        vault.clear_ack_ahead()?;
-        let overview = vault.sync_overview()?;
-        let vault_id = vault.header().vault_id.clone();
-        Ok(assemble_overview(&overview, dir.as_deref(), &vault_id))
-    }))
+#[tauri::command]
+pub async fn sync_dismiss_ack_ahead(app: AppHandle) -> Result<SyncOverviewDto, String> {
+    crate::commands::run_blocking_state(app, |state| {
+        let dir = state.current_sync_dir();
+        ipc(state.with_vault(|vault| {
+            vault.clear_ack_ahead()?;
+            let overview = vault.sync_overview()?;
+            let vault_id = vault.header().vault_id.clone();
+            Ok(assemble_overview(&overview, dir.as_deref(), &vault_id))
+        }))
+    })
+    .await
 }
 
-#[tauri::command(async)]
-pub fn sync_overview(state: State<'_, AppState>) -> Result<SyncOverviewDto, String> {
-    let dir = state.current_sync_dir();
-    ipc(state.with_vault(|vault| {
-        let overview = vault.sync_overview()?;
-        let vault_id = vault.header().vault_id.clone();
-        Ok(assemble_overview(&overview, dir.as_deref(), &vault_id))
-    }))
+#[tauri::command]
+pub async fn sync_overview(app: AppHandle) -> Result<SyncOverviewDto, String> {
+    crate::commands::run_blocking_state(app, |state| {
+        let dir = state.current_sync_dir();
+        ipc(state.with_vault(|vault| {
+            let overview = vault.sync_overview()?;
+            let vault_id = vault.header().vault_id.clone();
+            Ok(assemble_overview(&overview, dir.as_deref(), &vault_id))
+        }))
+    })
+    .await
 }
 
 /// Pairs the core's cursors with what the folder holds:
 /// a peer with bundles present but no cursor yet appears
 /// with applied 0 and everything waiting.
-fn assemble_overview(overview: &SyncOverview, dir: Option<&Path>, vault_id: &str) -> SyncOverviewDto {
+fn assemble_overview(
+    overview: &SyncOverview,
+    dir: Option<&Path>,
+    vault_id: &str,
+) -> SyncOverviewDto {
     let folder_name = dir.map(|d| {
         d.file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -275,51 +283,68 @@ pub async fn sync_pick_folder(
     let Some(path) = crate::commands::vault::pick_folder(&app).await else {
         return Ok(None);
     };
-    ipc(state.set_sync_dir(&id, Some(path)))?;
-    Ok(Some(state.settings()))
+    let settings = crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.set_sync_dir(&id, Some(path)))?;
+        Ok(state.settings())
+    })
+    .await?;
+    Ok(Some(settings))
 }
 
 /// Clears the open vault's sync folder. Bundles already in
 /// the folder are not touched — only the setting goes.
 #[tauri::command]
-pub fn sync_clear_folder(state: State<'_, AppState>) -> Result<Settings, String> {
-    let Some(id) = state.current_id() else {
-        return Err("locked".into());
-    };
-    ipc(state.set_sync_dir(&id, None))?;
-    Ok(state.settings())
+pub async fn sync_clear_folder(app: AppHandle) -> Result<Settings, String> {
+    crate::commands::run_blocking_state(app, |state| {
+        let Some(id) = state.current_id() else {
+            return Err("locked".into());
+        };
+        ipc(state.set_sync_dir(&id, None))?;
+        Ok(state.settings())
+    })
+    .await
 }
 
-// Emit, apply and prune read and write the whole sync
-// folder: they run on the async runtime, not the main
-// thread (#[tauri::command(async)]). The vault mutex
-// still serializes them against every other command —
-// one writer (§6.1) — but the UI stays responsive.
-#[tauri::command(async)]
-pub fn sync_emit(state: State<'_, AppState>) -> Result<Option<SyncBundleDto>, String> {
-    let dir = configured_dir(&state)?;
-    ipc(state.with_vault(|vault| Ok(vault.sync_emit(&dir)?.map(SyncBundleDto::from))))
+// Emit, apply and prune read and write the whole sync folder. They run on
+// the blocking pool, and the vault operation gate keeps each complete sync
+// action serialized against writes, lock, and other sync commands.
+#[tauri::command]
+pub async fn sync_emit(app: AppHandle) -> Result<Option<SyncBundleDto>, String> {
+    crate::commands::run_blocking_state(app, |state| {
+        let dir = configured_dir(state)?;
+        ipc(state.with_vault(|vault| Ok(vault.sync_emit(&dir)?.map(SyncBundleDto::from))))
+    })
+    .await
 }
 
 /// Re-emits the whole sync state under the SAME
 /// identity: the recovery when a peer lost bundles to
 /// a prune. (Restamp is the shared-identity remedy.)
-#[tauri::command(async)]
-pub fn sync_reemit(state: State<'_, AppState>) -> Result<Option<SyncBundleDto>, String> {
-    let dir = configured_dir(&state)?;
-    ipc(state.with_vault(|vault| Ok(vault.sync_reemit(&dir)?.map(SyncBundleDto::from))))
+#[tauri::command]
+pub async fn sync_reemit(app: AppHandle) -> Result<Option<SyncBundleDto>, String> {
+    crate::commands::run_blocking_state(app, |state| {
+        let dir = configured_dir(state)?;
+        ipc(state.with_vault(|vault| Ok(vault.sync_reemit(&dir)?.map(SyncBundleDto::from))))
+    })
+    .await
 }
 
-#[tauri::command(async)]
-pub fn sync_apply(state: State<'_, AppState>) -> Result<SyncReportDto, String> {
-    let dir = configured_dir(&state)?;
-    ipc(state.with_vault(|vault| Ok(SyncReportDto::from(vault.sync_apply(&dir)?))))
+#[tauri::command]
+pub async fn sync_apply(app: AppHandle) -> Result<SyncReportDto, String> {
+    crate::commands::run_blocking_state(app, |state| {
+        let dir = configured_dir(state)?;
+        ipc(state.with_vault(|vault| Ok(SyncReportDto::from(vault.sync_apply(&dir)?))))
+    })
+    .await
 }
 
-#[tauri::command(async)]
-pub fn sync_prune(state: State<'_, AppState>) -> Result<SyncPruneDto, String> {
-    let dir = configured_dir(&state)?;
-    ipc(state.with_vault(|vault| Ok(SyncPruneDto::from(vault.sync_prune(&dir)?))))
+#[tauri::command]
+pub async fn sync_prune(app: AppHandle) -> Result<SyncPruneDto, String> {
+    crate::commands::run_blocking_state(app, |state| {
+        let dir = configured_dir(state)?;
+        ipc(state.with_vault(|vault| Ok(SyncPruneDto::from(vault.sync_prune(&dir)?))))
+    })
+    .await
 }
 
 /// Gives THIS copy of the vault a new device identity —
@@ -329,18 +354,19 @@ pub fn sync_prune(state: State<'_, AppState>) -> Result<SyncPruneDto, String> {
 /// touched: while two copies share an id they also share
 /// that file, and it belongs to the surviving original,
 /// which keeps publishing under the old id.
-#[tauri::command(async)]
-pub fn restamp_device(state: State<'_, AppState>) -> Result<String, String> {
-    // The new identity is persisted in the registry
-    // FIRST, then the live vault switches to it: if
-    // the switch were interrupted, the next open
-    // assigns the persisted id and writes its device
-    // row then — the two cannot drift apart.
-    let vault_id = state.current_id().ok_or("locked")?;
-    let new_id = soirvu_core::new_device_id();
-    ipc(state.set_device_id(&vault_id, new_id.clone()))?;
-    ipc(state.with_vault(|vault| Ok(vault.restamp_device_to(&new_id)?)))?;
-    Ok(new_id)
+#[tauri::command]
+pub async fn restamp_device(app: AppHandle) -> Result<String, String> {
+    crate::commands::run_blocking_state(app, |state| {
+        // The new identity is persisted in the registry
+        // FIRST, then the live vault switches to it: if
+        // the switch were interrupted, the next open
+        // assigns the persisted id and writes its device
+        // row then — the two cannot drift apart.
+        let new_id = soirvu_core::new_device_id();
+        ipc(state.restamp_current_device(new_id.clone()))?;
+        Ok(new_id)
+    })
+    .await
 }
 
 #[cfg(test)]

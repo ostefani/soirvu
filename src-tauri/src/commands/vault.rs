@@ -6,15 +6,15 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Serialize;
+use soirvu_core::Vault;
 use soirvu_core::crypto::{DeviceSecret, KdfParams, RecoveryKey};
 use soirvu_core::vault::VaultHeader;
-use soirvu_core::Vault;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::oneshot;
 use zeroize::Zeroize;
 
-use crate::error::{ipc, AppError};
+use crate::error::{AppError, ipc};
 use crate::state::{AppState, VaultInfo};
 
 #[derive(Serialize)]
@@ -175,12 +175,10 @@ fn folder_name(path: &std::path::Path) -> String {
         .unwrap_or_else(|| "Vault".into())
 }
 
-
 #[tauri::command]
-pub fn vault_list(state: State<'_, AppState>) -> Vec<VaultInfo> {
-    state.vault_list()
+pub async fn vault_list(app: AppHandle) -> Result<Vec<VaultInfo>, String> {
+    crate::commands::run_blocking_state(app, |state| Ok(state.vault_list())).await
 }
-
 
 #[tauri::command]
 pub async fn vault_pick_folder(
@@ -205,8 +203,13 @@ pub async fn vault_pick_folder(
                 || crate::backup::is_stamp(&folder_name(&resolved))
                 || in_backup_root;
             if is_backup {
-                let name = state
-                    .vault_list()
+                let vaults =
+                    crate::commands::run_blocking_state(
+                        app.clone(),
+                        |state| Ok(state.vault_list()),
+                    )
+                    .await?;
+                let name = vaults
                     .into_iter()
                     .find(|v| v.id == vault_id)
                     .map(|v| v.name)
@@ -220,7 +223,12 @@ pub async fn vault_pick_folder(
                 if dest == resolved {
                     return Err("invalid_input".into());
                 }
-                import_copy(&resolved, &dest).map_err(|e| e.to_ipc())?;
+                let copy_from = resolved.clone();
+                let copy_to = dest.clone();
+                crate::commands::run_blocking_state(app.clone(), move |_| {
+                    import_copy(&copy_from, &copy_to).map_err(|e| e.to_ipc())
+                })
+                .await?;
                 let name = folder_name(&dest);
                 let warning = crate::platform::fs_warning(&dest).map(str::to_string);
                 if state.vault_path(&vault_id).is_ok() {
@@ -234,9 +242,15 @@ pub async fn vault_pick_folder(
                         fork_required: true,
                     }));
                 }
-                state
-                    .register(vault_id.clone(), name.clone(), dest)
-                    .map_err(|e| e.to_ipc())?;
+                let register_id = vault_id.clone();
+                let register_name = name.clone();
+                crate::commands::run_blocking_state(app.clone(), move |state| {
+                    state
+                        .register(register_id, register_name, dest)
+                        .map(|_| ())
+                        .map_err(|e| e.to_ipc())
+                })
+                .await?;
                 return Ok(Some(Picked {
                     vault_id: Some(vault_id),
                     name,
@@ -252,8 +266,11 @@ pub async fn vault_pick_folder(
             let mut opening_copy = false;
             if let Ok(old_path) = state.vault_path(&vault_id) {
                 if old_path != path && old_path.join("vault.header.json").exists() {
-                    let name = state
-                        .vault_list()
+                    let vaults = crate::commands::run_blocking_state(app.clone(), |state| {
+                        Ok(state.vault_list())
+                    })
+                    .await?;
+                    let name = vaults
                         .into_iter()
                         .find(|v| v.id == vault_id)
                         .map(|v| v.name)
@@ -270,18 +287,30 @@ pub async fn vault_pick_folder(
                 // The selected folder is a second copy of the same
                 // encrypted vault. Keep its vault id, but stop it
                 // sharing the original copy's sync stream identity.
-                state
-                    .register_with_device(
-                        vault_id.clone(),
-                        name.clone(),
-                        path,
-                        Some(soirvu_core::new_device_id()),
-                    )
-                    .map_err(|e| e.to_ipc())?;
+                let register_id = vault_id.clone();
+                let register_name = name.clone();
+                crate::commands::run_blocking_state(app.clone(), move |state| {
+                    state
+                        .register_with_device(
+                            register_id,
+                            register_name,
+                            path,
+                            Some(soirvu_core::new_device_id()),
+                        )
+                        .map(|_| ())
+                        .map_err(|e| e.to_ipc())
+                })
+                .await?;
             } else {
-                state
-                    .register(vault_id.clone(), name.clone(), path)
-                    .map_err(|e| e.to_ipc())?;
+                let register_id = vault_id.clone();
+                let register_name = name.clone();
+                crate::commands::run_blocking_state(app.clone(), move |state| {
+                    state
+                        .register(register_id, register_name, path)
+                        .map(|_| ())
+                        .map_err(|e| e.to_ipc())
+                })
+                .await?;
             }
             Ok(Some(Picked {
                 vault_id: Some(vault_id),
@@ -304,7 +333,6 @@ pub async fn vault_pick_folder(
         _ => Err("invalid_input".into()),
     }
 }
-
 
 #[tauri::command]
 pub async fn vault_create(
@@ -346,12 +374,7 @@ pub async fn vault_create(
         Err(_) => return Err("internal".into()),
     };
     let vault_id = vault.header().vault_id.clone();
-    ipc(state.register_with_device(
-        vault_id.clone(),
-        name,
-        path,
-        Some(device_id),
-    ))?;
+    ipc(state.register_with_device(vault_id.clone(), name, path, Some(device_id)))?;
     state.adopt_created(vault, &vault_id);
     let created = Created {
         vault_id,
@@ -360,7 +383,6 @@ pub async fn vault_create(
     super::emit_status(&app, &state);
     Ok(created)
 }
-
 
 #[tauri::command]
 pub async fn vault_unlock(
@@ -438,46 +460,48 @@ pub async fn vault_unlock(
     }
 }
 
-
-#[tauri::command(async)]
-pub fn vault_lock(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    state.lock();
+#[tauri::command]
+pub async fn vault_lock(app: AppHandle) -> Result<(), String> {
+    let lock_result =
+        crate::commands::run_blocking_state(app.clone(), |state| ipc(state.lock())).await;
+    let state = app.state::<AppState>();
     super::emit_status(&app, &state);
     // §9: reload the document onto the lock screen. Deferred to
     // the main thread's next turn so this command's reply is not
     // lost with the document it destroys.
     let reload_app = app.clone();
     let _ = app.run_on_main_thread(move || super::reload_main_window(&reload_app));
-    Ok(())
+    lock_result.map(|_| ())
 }
-
-
-#[tauri::command(async)]
-pub fn vault_forget(state: State<'_, AppState>, vault_id: String) -> Result<(), String> {
-    ipc(state.forget(&vault_id))
-}
-
 
 #[tauri::command]
-pub async fn vault_relocate(
-    state: State<'_, AppState>,
-    app: AppHandle,
-    vault_id: String,
-) -> Result<bool, String> {
+pub async fn vault_forget(app: AppHandle, vault_id: String) -> Result<(), String> {
+    crate::commands::run_blocking_state(app, move |state| ipc(state.forget(&vault_id))).await
+}
+
+#[tauri::command]
+pub async fn vault_relocate(app: AppHandle, vault_id: String) -> Result<bool, String> {
     let Some(path) = pick_folder(&app).await else {
         return Ok(false);
     };
-    let found_id = read_vault_id(&path).map_err(|e| e.to_ipc())?;
+    let check_path = path.clone();
+    let found_id = crate::commands::run_blocking_state(app.clone(), move |_| {
+        read_vault_id(&check_path).map_err(|e| e.to_ipc())
+    })
+    .await?;
     if found_id != vault_id {
         return Err("vault_mismatch".into());
     }
     let name = folder_name(&path);
-    state
-        .register(vault_id, name, path)
-        .map_err(|e| e.to_ipc())?;
+    crate::commands::run_blocking_state(app, move |state| {
+        state
+            .register(vault_id, name, path)
+            .map(|_| ())
+            .map_err(|e| e.to_ipc())
+    })
+    .await?;
     Ok(true)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -540,7 +564,6 @@ mod tests {
     }
 }
 
-
 /// What a finished fork hands back: the copy's new identity
 /// and its NEW recovery key (shown once, like at creation).
 /// Touch ID at the lock screen and in Settings (Phase 8):
@@ -559,28 +582,35 @@ pub struct TouchIdStatus {
 }
 
 #[tauri::command]
-pub fn touch_id_status(
-    state: State<'_, AppState>,
+pub async fn touch_id_status(
+    app: AppHandle,
     vault_id: Option<String>,
 ) -> Result<TouchIdStatus, String> {
-    let built_in = cfg!(feature = "touch-id");
-    let capable = crate::keychain::capable();
-    let enrolled = match &vault_id {
-        // The lock screen asks about the selected vault: its
-        // header file says whether a device slot exists.
-        Some(id) => state
-            .vault_path(id)
-            .ok()
-            .and_then(|path| std::fs::read(path.join("vault.header.json")).ok())
-            .and_then(|bytes| VaultHeader::from_json(&bytes).ok())
-            .map(|header| header.has_device_slot())
-            .unwrap_or(false),
-        // Settings asks about the open vault.
-        None => state
-            .with_vault(|vault| Ok(vault.has_device_slot()))
-            .unwrap_or(false),
-    };
-    Ok(TouchIdStatus { built_in, capable, enrolled })
+    crate::commands::run_blocking_state(app, move |state| {
+        let built_in = cfg!(feature = "touch-id");
+        let capable = crate::keychain::capable();
+        let enrolled = match &vault_id {
+            // The lock screen asks about the selected vault: its
+            // header file says whether a device slot exists.
+            Some(id) => state
+                .vault_path(id)
+                .ok()
+                .and_then(|path| std::fs::read(path.join("vault.header.json")).ok())
+                .and_then(|bytes| VaultHeader::from_json(&bytes).ok())
+                .map(|header| header.has_device_slot())
+                .unwrap_or(false),
+            // Settings asks about the open vault.
+            None => state
+                .with_vault(|vault| Ok(vault.has_device_slot()))
+                .unwrap_or(false),
+        };
+        Ok(TouchIdStatus {
+            built_in,
+            capable,
+            enrolled,
+        })
+    })
+    .await
 }
 
 enum TouchUnlockError {
@@ -666,32 +696,38 @@ pub async fn vault_unlock_touch_id(
 /// goes into the keychain. If the keychain store fails, the
 /// header slot is removed again — a slot without its secret
 /// would only pretend to work.
-#[tauri::command(async)]
-pub fn touch_id_enroll(state: State<'_, AppState>) -> Result<(), String> {
-    ipc(state.with_vault(|vault| {
-        if !crate::keychain::capable() {
-            return Err(AppError::Code("touch_id_unavailable".into()));
-        }
-        let vault_id = vault.header().vault_id.clone();
-        let secret = vault.enroll_device()?;
-        if crate::keychain::store(&vault_id, secret.as_bytes()).is_err() {
-            let _ = vault.remove_device();
-            return Err(AppError::Code("touch_id_unavailable".into()));
-        }
-        Ok(())
-    }))
+#[tauri::command]
+pub async fn touch_id_enroll(app: AppHandle) -> Result<(), String> {
+    crate::commands::run_blocking_state(app, |state| {
+        ipc(state.with_vault(|vault| {
+            if !crate::keychain::capable() {
+                return Err(AppError::Code("touch_id_unavailable".into()));
+            }
+            let vault_id = vault.header().vault_id.clone();
+            let secret = vault.enroll_device()?;
+            if crate::keychain::store(&vault_id, secret.as_bytes()).is_err() {
+                let _ = vault.remove_device();
+                return Err(AppError::Code("touch_id_unavailable".into()));
+            }
+            Ok(())
+        }))
+    })
+    .await
 }
 
 /// Removes the open vault's Touch ID enrollment: the header
 /// slot goes, and the keychain item with it.
-#[tauri::command(async)]
-pub fn touch_id_disable(state: State<'_, AppState>) -> Result<(), String> {
-    ipc(state.with_vault(|vault| {
-        let vault_id = vault.header().vault_id.clone();
-        vault.remove_device()?;
-        let _ = crate::keychain::delete(&vault_id);
-        Ok(())
-    }))
+#[tauri::command]
+pub async fn touch_id_disable(app: AppHandle) -> Result<(), String> {
+    crate::commands::run_blocking_state(app, |state| {
+        ipc(state.with_vault(|vault| {
+            let vault_id = vault.header().vault_id.clone();
+            vault.remove_device()?;
+            let _ = crate::keychain::delete(&vault_id);
+            Ok(())
+        }))
+    })
+    .await
 }
 
 #[derive(Serialize)]
@@ -706,74 +742,79 @@ pub struct Forked {
 /// forks its identity in the core, and registers it under the
 /// new id, next to the original. A wrong passphrase changes
 /// nothing; the pending copy stays pending.
-#[tauri::command(async)]
-pub fn vault_fork_import(
-    state: State<'_, AppState>,
-    mut passphrase: String,
-) -> Result<Forked, String> {
-    let result = (|| -> Result<Forked, AppError> {
-        let dest = state
-            .pending_fork()
-            .ok_or_else(|| AppError::Code("invalid_input".into()))?;
-        let mut vault = Vault::open_with_passphrase(&dest, &passphrase)?;
-        let recovery = vault.fork_identity(&passphrase)?;
-        let new_id = vault.header().vault_id.clone();
-        drop(vault);
-        state.clear_pending_fork();
-        state.register(new_id.clone(), folder_name(&dest), dest)?;
-        Ok(Forked {
-            vault_id: new_id,
-            recovery_key: recovery.to_text(),
-        })
-    })();
-    passphrase.zeroize();
-    ipc(result)
+#[tauri::command]
+pub async fn vault_fork_import(app: AppHandle, mut passphrase: String) -> Result<Forked, String> {
+    crate::commands::run_blocking_state(app, move |state| {
+        let result = (|| -> Result<Forked, AppError> {
+            let dest = state
+                .pending_fork()
+                .ok_or_else(|| AppError::Code("invalid_input".into()))?;
+            let mut vault = Vault::open_with_passphrase(&dest, &passphrase)?;
+            let recovery = vault.fork_identity(&passphrase)?;
+            let new_id = vault.header().vault_id.clone();
+            drop(vault);
+            state.clear_pending_fork();
+            state.register(new_id.clone(), folder_name(&dest), dest)?;
+            Ok(Forked {
+                vault_id: new_id,
+                recovery_key: recovery.to_text(),
+            })
+        })();
+        passphrase.zeroize();
+        ipc(result)
+    })
+    .await
 }
-
 
 /// Changes the open vault's passphrase (§13 Phase 6). The
 /// core verifies the current one; the KDF for the new slot is
 /// calibrated like at creation.
-#[tauri::command(async)]
-pub fn vault_change_passphrase(
-    state: State<'_, AppState>,
+#[tauri::command]
+pub async fn vault_change_passphrase(
+    app: AppHandle,
     current_passphrase: String,
     new_passphrase: String,
 ) -> Result<(), String> {
-    let mut current = current_passphrase;
-    let mut new = new_passphrase;
-    let result = state.with_vault(|vault| {
-        let kdf = KdfParams::calibrate(Duration::from_millis(750))?;
-        vault.change_passphrase(&current, &new, kdf)?;
-        Ok(())
-    });
-    current.zeroize();
-    new.zeroize();
-    ipc(result)
+    crate::commands::run_blocking_state(app, move |state| {
+        let mut current = current_passphrase;
+        let mut new = new_passphrase;
+        let result = state.with_vault(|vault| {
+            let kdf = KdfParams::calibrate(Duration::from_millis(750))?;
+            vault.change_passphrase(&current, &new, kdf)?;
+            Ok(())
+        });
+        current.zeroize();
+        new.zeroize();
+        ipc(result)
+    })
+    .await
 }
 
 /// Replaces the open vault's recovery key with a fresh one;
 /// returns its text — the UI shows it exactly once.
-#[tauri::command(async)]
-pub fn vault_regenerate_recovery(
-    state: State<'_, AppState>,
+#[tauri::command]
+pub async fn vault_regenerate_recovery(
+    app: AppHandle,
     current_passphrase: String,
 ) -> Result<String, String> {
-    let mut current = current_passphrase;
-    let result = state.with_vault(|vault| {
-        let recovery = vault.regenerate_recovery(&current)?;
-        Ok(recovery.to_text())
-    });
-    current.zeroize();
-    ipc(result)
+    crate::commands::run_blocking_state(app, move |state| {
+        let mut current = current_passphrase;
+        let result = state.with_vault(|vault| {
+            let recovery = vault.regenerate_recovery(&current)?;
+            Ok(recovery.to_text())
+        });
+        current.zeroize();
+        ipc(result)
+    })
+    .await
 }
-
-
 
 /// The rotation's folder arithmetic: (source, staging, old).
 /// The staging and old folders are siblings — same volume,
 /// so the swaps are renames, never copies.
-fn rotation_paths(state: &AppState) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), AppError> {
+fn rotation_paths(
+    state: &AppState,
+) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), AppError> {
     let id = state
         .current_id()
         .ok_or_else(|| AppError::Code("locked".into()))?;
@@ -823,7 +864,6 @@ async fn confirm_rotate(app: &AppHandle) -> bool {
 #[tauri::command]
 pub async fn vault_rotate_master_key(
     app: AppHandle,
-    state: State<'_, AppState>,
     current_passphrase: String,
 ) -> Result<Option<String>, String> {
     if !confirm_rotate(&app).await {
@@ -835,45 +875,37 @@ pub async fn vault_rotate_master_key(
     // claim work that does not exist yet).
     use tauri::Emitter;
     let _ = app.emit("rotation-started", ());
-    let (src, staging, old) = rotation_paths(&state).map_err(|e| e.to_ipc())?;
-    if staging.exists() {
-        let _ = std::fs::remove_dir_all(&staging);
-    }
-    // The heavy part (Argon2id, the export, every blob) runs
-    // off the async runtime's threads, on a standalone handle.
-    let mut task_passphrase = current_passphrase.clone();
-    let task_src = src.clone();
-    let task_staging = staging.clone();
-    let joined = tauri::async_runtime::spawn_blocking(move || -> Result<String, AppError> {
-        let result = (|| {
-            let vault = Vault::open_with_passphrase(&task_src, &task_passphrase)?;
-            let kdf = KdfParams::calibrate(Duration::from_millis(750))?;
-            let recovery = vault.rotate_master_key(&task_staging, &task_passphrase, kdf)?;
-            drop(vault);
-            Ok(recovery.to_text())
-        })();
-        task_passphrase.zeroize();
-        result
+    let passphrase = zeroize::Zeroizing::new(current_passphrase);
+    let recovery_text = crate::commands::run_blocking_state(app, move |state| {
+        let paths = rotation_paths(state).map_err(|e| e.to_ipc())?;
+        if paths.1.exists() {
+            let _ = std::fs::remove_dir_all(&paths.1);
+        }
+        let (src, staging, old) = paths;
+        state
+            .with_vault_exclusive_then_lock(
+                &src,
+                |vault| {
+                    let kdf = KdfParams::calibrate(Duration::from_millis(750))?;
+                    let recovery = vault.rotate_master_key(&staging, &passphrase, kdf)?;
+                    Ok(recovery.to_text())
+                },
+                || {
+                    if old.exists() {
+                        let _ = std::fs::remove_dir_all(&old);
+                    }
+                    crate::platform::rename_retry(&src, &old)
+                        .map_err(|_| AppError::Code("storage".into()))?;
+                    if crate::platform::rename_retry(&staging, &src).is_err() {
+                        let _ = crate::platform::rename_retry(&old, &src);
+                        return Err(AppError::Code("storage".into()));
+                    }
+                    let _ = std::fs::remove_dir_all(&old);
+                    Ok(())
+                },
+            )
+            .map_err(|e| e.to_ipc())
     })
-    .await;
-    let mut passphrase = current_passphrase;
-    passphrase.zeroize();
-    let recovery_text = joined
-        .map_err(|_| "storage".to_string())?
-        .map_err(|e| e.to_ipc())?;
-
-    // From here the original is replaced: lock silently, swap
-    // the folders (rolling back if the second rename fails),
-    // and delete the old master for good.
-    state.lock();
-    if old.exists() {
-        let _ = std::fs::remove_dir_all(&old);
-    }
-    crate::platform::rename_retry(&src, &old).map_err(|_| "storage".to_string())?;
-    if crate::platform::rename_retry(&staging, &src).is_err() {
-        let _ = crate::platform::rename_retry(&old, &src);
-        return Err("storage".into());
-    }
-    let _ = std::fs::remove_dir_all(&old);
+    .await?;
     Ok(Some(recovery_text))
 }

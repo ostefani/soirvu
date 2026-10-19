@@ -6,9 +6,8 @@ use soirvu_core::entries::{
     Cursor, Entry, EntryDraft, EntrySummary as CoreSummary, ListQuery, SearchHit, TagCount,
 };
 
-use crate::error::{ipc, AppError};
-use crate::state::AppState;
-use tauri::State;
+use crate::error::{AppError, ipc};
+use tauri::AppHandle;
 
 #[derive(Serialize)]
 pub struct EntryDto {
@@ -107,10 +106,9 @@ pub struct SaveDraft {
     pub tags: Vec<String>,
 }
 
-
-#[tauri::command(async)]
-pub fn entry_list(
-    state: State<'_, AppState>,
+#[tauri::command]
+pub async fn entry_list(
+    app: AppHandle,
     cursor: Option<String>,
     tag: Option<String>,
     date: Option<String>,
@@ -122,51 +120,65 @@ pub fn entry_list(
         .map(decode_cursor)
         .transpose()
         .map_err(|e| e.to_ipc())?;
-    ipc(state.with_vault(|vault| {
-        let page = vault.list_entries(&ListQuery { limit, after, tag, date })?;
-        Ok(EntryPage {
-            entries: page.items.iter().map(EntrySummary::from).collect(),
-            next_cursor: page.next.as_ref().map(encode_cursor),
-        })
-    }))
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| {
+            let page = vault.list_entries(&ListQuery {
+                limit,
+                after,
+                tag,
+                date,
+            })?;
+            Ok(EntryPage {
+                entries: page.items.iter().map(EntrySummary::from).collect(),
+                next_cursor: page.next.as_ref().map(encode_cursor),
+            })
+        }))
+    })
+    .await
 }
 
-
-#[tauri::command(async)]
-pub fn entry_get(state: State<'_, AppState>, id: String) -> Result<EntryDto, String> {
-    ipc(state.with_vault(|vault| {
-        let entry = vault.get_entry(&id)?;
-        Ok(EntryDto::from(&entry))
-    }))
+#[tauri::command]
+pub async fn entry_get(app: AppHandle, id: String) -> Result<EntryDto, String> {
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| {
+            let entry = vault.get_entry(&id)?;
+            Ok(EntryDto::from(&entry))
+        }))
+    })
+    .await
 }
 
-
-#[tauri::command(async)]
-pub fn entry_save(state: State<'_, AppState>, draft: SaveDraft) -> Result<EntryDto, String> {
-    ipc(state.with_vault(|vault| {
-        let core_draft = EntryDraft {
-            entry_date: draft.entry_date,
-            title: draft.title,
-            body_md: draft.body_md,
-            mood: draft.mood,
-            tz: draft.tz,
-            tags: draft.tags,
-        };
-        let entry = match &draft.id {
-            None => vault.create_entry(&core_draft)?,
-            Some(id) => vault.update_entry(id, &core_draft)?,
-        };
-        Ok(EntryDto::from(&entry))
-    }))
+#[tauri::command]
+pub async fn entry_save(app: AppHandle, draft: SaveDraft) -> Result<EntryDto, String> {
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| {
+            let core_draft = EntryDraft {
+                entry_date: draft.entry_date,
+                title: draft.title,
+                body_md: draft.body_md,
+                mood: draft.mood,
+                tz: draft.tz,
+                tags: draft.tags,
+            };
+            let entry = match &draft.id {
+                None => vault.create_entry(&core_draft)?,
+                Some(id) => vault.update_entry(id, &core_draft)?,
+            };
+            Ok(EntryDto::from(&entry))
+        }))
+    })
+    .await
 }
 
-
-#[tauri::command(async)]
-pub fn entry_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    ipc(state.with_vault(|vault| {
-        vault.delete_entry(&id)?;
-        Ok(())
-    }))
+#[tauri::command]
+pub async fn entry_delete(app: AppHandle, id: String) -> Result<(), String> {
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| {
+            vault.delete_entry(&id)?;
+            Ok(())
+        }))
+    })
+    .await
 }
 
 #[derive(Serialize)]
@@ -191,13 +203,15 @@ impl From<&SearchHit> for HitDto {
     }
 }
 
-
-#[tauri::command(async)]
-pub fn search(state: State<'_, AppState>, query: String) -> Result<Vec<HitDto>, String> {
-    ipc(state.with_vault(|vault| {
-        let hits = vault.search(&query, 50)?;
-        Ok(hits.iter().map(HitDto::from).collect())
-    }))
+#[tauri::command]
+pub async fn search(app: AppHandle, query: String) -> Result<Vec<HitDto>, String> {
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| {
+            let hits = vault.search(&query, 50)?;
+            Ok(hits.iter().map(HitDto::from).collect())
+        }))
+    })
+    .await
 }
 
 #[derive(Serialize)]
@@ -215,7 +229,6 @@ impl From<&TagCount> for TagDto {
     }
 }
 
-
 /// One day's live-entry count, for the calendar (§13 Phase 6).
 #[derive(Serialize)]
 pub struct CalendarDay {
@@ -232,65 +245,77 @@ impl From<&soirvu_core::entries::DayCount> for CalendarDay {
     }
 }
 
-
-#[tauri::command(async)]
-pub fn on_this_day(
-    state: State<'_, AppState>,
-    date: String,
-) -> Result<Vec<EntrySummary>, String> {
-    ipc(state.with_vault(|vault| {
-        let hits = vault.on_this_day(&date)?;
-        Ok(hits.iter().map(EntrySummary::from).collect())
-    }))
+#[tauri::command]
+pub async fn on_this_day(app: AppHandle, date: String) -> Result<Vec<EntrySummary>, String> {
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| {
+            let hits = vault.on_this_day(&date)?;
+            Ok(hits.iter().map(EntrySummary::from).collect())
+        }))
+    })
+    .await
 }
 
-#[tauri::command(async)]
-pub fn calendar_days(
-    state: State<'_, AppState>,
+#[tauri::command]
+pub async fn calendar_days(
+    app: AppHandle,
     from: String,
     to: String,
 ) -> Result<Vec<CalendarDay>, String> {
-    ipc(state.with_vault(|vault| {
-        let days = vault.entry_days(&from, &to)?;
-        Ok(days.iter().map(CalendarDay::from).collect())
-    }))
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| {
+            let days = vault.entry_days(&from, &to)?;
+            Ok(days.iter().map(CalendarDay::from).collect())
+        }))
+    })
+    .await
 }
 
-
-#[tauri::command(async)]
-pub fn tag_list(state: State<'_, AppState>) -> Result<Vec<TagDto>, String> {
-    ipc(state.with_vault(|vault| {
-        let tags = vault.list_tags()?;
-        Ok(tags.iter().map(TagDto::from).collect())
-    }))
+#[tauri::command]
+pub async fn tag_list(app: AppHandle) -> Result<Vec<TagDto>, String> {
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| {
+            let tags = vault.list_tags()?;
+            Ok(tags.iter().map(TagDto::from).collect())
+        }))
+    })
+    .await
 }
 
 /// Rename and merge return how many live entries carried the tag
 /// (for a merge: the entries that had `from`). That is the core's
 /// count, not the size of the target tag afterwards.
 
-#[tauri::command(async)]
-pub fn tag_rename(state: State<'_, AppState>, from: String, to: String) -> Result<i64, String> {
-    ipc(state.with_vault(|vault| {
-        let count = vault.rename_tag(&from, &to)?;
-        // A diary cannot hold 2^63 entries; saturate rather than wrap.
-        Ok(i64::try_from(count).unwrap_or(i64::MAX))
-    }))
+#[tauri::command]
+pub async fn tag_rename(app: AppHandle, from: String, to: String) -> Result<i64, String> {
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| {
+            let count = vault.rename_tag(&from, &to)?;
+            // A diary cannot hold 2^63 entries; saturate rather than wrap.
+            Ok(i64::try_from(count).unwrap_or(i64::MAX))
+        }))
+    })
+    .await
 }
 
-
-#[tauri::command(async)]
-pub fn tag_merge(state: State<'_, AppState>, from: String, into: String) -> Result<i64, String> {
-    ipc(state.with_vault(|vault| {
-        let count = vault.merge_tags(&from, &into)?;
-        Ok(i64::try_from(count).unwrap_or(i64::MAX))
-    }))
+#[tauri::command]
+pub async fn tag_merge(app: AppHandle, from: String, into: String) -> Result<i64, String> {
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| {
+            let count = vault.merge_tags(&from, &into)?;
+            Ok(i64::try_from(count).unwrap_or(i64::MAX))
+        }))
+    })
+    .await
 }
 
-#[tauri::command(async)]
-pub fn tag_delete(state: State<'_, AppState>, name: String) -> Result<i64, String> {
-    ipc(state.with_vault(|vault| {
-        let count = vault.delete_tag(&name)?;
-        Ok(i64::try_from(count).unwrap_or(i64::MAX))
-    }))
+#[tauri::command]
+pub async fn tag_delete(app: AppHandle, name: String) -> Result<i64, String> {
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| {
+            let count = vault.delete_tag(&name)?;
+            Ok(i64::try_from(count).unwrap_or(i64::MAX))
+        }))
+    })
+    .await
 }

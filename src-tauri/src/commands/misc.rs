@@ -39,13 +39,13 @@ pub async fn open_link(app: AppHandle, url: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn settings_get(state: State<'_, AppState>) -> Settings {
-    state.settings()
+pub async fn settings_get(app: AppHandle) -> Result<Settings, String> {
+    crate::commands::run_blocking_state(app, |state| Ok(state.settings())).await
 }
 
-#[tauri::command(async)]
-pub fn settings_set(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
-    ipc(state.set_settings(settings))
+#[tauri::command]
+pub async fn settings_set(app: AppHandle, settings: Settings) -> Result<(), String> {
+    crate::commands::run_blocking_state(app, move |state| ipc(state.set_settings(settings))).await
 }
 
 /// Picks the backup folder with the native dialog and stores
@@ -54,25 +54,26 @@ pub fn settings_set(state: State<'_, AppState>, settings: Settings) -> Result<()
 /// the one settings value that cannot travel through
 /// settings_set, because paths never cross the IPC boundary.
 #[tauri::command]
-pub async fn settings_pick_backup_dir(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Option<Settings>, String> {
+pub async fn settings_pick_backup_dir(app: AppHandle) -> Result<Option<Settings>, String> {
     let Some(path) = crate::commands::vault::pick_folder(&app).await else {
         return Ok(None);
     };
-    ipc(state.set_backup_dir(Some(path)))?;
-    Ok(Some(state.settings()))
+    let settings = crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.set_backup_dir(Some(path)))?;
+        Ok(state.settings())
+    })
+    .await?;
+    Ok(Some(settings))
 }
 
-#[tauri::command(async)]
-pub fn settings_clear_backup_dir(
-    state: State<'_, AppState>,
-) -> Result<Settings, String> {
-    ipc(state.set_backup_dir(None))?;
-    Ok(state.settings())
+#[tauri::command]
+pub async fn settings_clear_backup_dir(app: AppHandle) -> Result<Settings, String> {
+    crate::commands::run_blocking_state(app, |state| {
+        ipc(state.set_backup_dir(None))?;
+        Ok(state.settings())
+    })
+    .await
 }
-
 
 /// §9 (optional, off by default): the UI reports every copy made
 /// in the diary; 30 s later the clipboard is cleared, but only
@@ -93,13 +94,12 @@ pub fn clipboard_note_copy(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-
 /// §13 Phase 6: copy the open vault to the backup location
 /// now, whatever the schedule says. Returns the new folder's
 /// display name; the path never crosses the boundary.
-#[tauri::command(async)]
-pub fn backup_now(state: State<'_, AppState>) -> Result<String, String> {
-    ipc(crate::backup::make_backup(&state))
+#[tauri::command]
+pub async fn backup_now(app: AppHandle) -> Result<String, String> {
+    crate::commands::run_blocking_state(app, |state| ipc(crate::backup::make_backup(state))).await
 }
 /// What an export wrote (§8): counts only, plus a display
 /// name for the destination — paths never cross the IPC
@@ -158,15 +158,13 @@ async fn run_export(
         return Ok(None);
     };
     let pass = Zeroizing::new(passphrase);
-    let joined = tauri::async_runtime::spawn_blocking(
-        move || -> crate::error::AppResult<ExportOutcome> {
+    let joined =
+        tauri::async_runtime::spawn_blocking(move || -> crate::error::AppResult<ExportOutcome> {
             let vault = Vault::open_with_passphrase(&src, &pass)?;
             if json {
                 let file = dir.join("soirvu-export.json");
                 if file.exists() {
-                    return Err(crate::error::AppError::Code(
-                        "export_target_exists".into(),
-                    ));
+                    return Err(crate::error::AppError::Code("export_target_exists".into()));
                 }
                 let report = vault.export_json(&file)?;
                 let folder = dir
@@ -189,9 +187,8 @@ async fn run_export(
                         .unwrap_or_default(),
                 })
             }
-        },
-    )
-    .await;
+        })
+        .await;
     let result = match joined {
         Ok(inner) => inner,
         Err(_) => Err(crate::error::AppError::Code("storage".into())),
@@ -248,14 +245,14 @@ impl From<soirvu_core::import::ImportReport> for ImportOutcome {
 /// optional) into the open diary. Only adds — see the core
 /// import module for the id rules.
 #[tauri::command]
-pub async fn import_markdown(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Option<ImportOutcome>, String> {
+pub async fn import_markdown(app: AppHandle) -> Result<Option<ImportOutcome>, String> {
     let Some(dir) = crate::commands::vault::pick_folder(&app).await else {
         return Ok(None);
     };
-    let report = ipc(state.with_vault(|vault| Ok(vault.import_markdown(&dir)?)))?;
+    let report = crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| Ok(vault.import_markdown(&dir)?)))
+    })
+    .await?;
     Ok(Some(report.into()))
 }
 
@@ -263,13 +260,13 @@ pub async fn import_markdown(
 /// Entries and attachments keep their ids; ids already taken
 /// are skipped, never overwritten.
 #[tauri::command]
-pub async fn import_json(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Option<ImportOutcome>, String> {
+pub async fn import_json(app: AppHandle) -> Result<Option<ImportOutcome>, String> {
     let Some(file) = crate::commands::vault::pick_file(&app).await else {
         return Ok(None);
     };
-    let report = ipc(state.with_vault(|vault| Ok(vault.import_json(&file)?)))?;
+    let report = crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_vault(|vault| Ok(vault.import_json(&file)?)))
+    })
+    .await?;
     Ok(Some(report.into()))
 }

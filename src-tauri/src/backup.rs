@@ -17,6 +17,8 @@ use crate::state::{AppState, BackupSchedule};
 /// How many backups to keep per vault.
 const KEEP: usize = 7;
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+static SCHEDULED_BACKUP_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 fn unavailable() -> AppError {
     AppError::Code("backup_unavailable".into())
@@ -39,7 +41,10 @@ pub fn backup_due(schedule: BackupSchedule, last: Option<SystemTime>, now: Syste
 /// `2026-10-15_032007` in UTC — sorts like time and is safe as a
 /// folder name on every filesystem.
 pub fn stamp_name(t: SystemTime) -> String {
-    let secs = t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = t
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     let (y, m, d) = civil_from_days(days);
@@ -134,45 +139,61 @@ pub fn make_backup(state: &AppState) -> AppResult<String> {
     if !root.is_dir() {
         return Err(unavailable());
     }
-    // Checkpoint first: the copied database must be whole.
-    state.with_vault(|vault| {
-        vault.checkpoint()?;
-        Ok(())
-    })?;
-    let id = state.current_id().ok_or_else(|| AppError::Code("locked".into()))?;
+    let id = state
+        .current_id()
+        .ok_or_else(|| AppError::Code("locked".into()))?;
     let src = state.vault_path(&id)?;
     let per_vault = per_vault_dir(&root, &src, &id);
-    fs::create_dir_all(&per_vault).map_err(|_| unavailable())?;
+    state.with_vault_exclusive(|vault| {
+        if vault.header().vault_id != id {
+            return Err(AppError::Code("locked".into()));
+        }
+        // Checkpoint and copy form one operation: no write or key change can
+        // slip between them and produce a mixed-time backup.
+        vault.checkpoint()?;
+        fs::create_dir_all(&per_vault).map_err(|_| unavailable())?;
 
-    let stamp = stamp_name(SystemTime::now());
-    let tmp = per_vault.join(format!(".{stamp}.tmp"));
-    let _ = fs::remove_dir_all(&tmp);
-    fs::create_dir_all(&tmp).map_err(|_| unavailable())?;
-    let copied = (|| -> std::io::Result<()> {
-        fs::copy(src.join("soirvu.db"), tmp.join("soirvu.db"))?;
-        fs::copy(src.join("vault.header.json"), tmp.join("vault.header.json"))?;
-        Ok(())
-    })();
-    if copied.is_err() {
+        let stamp = stamp_name(SystemTime::now());
+        let tmp = per_vault.join(format!(".{stamp}.tmp"));
         let _ = fs::remove_dir_all(&tmp);
-        return Err(unavailable());
-    }
-    let dest = per_vault.join(&stamp);
-    let _ = fs::remove_dir_all(&dest);
-    crate::platform::rename_retry(&tmp, &dest).map_err(|_| unavailable())?;
-    prune(&per_vault, &src);
+        fs::create_dir_all(&tmp).map_err(|_| unavailable())?;
+        let copied = (|| -> std::io::Result<()> {
+            fs::copy(src.join("soirvu.db"), tmp.join("soirvu.db"))?;
+            fs::copy(src.join("vault.header.json"), tmp.join("vault.header.json"))?;
+            Ok(())
+        })();
+        if copied.is_err() {
+            let _ = fs::remove_dir_all(&tmp);
+            return Err(unavailable());
+        }
+        let dest = per_vault.join(&stamp);
+        let _ = fs::remove_dir_all(&dest);
+        crate::platform::rename_retry(&tmp, &dest).map_err(|_| unavailable())?;
+        prune(&per_vault, &src);
 
-    let display = per_vault
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    Ok(format!("{display}/{stamp}"))
+        let display = per_vault
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Ok(format!("{display}/{stamp}"))
+    })
 }
 
 /// The watcher's scheduled pass: backs up the open vault when
 /// the rule says one is due. Every failure is silent — the
 /// volume may simply be unmounted; the next pass retries.
 pub fn maybe_scheduled(state: &AppState) {
+    use std::sync::atomic::Ordering;
+    if SCHEDULED_BACKUP_RUNNING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            SCHEDULED_BACKUP_RUNNING.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+    let _reset = Reset;
     let schedule = state.backup_schedule();
     if schedule == BackupSchedule::Off {
         return;
@@ -212,7 +233,11 @@ mod tests {
         assert!(backup_due(BackupSchedule::Daily, None, now));
         assert!(!backup_due(BackupSchedule::Daily, Some(now - DAY / 2), now));
         assert!(backup_due(BackupSchedule::Daily, Some(now - DAY), now));
-        assert!(!backup_due(BackupSchedule::Weekly, Some(now - DAY * 3), now));
+        assert!(!backup_due(
+            BackupSchedule::Weekly,
+            Some(now - DAY * 3),
+            now
+        ));
         assert!(backup_due(BackupSchedule::Weekly, Some(now - DAY * 7), now));
     }
 

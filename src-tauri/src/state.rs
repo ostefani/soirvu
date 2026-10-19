@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use soirvu_core::Vault;
 
 use crate::error::{AppError, AppResult};
+use zeroize::Zeroize;
 
 /// Lock status, sent to the UI as part of every vault's info.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -68,7 +69,12 @@ pub struct Caps {
 impl Default for Caps {
     fn default() -> Self {
         // §6.4 initial defaults.
-        Caps { image_mb: 25, pdf_mb: 100, audio_mb: 200, video_mb: 1024 }
+        Caps {
+            image_mb: 25,
+            pdf_mb: 100,
+            audio_mb: 200,
+            video_mb: 1024,
+        }
     }
 }
 
@@ -126,7 +132,17 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { lock_timeout_secs: 300, strip_exif: true, clipboard_clear: false, backup_schedule: BackupSchedule::Off, platform: String::new(), caps: Caps::default(), backup_location: None, vault_location: None, sync_location: None }
+        Settings {
+            lock_timeout_secs: 300,
+            strip_exif: true,
+            clipboard_clear: false,
+            backup_schedule: BackupSchedule::Off,
+            platform: String::new(),
+            caps: Caps::default(),
+            backup_location: None,
+            vault_location: None,
+            sync_location: None,
+        }
     }
 }
 
@@ -168,6 +184,7 @@ struct Inner {
     /// until attachment_finish commits them. Plaintext lives in
     /// process memory only — never on disk — and is dropped on lock.
     uploads: std::collections::HashMap<String, Upload>,
+    upload_bytes: usize,
     upload_seq: u64,
 }
 
@@ -178,8 +195,19 @@ pub struct Upload {
     pub bytes: Vec<u8>,
 }
 
+impl Drop for Upload {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
+    }
+}
+
 pub struct AppState {
     inner: Mutex<Inner>,
+    // Serializes complete vault operations, including multi-step file
+    // workflows. The inner mutex protects state; this gate keeps a lock,
+    // backup snapshot, or plaintext materialization from interleaving with
+    // another vault operation between individual database calls.
+    vault_operations: Mutex<()>,
     config_file: PathBuf,
 }
 
@@ -203,12 +231,14 @@ impl AppState {
                 pending_create: None,
                 pending_fork: None,
                 uploads: std::collections::HashMap::new(),
+                upload_bytes: 0,
                 upload_seq: 0,
             }),
+            vault_operations: Mutex::new(()),
             config_file,
         };
         // Copies left by a crashed run must not outlive it.
-        state.clear_opened();
+        let _ = state.clear_opened();
         state
     }
 
@@ -217,10 +247,9 @@ impl AppState {
             fs::create_dir_all(parent)?;
         }
         let text = serde_json::to_string_pretty(&inner.config)?;
-        let tmp = self.config_file.with_extension(format!(
-            "json.tmp.{}",
-            std::process::id()
-        ));
+        let tmp = self
+            .config_file
+            .with_extension(format!("json.tmp.{}", std::process::id()));
         let mut file = fs::File::create(&tmp)?;
         use std::io::Write;
         file.write_all(text.as_bytes())?;
@@ -245,11 +274,7 @@ impl AppState {
     pub fn settings(&self) -> Settings {
         let inner = self.inner.lock().unwrap();
         let mut settings = inner.config.settings.clone();
-        settings.backup_location = inner
-            .config
-            .backup_dir
-            .as_deref()
-            .map(folder_display_name);
+        settings.backup_location = inner.config.backup_dir.as_deref().map(folder_display_name);
         settings.platform = std::env::consts::OS.to_string();
         settings.vault_location = inner.current.as_ref().and_then(|id| {
             inner
@@ -317,6 +342,7 @@ impl AppState {
     /// Stores (or clears) a vault's sync folder, chosen
     /// through the native picker. Only Rust sees the path.
     pub fn set_sync_dir(&self, vault_id: &str, dir: Option<PathBuf>) -> AppResult<()> {
+        let _operation = self.vault_operations.lock().unwrap();
         let mut inner = self.inner.lock().unwrap();
         let entry = inner
             .config
@@ -356,6 +382,7 @@ impl AppState {
     /// live vault switches to it, so an interrupted
     /// restamp still converges at the next open).
     pub fn set_device_id(&self, vault_id: &str, device_id: String) -> AppResult<()> {
+        let _operation = self.vault_operations.lock().unwrap();
         let mut inner = self.inner.lock().unwrap();
         let previous = inner.config.clone();
         let entry = inner
@@ -372,8 +399,39 @@ impl AppState {
         Ok(())
     }
 
+    /// Persists and applies an identity change as one serialized vault
+    /// operation. Persistence precedes the core write so an interrupted
+    /// update converges to the assigned identity on the next open.
+    pub fn restamp_current_device(&self, device_id: String) -> AppResult<()> {
+        let _operation = self.vault_operations.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
+        if inner.status != Status::Unlocked {
+            return Err(AppError::Code("locked".into()));
+        }
+        let vault_id = inner
+            .current
+            .clone()
+            .ok_or_else(|| AppError::Code("locked".into()))?;
+        let previous = inner.config.clone();
+        let entry = inner
+            .config
+            .vaults
+            .iter_mut()
+            .find(|entry| entry.id == vault_id)
+            .ok_or_else(|| AppError::Code("vault_not_found".into()))?;
+        entry.device_id = Some(device_id.clone());
+        if let Err(error) = self.save_config(&inner) {
+            inner.config = previous;
+            return Err(error);
+        }
+        let vault = inner.vault.as_mut().expect("Unlocked implies a vault");
+        vault.restamp_device_to(&device_id)?;
+        Ok(())
+    }
+
     /// The vault list for the UI, with a state per vault.
     pub fn vault_list(&self) -> Vec<VaultInfo> {
+        let _operation = self.vault_operations.lock().unwrap();
         let inner = self.inner.lock().unwrap();
         inner
             .config
@@ -382,8 +440,7 @@ impl AppState {
             .map(|v| VaultInfo {
                 id: v.id.clone(),
                 name: v.name.clone(),
-                state: if Some(&v.id) == inner.current.as_ref()
-                    && inner.status == Status::Unlocked
+                state: if Some(&v.id) == inner.current.as_ref() && inner.status == Status::Unlocked
                 {
                     "unlocked".into()
                 } else {
@@ -409,6 +466,7 @@ impl AppState {
         path: PathBuf,
         device_id: Option<String>,
     ) -> AppResult<VaultRef> {
+        let _operation = self.vault_operations.lock().unwrap();
         let mut inner = self.inner.lock().unwrap();
         if inner.current.as_deref() == Some(id.as_str())
             && inner.vault.is_some()
@@ -453,6 +511,7 @@ impl AppState {
     }
 
     pub fn forget(&self, vault_id: &str) -> AppResult<()> {
+        let _operation = self.vault_operations.lock().unwrap();
         let mut inner = self.inner.lock().unwrap();
         if inner.current.as_deref() == Some(vault_id) && inner.vault.is_some() {
             return Err(AppError::Other("vault is open — lock it first".into()));
@@ -536,6 +595,7 @@ impl AppState {
     /// A vault created in this session starts Unlocked: its keys
     /// were just derived here, there is nothing to re-ask.
     pub fn adopt_created(&self, vault: Vault, vault_id: &str) {
+        let _operation = self.vault_operations.lock().unwrap();
         let mut inner = self.inner.lock().unwrap();
         inner.current = Some(vault_id.to_string());
         inner.vault = Some(vault);
@@ -571,38 +631,65 @@ impl AppState {
         // never taken from the hint, so it is not stored.
         _mime_hint: Option<String>,
     ) -> AppResult<String> {
+        let _operation = self.vault_operations.lock().unwrap();
         let mut inner = self.inner.lock().unwrap();
         if inner.vault.is_none() {
             return Err(AppError::Code("locked".into()));
+        }
+        if inner.uploads.len() >= crate::commands::attachments::MAX_ACTIVE_UPLOADS {
+            return Err(AppError::Code("too_many_uploads".into()));
         }
         inner.upload_seq += 1;
         let id = format!("upload-{}", inner.upload_seq);
         inner.uploads.insert(
             id.clone(),
-            Upload { entry_id, name, bytes: Vec::new() },
+            Upload {
+                entry_id,
+                name,
+                bytes: Vec::new(),
+            },
         );
         Ok(id)
     }
 
     pub fn push_chunk(&self, upload_id: &str, bytes: &[u8]) -> AppResult<()> {
         let mut inner = self.inner.lock().unwrap();
-        let upload = inner
+        let current_len = inner
             .uploads
-            .get_mut(upload_id)
-            .ok_or_else(|| AppError::Code("invalid_input".into()))?;
-        if upload.bytes.len() + bytes.len() > crate::commands::attachments::MAX_UPLOAD_HARD_CAP {
+            .get(upload_id)
+            .ok_or_else(|| AppError::Code("invalid_input".into()))?
+            .bytes
+            .len();
+        let upload_len = current_len
+            .checked_add(bytes.len())
+            .ok_or_else(|| AppError::Code("too_large".into()))?;
+        let total = inner
+            .upload_bytes
+            .checked_add(bytes.len())
+            .ok_or_else(|| AppError::Code("too_large".into()))?;
+        if upload_len > crate::commands::attachments::MAX_UPLOAD_HARD_CAP
+            || total > crate::commands::attachments::MAX_UPLOAD_TOTAL
+        {
             return Err(AppError::Code("too_large".into()));
         }
-        upload.bytes.extend_from_slice(bytes);
+        inner
+            .uploads
+            .get_mut(upload_id)
+            .expect("checked above")
+            .bytes
+            .extend_from_slice(bytes);
+        inner.upload_bytes = total;
         Ok(())
     }
 
     pub fn take_upload(&self, upload_id: &str) -> AppResult<Upload> {
         let mut inner = self.inner.lock().unwrap();
-        inner
+        let upload = inner
             .uploads
             .remove(upload_id)
-            .ok_or_else(|| AppError::Code("invalid_input".into()))
+            .ok_or_else(|| AppError::Code("invalid_input".into()))?;
+        inner.upload_bytes = inner.upload_bytes.saturating_sub(upload.bytes.len());
+        Ok(upload)
     }
 
     /// The folder decrypted attachment copies land in when the
@@ -617,22 +704,32 @@ impl AppState {
             .unwrap_or_else(|| PathBuf::from("opened"))
     }
 
-    pub fn clear_opened(&self) {
-        let _ = fs::remove_dir_all(self.opened_dir());
+    pub fn clear_opened(&self) -> AppResult<()> {
+        let dir = self.opened_dir();
+        match fs::remove_dir_all(&dir) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub fn drop_upload(&self, upload_id: &str) {
-        self.inner.lock().unwrap().uploads.remove(upload_id);
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(upload) = inner.uploads.remove(upload_id) {
+            inner.upload_bytes = inner.upload_bytes.saturating_sub(upload.bytes.len());
+        }
     }
 
     /// Unlocked ──► Locking ──► Locked (or Unavailable if the vault
     /// folder is gone). Zeroizes the keys via the core's lock().
-    pub fn lock(&self) {
-        self.clear_opened();
+    pub fn lock(&self) -> AppResult<()> {
+        let _operation = self.vault_operations.lock().unwrap();
         let mut inner = self.inner.lock().unwrap();
         inner.uploads.clear();
+        inner.upload_bytes = 0;
         if inner.vault.is_none() {
-            return;
+            drop(inner);
+            return self.clear_opened();
         }
         inner.status = Status::Locking;
         if let Some(vault) = inner.vault.take() {
@@ -656,6 +753,10 @@ impl AppState {
             None => Status::Unavailable,
         };
         inner.last_activity = Instant::now();
+        drop(inner);
+        // The operation gate ensures no attachment writer can recreate a
+        // plaintext file after this wipe begins.
+        self.clear_opened()
     }
 
     /// True when the idle timeout has passed; the watcher in lib.rs
@@ -691,27 +792,114 @@ impl AppState {
             }
         };
         if gone {
-            self.lock();
+            let _ = self.lock();
         }
         gone
     }
 
-    pub fn with_vault<T>(
-        &self,
-        work: impl FnOnce(&mut Vault) -> AppResult<T>,
-    ) -> AppResult<T> {
+    pub fn with_vault<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
         // A vanished volume (§3) locks the vault before any work
         // touches the dead database handle.
         if self.lock_if_current_missing() {
             return Err(AppError::Code("vault_unavailable".into()));
         }
-        let mut inner = self.inner.lock().unwrap();
-        if inner.status != Status::Unlocked {
-            return Err(AppError::Code("locked".into()));
+        let _operation = self.vault_operations.lock().unwrap();
+        self.with_vault_locked(work)
+    }
+
+    /// Runs a complete multi-step operation while excluding every other
+    /// vault operation and lock transition.
+    pub fn with_vault_exclusive<T>(
+        &self,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T> {
+        if self.lock_if_current_missing() {
+            return Err(AppError::Code("vault_unavailable".into()));
         }
-        inner.last_activity = Instant::now();
-        let vault = inner.vault.as_mut().expect("Unlocked implies a vault");
-        work(vault)
+        let _operation = self.vault_operations.lock().unwrap();
+        self.with_vault_locked(work)
+    }
+
+    /// Runs a final authenticated vault migration, locks the in-memory vault,
+    /// wipes opened plaintext, and performs the filesystem swap before any
+    /// competing vault operation can start.
+    pub fn with_vault_exclusive_then_lock<T>(
+        &self,
+        expected_vault_path: &std::path::Path,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+        after_lock: impl FnOnce() -> AppResult<()>,
+    ) -> AppResult<T> {
+        if self.lock_if_current_missing() {
+            return Err(AppError::Code("vault_unavailable".into()));
+        }
+        let _operation = self.vault_operations.lock().unwrap();
+        let mut vault = {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.status != Status::Unlocked {
+                return Err(AppError::Code("locked".into()));
+            }
+            let current_matches = inner
+                .current
+                .as_ref()
+                .and_then(|id| inner.config.vaults.iter().find(|entry| &entry.id == id))
+                .is_some_and(|entry| entry.path == expected_vault_path);
+            if !current_matches {
+                return Err(AppError::Code("vault_mismatch".into()));
+            }
+            inner.vault.take().expect("Unlocked implies a vault")
+        };
+        let result = match work(&mut vault) {
+            Ok(result) => result,
+            Err(error) => {
+                let mut inner = self.inner.lock().unwrap();
+                inner.vault = Some(vault);
+                inner.status = Status::Unlocked;
+                return Err(error);
+            }
+        };
+        vault.lock();
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.status = Status::Locking;
+            inner.uploads.clear();
+            inner.upload_bytes = 0;
+            inner.status = match &inner.current {
+                Some(id) => {
+                    let there = inner
+                        .config
+                        .vaults
+                        .iter()
+                        .find(|v| &v.id == id)
+                        .map(|v| v.path.join("vault.header.json").exists())
+                        .unwrap_or(false);
+                    if there {
+                        Status::Locked
+                    } else {
+                        Status::Unavailable
+                    }
+                }
+                None => Status::Unavailable,
+            };
+            inner.last_activity = Instant::now();
+        }
+        self.clear_opened()?;
+        after_lock()?;
+        Ok(result)
+    }
+
+    fn with_vault_locked<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
+        let mut vault = {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.status != Status::Unlocked {
+                return Err(AppError::Code("locked".into()));
+            }
+            inner.last_activity = Instant::now();
+            inner.vault.take().expect("Unlocked implies a vault")
+        };
+        let result = work(&mut vault);
+        let mut inner = self.inner.lock().unwrap();
+        inner.vault = Some(vault);
+        result
     }
 }
 
@@ -755,17 +943,22 @@ mod tests {
     /// Production-floor KDF: test-only low floors do not apply
     /// outside soirvu-core's own test builds.
     fn fast_legal_kdf() -> KdfParams {
-        KdfParams { m_kib: 64 * 1024, t: 3, p: 1 }
+        KdfParams {
+            m_kib: 64 * 1024,
+            t: 3,
+            p: 1,
+        }
     }
 
     fn state_with_vault() -> (tempfile::TempDir, AppState, String) {
         let dir = tempfile::TempDir::new().unwrap();
         let vault_dir = dir.path().join("vault");
-        let (vault, _recovery) =
-            Vault::create(&vault_dir, "pass", fast_legal_kdf()).unwrap();
+        let (vault, _recovery) = Vault::create(&vault_dir, "pass", fast_legal_kdf()).unwrap();
         let vault_id = vault.header().vault_id.clone();
         let state = AppState::load(dir.path().join("config"));
-        state.register(vault_id.clone(), "Test".into(), vault_dir).unwrap();
+        state
+            .register(vault_id.clone(), "Test".into(), vault_dir)
+            .unwrap();
         state.adopt_created(vault, &vault_id);
         (dir, state, vault_id)
     }
@@ -775,7 +968,7 @@ mod tests {
         let (_dir, state, _id) = state_with_vault();
         // adopt_created leaves it Unlocked: the guard passes.
         assert!(state.with_vault(|_| Ok(())).is_ok());
-        state.lock();
+        let _ = state.lock();
         assert_eq!(state.status(), Status::Locked);
         match state.with_vault(|_| Ok(())) {
             Err(AppError::Code(code)) => assert_eq!(code, "locked"),
@@ -784,9 +977,114 @@ mod tests {
     }
 
     #[test]
+    fn lock_waits_for_plaintext_materialization_then_wipes_it() {
+        let (_dir, state, _id) = state_with_vault();
+        let opened = state.opened_dir();
+        let marker = opened.join("attachment").join("plain.txt");
+        let (start_lock_tx, start_lock_rx) = std::sync::mpsc::channel();
+        let (attempted_tx, attempted_rx) = std::sync::mpsc::channel();
+
+        std::thread::scope(|scope| {
+            let state_ref = &state;
+            scope.spawn(move || {
+                start_lock_rx.recv().unwrap();
+                attempted_tx.send(()).unwrap();
+                state_ref.lock().unwrap();
+            });
+            state
+                .with_vault_exclusive(|_| {
+                    fs::create_dir_all(marker.parent().unwrap())?;
+                    fs::write(&marker, b"plaintext")?;
+                    start_lock_tx.send(()).unwrap();
+                    attempted_rx.recv().unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        });
+
+        assert_eq!(state.status(), Status::Locked);
+        assert!(
+            !opened.exists(),
+            "lock must remove plaintext written by the in-flight operation"
+        );
+    }
+
+    #[test]
+    fn writes_wait_until_an_exclusive_backup_snapshot_finishes() {
+        let (_dir, state, _id) = state_with_vault();
+        let (start_write_tx, start_write_rx) = std::sync::mpsc::channel();
+        let (attempted_tx, attempted_rx) = std::sync::mpsc::channel();
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+
+        std::thread::scope(|scope| {
+            let state_ref = &state;
+            scope.spawn(move || {
+                start_write_rx.recv().unwrap();
+                attempted_tx.send(()).unwrap();
+                state_ref
+                    .with_vault(|vault| {
+                        vault.create_entry(&soirvu_core::entries::EntryDraft {
+                            entry_date: "2026-10-19".into(),
+                            title: Some("after snapshot".into()),
+                            body_md: String::new(),
+                            mood: None,
+                            tz: None,
+                            tags: Vec::new(),
+                        })?;
+                        Ok(())
+                    })
+                    .unwrap();
+                finished_tx.send(()).unwrap();
+            });
+            state
+                .with_vault_exclusive(|_| {
+                    start_write_tx.send(()).unwrap();
+                    attempted_rx.recv().unwrap();
+                    assert!(finished_rx.try_recv().is_err());
+                    Ok(())
+                })
+                .unwrap();
+        });
+
+        finished_rx.recv().unwrap();
+    }
+
+    #[test]
+    fn uploads_obey_an_aggregate_budget_and_release_it_on_abort() {
+        let (_dir, state, _id) = state_with_vault();
+        let upload = state
+            .begin_upload("entry".into(), "file".into(), None)
+            .unwrap();
+        state.inner.lock().unwrap().upload_bytes = crate::commands::attachments::MAX_UPLOAD_TOTAL;
+        assert!(
+            matches!(state.push_chunk(&upload, b"x"), Err(AppError::Code(code)) if code == "too_large")
+        );
+
+        state.inner.lock().unwrap().upload_bytes = 0;
+        state.push_chunk(&upload, b"payload").unwrap();
+        state.drop_upload(&upload);
+        assert_eq!(state.inner.lock().unwrap().upload_bytes, 0);
+
+        let uploads: Vec<_> = (0..crate::commands::attachments::MAX_ACTIVE_UPLOADS)
+            .map(|i| {
+                state
+                    .begin_upload(format!("entry-{i}"), "file".into(), None)
+                    .unwrap()
+            })
+            .collect();
+        assert!(matches!(
+            state.begin_upload("overflow".into(), "file".into(), None),
+            Err(AppError::Code(code)) if code == "too_many_uploads"
+        ));
+        for upload in uploads {
+            state.drop_upload(&upload);
+        }
+    }
+
+    #[test]
     fn a_failed_unlock_starts_the_backoff() {
         let (_dir, state, id) = state_with_vault();
-        state.lock();
+        let _ = state.lock();
         state.begin_unlock(&id).unwrap();
         state.unlock_failed();
         match state.begin_unlock(&id) {
@@ -803,8 +1101,11 @@ mod tests {
         settings.lock_timeout_secs = 0;
         state.set_settings(settings).unwrap();
         assert!(state.idle_expired());
-        state.lock();
-        assert!(!state.idle_expired(), "a locked vault is never idle-expired");
+        let _ = state.lock();
+        assert!(
+            !state.idle_expired(),
+            "a locked vault is never idle-expired"
+        );
     }
 
     #[test]
@@ -829,9 +1130,15 @@ mod tests {
         state.set_sync_dir(&id, Some(sync.clone())).unwrap();
         assert_eq!(stored_sync_dir(&state, &id), Some(sync));
         assert_eq!(state.current_sync_dir(), stored_sync_dir(&state, &id));
-        assert_eq!(state.settings().sync_location.as_deref(), Some("sync-folder"));
+        assert_eq!(
+            state.settings().sync_location.as_deref(),
+            Some("sync-folder")
+        );
         let reloaded = AppState::load(dir.path().join("config"));
-        assert_eq!(stored_sync_dir(&reloaded, &id), stored_sync_dir(&state, &id));
+        assert_eq!(
+            stored_sync_dir(&reloaded, &id),
+            stored_sync_dir(&state, &id)
+        );
         state.set_sync_dir(&id, None).unwrap();
         assert_eq!(stored_sync_dir(&state, &id), None);
         assert_eq!(state.settings().sync_location, None);
@@ -840,7 +1147,7 @@ mod tests {
     #[test]
     fn the_registry_survives_a_reload_and_forget_removes() {
         let (dir, state, id) = state_with_vault();
-        state.lock();
+        let _ = state.lock();
         let reloaded = AppState::load(dir.path().join("config"));
         let list = reloaded.vault_list();
         assert_eq!(list.len(), 1);

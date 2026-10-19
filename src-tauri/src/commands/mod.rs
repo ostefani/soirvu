@@ -7,9 +7,25 @@ pub mod misc;
 pub mod sync;
 pub mod vault;
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::state::AppState;
+
+/// Runs synchronous storage work on Tokio's blocking pool while retrieving
+/// managed state inside the owned closure. Keeping the state lookup here
+/// avoids capturing Tauri's borrowed `State` across an await point.
+pub async fn run_blocking_state<T, F>(app: AppHandle, work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&AppState) -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        work(&state)
+    })
+    .await
+    .map_err(|_| "internal".to_string())?
+}
 
 /// Tells the UI the lock status changed (unlock, lock, auto-lock).
 /// The UI never polls; it listens for this.

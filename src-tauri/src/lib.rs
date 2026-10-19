@@ -9,12 +9,12 @@ mod error;
 mod keychain;
 #[cfg(target_os = "linux")]
 mod linux_lock;
-#[cfg(target_os = "windows")]
-mod windows_lock;
 #[cfg(target_os = "macos")]
 mod macos_lock;
 mod platform;
 mod state;
+#[cfg(target_os = "windows")]
+mod windows_lock;
 
 use std::time::Duration;
 
@@ -28,7 +28,11 @@ use state::AppState;
 /// session can never see, register over or wipe the release
 /// app's data by accident; release builds — including the
 /// signed Touch ID variant — use the plain name.
-const CONFIG_DIR_NAME: &str = if cfg!(debug_assertions) { "Soirvu Dev" } else { "Soirvu" };
+const CONFIG_DIR_NAME: &str = if cfg!(debug_assertions) {
+    "Soirvu Dev"
+} else {
+    "Soirvu"
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -40,28 +44,24 @@ pub fn run() {
         // attachment bytes by id only — never a path — and only
         // while the vault is unlocked. Range requests get a 206
         // with exactly the needed chunks decrypted.
-        .register_asynchronous_uri_scheme_protocol(
-            "soirvu-asset",
-            |ctx, request, responder| {
-                use tauri::Manager;
-                let app = ctx.app_handle().clone();
-                let uri = request.uri();
-                let path_id = uri.path().trim_matches('/');
-                let id: String = if !path_id.is_empty() && !path_id.contains('/') {
-                    path_id.to_string()
-                } else {
-                    uri.host().unwrap_or("").to_string()
-                };
-                let range = request
-                    .headers()
-                    .get(tauri::http::header::RANGE)
-                    .and_then(|v| v.to_str().ok())
-                    .map(|v| v.to_string());
-                tauri::async_runtime::spawn(async move {
-                    let answer = if id.is_empty()
-                        || id.len() > 64
-                        || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-                    {
+        .register_asynchronous_uri_scheme_protocol("soirvu-asset", |ctx, request, responder| {
+            use tauri::Manager;
+            let app = ctx.app_handle().clone();
+            let uri = request.uri();
+            let path_id = uri.path().trim_matches('/');
+            let id: String = if !path_id.is_empty() && !path_id.contains('/') {
+                path_id.to_string()
+            } else {
+                uri.host().unwrap_or("").to_string()
+            };
+            let range = request
+                .headers()
+                .get(tauri::http::header::RANGE)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.to_string());
+            tauri::async_runtime::spawn(async move {
+                let answer = tauri::async_runtime::spawn_blocking(move || {
+                    if !crate::commands::attachments::valid_attachment_id(&id) {
                         crate::commands::attachments::AssetResponse {
                             status: 400,
                             headers: vec![("Content-Length".into(), "0".into())],
@@ -70,20 +70,25 @@ pub fn run() {
                     } else {
                         let state = app.state::<crate::state::AppState>();
                         crate::commands::attachments::serve_asset(&state, &id, range.as_deref())
-                    };
-                    let mut builder = tauri::http::Response::builder()
-                        .status(answer.status);
-                    for (name, value) in &answer.headers {
-                        builder = builder.header(name.as_str(), value.as_str());
                     }
-                    responder.respond(
-                        builder.body(answer.body).unwrap_or_else(|_| {
-                            tauri::http::Response::new(Vec::new())
-                        }),
-                    );
+                })
+                .await
+                .unwrap_or_else(|_| crate::commands::attachments::AssetResponse {
+                    status: 500,
+                    headers: vec![("Content-Length".into(), "0".into())],
+                    body: Vec::new(),
                 });
-            },
-        )
+                let mut builder = tauri::http::Response::builder().status(answer.status);
+                for (name, value) in &answer.headers {
+                    builder = builder.header(name.as_str(), value.as_str());
+                }
+                responder.respond(
+                    builder
+                        .body(answer.body)
+                        .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
+                );
+            });
+        })
         .setup(|app| {
             // App config (§3): ~/Library/Application Support/<name>/
             let config_dir = app.path().config_dir()?.join(CONFIG_DIR_NAME);
@@ -142,7 +147,7 @@ pub fn run() {
             let _ = lock_events.start(Box::new(move |_reason| {
                 let state = event_handle.state::<AppState>();
                 if state.status() == state::Status::Unlocked {
-                    state.lock();
+                    let _ = state.lock();
                     commands::emit_status(&event_handle, &state);
                     commands::reload_main_window(&event_handle);
                 }
@@ -160,24 +165,34 @@ pub fn run() {
                 loop {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     ticks += 1;
-                    let state = handle.state::<AppState>();
-                    if state.idle_expired() {
-                        state.lock();
-                        commands::emit_status(&handle, &state);
-                        commands::reload_main_window(&handle);
-                        let _ = handle.emit("vault-locked", "idle");
-                    }
-                    // §3: a volume that disappears mid-session
-                    // locks the vault and drops its keys.
-                    if state.lock_if_current_missing() {
-                        commands::emit_status(&handle, &state);
-                        commands::reload_main_window(&handle);
-                    }
-                    // §13: scheduled backups — once when a vault
-                    // opens, then every five minutes while open.
-                    let unlocked = state.status() == state::Status::Unlocked;
+                    let check_handle = handle.clone();
+                    let unlocked = tauri::async_runtime::spawn_blocking(move || {
+                        let state = check_handle.state::<AppState>();
+                        if state.idle_expired() {
+                            let _ = state.lock();
+                            commands::emit_status(&check_handle, &state);
+                            commands::reload_main_window(&check_handle);
+                            let _ = check_handle.emit("vault-locked", "idle");
+                        }
+                        // §3: a volume that disappears mid-session locks
+                        // the vault and drops its keys.
+                        if state.lock_if_current_missing() {
+                            commands::emit_status(&check_handle, &state);
+                            commands::reload_main_window(&check_handle);
+                        }
+                        state.status() == state::Status::Unlocked
+                    })
+                    .await
+                    .unwrap_or(false);
+                    // §13: scheduled backups — once when a vault opens,
+                    // then every five minutes while open. Detached so a
+                    // large copy cannot stall lock and idle checks.
                     if (unlocked && !was_unlocked) || ticks % 60 == 0 {
-                        crate::backup::maybe_scheduled(&state);
+                        let backup_handle = handle.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            let state = backup_handle.state::<AppState>();
+                            crate::backup::maybe_scheduled(&state);
+                        });
                     }
                     was_unlocked = unlocked;
                 }
