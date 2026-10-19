@@ -1,103 +1,46 @@
 <script>
-    // Create-a-vault flow.
-    import * as api from '../../api.js';
+    import Button from '../Button/Button.svelte';
+    import Input from '../Input/Input.svelte';
 
-    let { onDone, onCancel = null } = $props();
-
-    let step = $state(1); // 1 folder, 2 passphrase, 3 recovery key
-    let folderName = $state('');
-    let warning = $state('');
-
-    const FS_WARNINGS = {
-        cloud_sync:
-            "This folder is in a cloud-synced location. Sync clients and the diary's database files do not mix — a synced copy can be taken mid-write and sync conflicts can corrupt the vault. You can continue, but a local folder is safer.",
-        network_fs:
-            "This folder is on a network share. The diary's database (SQLite) is unreliable over network filesystems. You can continue, but a local folder is safer.",
-    };
-    let passphrase = $state('');
-    let confirm = $state('');
-    let recoveryKey = $state('');
-    let saved = $state(false);
-    let error = $state('');
-    let busy = $state(false);
-
-    const ERRORS = {
-        folder_not_empty:
-            'That folder is not empty. A vault needs an empty folder — pick one, or create a new subfolder for it.',
-        empty_passphrase: 'The passphrase must not be empty.',
-        no_folder_picked: 'Pick a folder first.',
-        storage: 'The vault could not be written there. Is the folder writable?',
-    };
-
-    async function pick() {
-        error = '';
-        const picked = await api.vaultPickFolder('create');
-        if (picked) {
-            folderName = picked.name;
-            warning = picked.warning ? FS_WARNINGS[picked.warning] || '' : '';
-            step = 2;
-        }
-    }
-
-    async function create() {
-        error = '';
-        if (passphrase.length < 8) {
-            error =
-                'Use at least 8 characters — longer is better. This passphrase is the only protection the diary has.';
-            return;
-        }
-        if (passphrase !== confirm) {
-            error = 'The two passphrases do not match.';
-            return;
-        }
-        busy = true;
-        try {
-            const created = await api.vaultCreate(passphrase);
-            recoveryKey = created.recovery_key;
-            passphrase = '';
-            confirm = '';
-            step = 3;
-        } catch (e) {
-            error = ERRORS[e] || `Something went wrong (${e}).`;
-        } finally {
-            busy = false;
-        }
-    }
+    let { model = $bindable(), fields, actions } = $props();
 </script>
 <style src="./Onboarding.css"></style>
 
 <div class="center-col">
-    {#if step === 1}
+    {#if model.step === 1}
         <p>Create your diary in a folder you choose. Everything in it is encrypted.</p>
-        <button onclick={pick}>Choose an empty folder…</button>
-    {:else if step === 2}
-        <p>Diary folder: <strong>{folderName}</strong></p>
-        {#if warning}<p class="note">{warning}</p>{/if}
-        <label>
-            Passphrase
-            <input type="password" bind:value={passphrase} autocomplete="new-password" />
-        </label>
-        <label>
-            Repeat it
-            <input type="password" bind:value={confirm} autocomplete="new-password" />
-        </label>
-        <button onclick={create} disabled={busy}>Create the diary</button>
+        {#each actions.pick as action (action.name)}
+            <Button {...action} />
+        {/each}
+    {:else if model.step === 2}
+        <p>Diary folder: <strong>{model.folderName}</strong></p>
+        {#if model.warning}<p class="note">{model.warning}</p>{/if}
+        {#each fields as field (field.name)}
+            <Input {field} bind:value={model[field.name]} />
+        {/each}
+        {#each actions.create as action (action.name)}
+            <Button {...action} />
+        {/each}
     {:else}
         <p>
             This is your <strong>recovery key</strong>. If you forget the passphrase, it is the only way back in. The
             app does not keep a copy — write it down and keep it somewhere safe.
         </p>
-        <p class="recovery-key">{recoveryKey}</p>
+        <p class="recovery-key">{model.recoveryKey}</p>
         <label class="check">
-            <input type="checkbox" bind:checked={saved} />
+            <input type="checkbox" bind:checked={model.saved} />
             I have saved the recovery key
         </label>
-        <button onclick={() => onDone()} disabled={!saved}>Open my diary</button>
+        {#each actions.done as action (action.name)}
+            <Button {...action} />
+        {/each}
     {/if}
 
-    {#if onCancel && step < 3}
-        <button class="quiet" onclick={() => onCancel()}>Back</button>
+    {#if model.step < 3}
+        {#each actions.cancel as action (action.name)}
+            <Button {...action} />
+        {/each}
     {/if}
 
-    {#if error}<p class="error">{error}</p>{/if}
+    {#if model.error}<p class="error">{model.error}</p>{/if}
 </div>

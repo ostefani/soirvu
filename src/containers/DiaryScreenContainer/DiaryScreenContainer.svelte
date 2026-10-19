@@ -1,15 +1,14 @@
 <script>
     import * as api from '../../api.js';
-    import EntryList from '../EntryList/EntryList.svelte';
-    import Calendar from '../Calendar/Calendar.svelte';
-    import EntryEditor from '../EntryEditor/EntryEditor.svelte';
-    import Settings from '../Settings/Settings.svelte';
+    import EntryList from '../../components/EntryList/EntryList.svelte';
+    import Calendar from '../../components/Calendar/Calendar.svelte';
+    import EntryEditor from '../../components/EntryEditor/EntryEditor.svelte';
+    import Button from '../../components/Button/Button.svelte';
 
-    let { vault, onLock } = $props();
+    let { vault, onLock, onSettings } = $props();
 
     let selectedId = $state(null);
     let listEl = $state(null);
-    let showSettings = $state(false);
     let listDate = $state(null);
     let calVersion = $state(0);
     let onThisDay = $state([]);
@@ -25,19 +24,24 @@
         }
     }
 
+    function refreshNavigation() {
+        listEl?.refresh();
+        calVersion++;
+    }
+
     $effect(() => {
         void calVersion;
         loadOnThisDay();
     });
 </script>
-<style src="./Diary.css"></style>
+<style src="./DiaryScreenContainer.css"></style>
 
-<div class="diary">
+<div class="diary-screen">
     <header class="diary-head">
         <span class="vault-label">{vault?.name}</span>
         <span>
-            <button class="quiet" onclick={() => (showSettings = true)}>Settings</button>
-            <button class="quiet" onclick={onLock}>Lock</button>
+            <Button label="Settings" kind="quiet" handler={onSettings} />
+            <Button label="Lock" kind="quiet" handler={onLock} />
         </span>
     </header>
     <div class="diary-body">
@@ -50,27 +54,16 @@
                 onClearDate={() => (listDate = null)} />
         </aside>
         <main>
-            {#if showSettings}
-                <Settings
-                    onBack={() => (showSettings = false)}
-                    onImported={() => {
-                        listEl?.refresh();
-                        calVersion++;
-                    }} />
-            {:else if selectedId}
+            {#if selectedId}
                 {#key selectedId}
                     <EntryEditor
                         entryId={selectedId}
                         onBack={() => (selectedId = null)}
                         onDeleted={() => {
                             selectedId = null;
-                            listEl?.refresh();
-                            calVersion++;
+                            refreshNavigation();
                         }}
-                        onSaved={() => {
-                            listEl?.refresh();
-                            calVersion++;
-                        }} />
+                        onSaved={refreshNavigation} />
                 {/key}
             {:else}
                 <div class="calendar-home">
