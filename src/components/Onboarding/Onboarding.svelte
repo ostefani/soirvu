@@ -1,6 +1,8 @@
 <script>
     import Button from '../Button/Button.svelte';
     import Input from '../Input/Input.svelte';
+    import ErrorComponent from '../ErrorComponent/ErrorComponent.svelte';
+    import NoteComponent from '../NoteComponent/NoteComponent.svelte';
 
     let { model = $bindable(), fields, actions } = $props();
 </script>
@@ -14,7 +16,7 @@
         {/each}
     {:else if model.step === 2}
         <p>Diary folder: <strong>{model.folderName}</strong></p>
-        {#if model.warning}<p class="note">{model.warning}</p>{/if}
+        <NoteComponent text={model.warning} />
         {#each fields as field (field.name)}
             <Input {field} bind:value={model[field.name]} />
         {/each}
@@ -42,5 +44,5 @@
         {/each}
     {/if}
 
-    {#if model.error}<p class="error">{model.error}</p>{/if}
+    <ErrorComponent text={model.error} />
 </div>

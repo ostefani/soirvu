@@ -1,6 +1,7 @@
 <script>
     import * as api from '../../api.js';
     import Button from '../../components/Button/Button.svelte';
+    import NoteComponent from '../../components/NoteComponent/NoteComponent.svelte';
     import OnboardingContainer from '../OnboardingContainer/OnboardingContainer.svelte';
     import LockScreenContainer from '../LockScreenContainer/LockScreenContainer.svelte';
 
@@ -42,7 +43,7 @@
         {#each welcomeActions as action (action.name)}
             <Button {...action} />
         {/each}
-        {#if welcomeNote}<p class="note">{welcomeNote}</p>{/if}
+        <NoteComponent text={welcomeNote} />
     </div>
 {:else if view === 'create'}
     <OnboardingContainer onDone={onVaultsChanged} onCancel={vaults.length > 0 ? onVaultsChanged : undefined} />

@@ -1,6 +1,8 @@
 <script>
     import Button from '../Button/Button.svelte';
     import Input from '../Input/Input.svelte';
+    import ErrorComponent from '../ErrorComponent/ErrorComponent.svelte';
+    import NoteComponent from '../NoteComponent/NoteComponent.svelte';
 
     let { vaults, selected, model = $bindable(), secretField, forkField, kindOptions, unlockActions, forkActions, handlers } = $props();
 </script>
@@ -61,13 +63,13 @@
             {#each forkActions as action (action.name)}
                 <Button {...action} />
             {/each}
-            {#if model.forkError}<p class="error">{model.forkError}</p>{/if}
+            <ErrorComponent text={model.forkError} />
         </div>
     {/if}
 
     <Button label="Open another diary folder…" kind="quiet" handler={handlers.openAnother} />
     <Button label="Create a new diary…" kind="quiet" handler={handlers.create} />
 
-    {#if model.note}<p class="note">{model.note}</p>{/if}
-    {#if model.error}<p class="error">{model.error}</p>{/if}
+    <NoteComponent text={model.note} />
+    <ErrorComponent text={model.error} />
 </div>
