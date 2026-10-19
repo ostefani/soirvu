@@ -87,7 +87,7 @@ const MAX_SYNC_FILES: usize = 20_000;
 const MAX_ACK_FILES: usize = 512;
 const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_APPLY_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_BLOB_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_BLOB_PLAINTEXT_BYTES: u64 = 1024 * 1024 * 1024;
 const ACK_DIR: &str = "acks";
 
 /// What one emit produced (or None when nothing changed).
@@ -347,16 +347,18 @@ fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Copies a sync blob with a streaming byte limit and checks its advertised
-/// size before the caller commits the corresponding attachment row.
+/// Copies a sync blob with a streaming ciphertext-size ceiling derived from
+/// the advertised plaintext size. The caller authenticates it after copying.
 fn copy_bounded_blob(source: &Path, dest: &Path, expected_size: i64) -> Result<()> {
-    if expected_size < 0 || expected_size as u64 > MAX_BLOB_BYTES {
+    if expected_size < 0 || expected_size as u64 > MAX_BLOB_PLAINTEXT_BYTES {
         return Err(Error::InvalidInput("attachment exceeds size limit".into()));
     }
+    let max_file_size = crate::attachments::encrypted_blob_len(expected_size)
+        .ok_or_else(|| Error::InvalidInput("attachment size is invalid".into()))?;
     let input = File::open(source)?;
     let mut output = File::create(dest)?;
-    let copied = std::io::copy(&mut input.take(MAX_BLOB_BYTES + 1), &mut output)?;
-    if copied > MAX_BLOB_BYTES || copied != expected_size as u64 {
+    let copied = std::io::copy(&mut input.take(max_file_size + 1), &mut output)?;
+    if copied > max_file_size {
         drop(output);
         let _ = fs::remove_file(dest);
         return Err(Error::InvalidInput(

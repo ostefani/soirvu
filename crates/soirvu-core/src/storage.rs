@@ -218,7 +218,7 @@ impl Database {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [&id],
         )?;
-        if previous.as_deref() != Some(id) {
+        if previous.is_some() && previous.as_deref() != Some(id) {
             tx.execute(
                 "DELETE FROM meta WHERE key = ?1",
                 [crate::sync::EMITTED_KEY],

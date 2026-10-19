@@ -526,6 +526,12 @@ fn expected_len(size: i64) -> u64 {
     HEADER_LEN + size + chunk_count(size) as u64 * TAG_LEN as u64
 }
 
+/// The on-disk encrypted blob length for a plaintext size. Sync uses this
+/// only as a read/copy ceiling; the caller still authenticates every chunk.
+pub(crate) fn encrypted_blob_len(plaintext_size: i64) -> Option<u64> {
+    (plaintext_size >= 0).then(|| expected_len(plaintext_size))
+}
+
 fn chunk_nonce(prefix: &[u8; PREFIX_LEN], counter: u32, last: bool) -> [u8; NONCE_LEN] {
     let mut nonce = [0u8; NONCE_LEN];
     nonce[..PREFIX_LEN].copy_from_slice(prefix);

@@ -718,10 +718,9 @@ pub fn vault_fork_import(
         let mut vault = Vault::open_with_passphrase(&dest, &passphrase)?;
         let recovery = vault.fork_identity(&passphrase)?;
         let new_id = vault.header().vault_id.clone();
-        let device_id = vault.device_id().to_string();
         drop(vault);
         state.clear_pending_fork();
-        state.register_with_device(new_id.clone(), folder_name(&dest), dest, Some(device_id))?;
+        state.register(new_id.clone(), folder_name(&dest), dest)?;
         Ok(Forked {
             vault_id: new_id,
             recovery_key: recovery.to_text(),
