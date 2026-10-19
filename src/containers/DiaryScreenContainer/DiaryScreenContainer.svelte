@@ -25,7 +25,7 @@
         }
     }
 
-    function refreshNavigation() {
+    export function refreshNavigation() {
         listEl?.refresh();
         calVersion++;
     }

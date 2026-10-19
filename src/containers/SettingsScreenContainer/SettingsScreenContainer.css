@@ -1,5 +1,9 @@
 .settings-screen {
-    min-height: 100vh;
+    position: fixed;
+    inset: 0;
+    overflow-y: auto;
+    background: var(--bg);
+    z-index: 50;
     box-sizing: border-box;
     padding: 1rem 1.5rem;
 }

@@ -9,6 +9,7 @@
     let mainView = $state('welcome'); // welcome | locked
     let vaults = $state([]);
     let currentVault = $state(null);
+    let diaryEl = $state(null);
 
     async function refresh() {
         vaults = await api.vaultList();
@@ -70,8 +71,9 @@
     <p class="note">Starting…</p>
 {:else if screen === 'main'}
     <MainScreenContainer {vaults} initialView={mainView} onVaultsChanged={refresh} />
-{:else if screen === 'diary'}
-    <DiaryScreenContainer vault={currentVault} onLock={lock} onSettings={() => (screen = 'settings')} />
-{:else if screen === 'settings'}
-    <SettingsScreenContainer onBack={() => (screen = 'diary')} />
+{:else if screen === 'diary' || screen === 'settings'}
+    <DiaryScreenContainer bind:this={diaryEl} vault={currentVault} onLock={lock} onSettings={() => (screen = 'settings')} />
+    {#if screen === 'settings'}
+        <SettingsScreenContainer onBack={() => (screen = 'diary')} onImported={() => diaryEl?.refreshNavigation()} />
+    {/if}
 {/if}
