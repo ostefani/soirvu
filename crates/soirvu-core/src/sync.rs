@@ -2103,6 +2103,108 @@ mod tests {
         }
     }
 
+    /// Rewrites a bundle file with its payload mutated:
+    /// open it with the author's key, change the records,
+    /// seal it again under the same header. What a buggy
+    /// or newer peer could put on the wire.
+    fn poison_bundle(
+        dir: &Path,
+        file_name: &str,
+        author: &Vault,
+        mutate: impl FnOnce(&mut Bundle),
+    ) {
+        let path = dir.join(file_name);
+        let bytes = fs::read(&path).unwrap();
+        let key = author.sync_key();
+        let cipher = XChaCha20Poly1305::new_from_slice(&key[..]).unwrap();
+        let (header, mut bundle) = open_bundle(&cipher, &bytes).unwrap();
+        mutate(&mut bundle);
+        let json = serde_json::to_vec(&bundle).unwrap();
+        let aad = header_line(&header);
+        let nonce = random_bytes::<NONCE_LEN>().unwrap();
+        let sealed = cipher
+            .encrypt(&XNonce::from(nonce), Payload { msg: &json, aad: &aad })
+            .unwrap();
+        let mut out = aad.clone();
+        out.push(b'\n');
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&sealed);
+        fs::write(&path, out).unwrap();
+    }
+
+    #[test]
+    fn a_bundle_with_a_malformed_attachment_hash_is_rejected_whole() {
+        // A sealed bundle proves its sender, not its
+        // sanity. This tombstone's hash is 63 characters:
+        // decoding it into the attachment row used to
+        // panic on the out-of-bounds slice, and the same
+        // bundle wedged every later apply the same way.
+        let (_da, _db, mut a, mut b) = two_devices();
+        let entry_dir = TempDir::new().unwrap();
+        let junk_dir = TempDir::new().unwrap();
+        let tomb_dir = TempDir::new().unwrap();
+        let entry = b.create_entry(&draft("base")).unwrap();
+        b.sync_emit(entry_dir.path()).unwrap();
+        a.sync_apply(entry_dir.path()).unwrap();
+        let att = b
+            .add_attachment(&entry.id, "note.txt", "text/plain", b"attachment canary")
+            .unwrap();
+        b.sync_emit(junk_dir.path()).unwrap();
+        b.delete_attachment(&att.id).unwrap();
+        let companion = b.create_entry(&draft("companion")).unwrap();
+        let info = b.sync_emit(tomb_dir.path()).unwrap().unwrap();
+        poison_bundle(tomb_dir.path(), &info.file_name, &b, |bundle| {
+            bundle.attachments[0].sha256 = "a".repeat(63);
+        });
+        let report = a.sync_apply(tomb_dir.path()).unwrap();
+        assert_eq!(report.entries_applied, 0);
+        assert!(
+            report.problems.iter().any(|p| p.contains("invalid record")),
+            "{:?}",
+            report.problems
+        );
+        assert!(
+            a.get_entry(&companion.id).is_err(),
+            "a rejected bundle applies nothing, not even its valid records"
+        );
+        assert!(a.list_attachments(&entry.id).unwrap().is_empty());
+        // No wedge: the next apply reports it again,
+        // changes nothing, and the vault still works.
+        let report = a.sync_apply(tomb_dir.path()).unwrap();
+        assert_eq!(report.problems.len(), 1);
+        b.create_entry(&draft("afterwards")).unwrap();
+        let good = TempDir::new().unwrap();
+        b.sync_emit(good.path()).unwrap();
+        let report = a.sync_apply(good.path()).unwrap();
+        assert_eq!(report.entries_applied, 1);
+    }
+
+    #[test]
+    fn a_bundle_with_a_traversal_attachment_id_is_rejected_whole() {
+        // Attachment ids become filesystem paths during
+        // apply (blobs/<id>, the vault's own blob path).
+        // A non-UUID id is refused before any of that.
+        let (_da, _db, mut a, mut b) = two_devices();
+        let entry_dir = TempDir::new().unwrap();
+        let att_dir = TempDir::new().unwrap();
+        let entry = b.create_entry(&draft("base")).unwrap();
+        b.sync_emit(entry_dir.path()).unwrap();
+        a.sync_apply(entry_dir.path()).unwrap();
+        b.add_attachment(&entry.id, "note.txt", "text/plain", b"attachment canary")
+            .unwrap();
+        let info = b.sync_emit(att_dir.path()).unwrap().unwrap();
+        poison_bundle(att_dir.path(), &info.file_name, &b, |bundle| {
+            bundle.attachments[0].id = "../escape".to_string();
+        });
+        let report = a.sync_apply(att_dir.path()).unwrap();
+        assert!(
+            report.problems.iter().any(|p| p.contains("invalid record")),
+            "{:?}",
+            report.problems
+        );
+        assert!(a.list_attachments(&entry.id).unwrap().is_empty());
+    }
+
     #[test]
     fn attachments_travel_with_their_blob() {
         let (_da, _db, mut a, mut b) = two_devices();
