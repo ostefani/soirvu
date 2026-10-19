@@ -169,6 +169,16 @@ struct SyncAck {
     applied: std::collections::BTreeMap<String, i64>,
 }
 
+/// What one ack publish found: an ahead detection
+/// (the warning text and the claims), and/or a plain
+/// warning that is NOT a detection (the replaced
+/// oversized file claims nothing).
+#[derive(Default)]
+struct AckPublish {
+    ahead: Option<(String, Vec<(String, i64)>)>,
+    warning: Option<String>,
+}
+
 /// The plaintext bundle header: metadata only (the same
 /// values the filename carries). It is the AEAD's AAD, so
 /// any tampering with it fails decryption.
@@ -258,14 +268,6 @@ fn parse_bundle_name_full(name: &str) -> Option<(String, String, i64, i64)> {
 fn header_of(bytes: &[u8]) -> Option<BundleHeader> {
     let newline = bytes.iter().position(|b| *b == b'\n')?;
     serde_json::from_slice(&bytes[..newline]).ok()
-}
-
-/// A device id in its one canonical form — the form
-/// `restamp_device` and vault creation mint. Anything
-/// else in a peer position is junk from a plaintext
-/// file, not a peer.
-fn is_canonical_uuid(s: &str) -> bool {
-    uuid::Uuid::parse_str(s).is_ok_and(|u| u.to_string() == s)
 }
 
 /// Reads every ack file for this vault in the folder.
@@ -784,14 +786,29 @@ impl Vault {
         // folder that cannot be written cannot be
         // corrected either, so the failure warning below
         // is the whole signal for that case.
-        // Read before the publish: nothing that happens
-        // after the ack file is corrected may take the
-        // detection down with it. A failed read degrades
-        // to an empty set (no claims persisted) — the
-        // detection itself is unaffected.
-        let known = self.known_peers().unwrap_or_default();
         match self.publish_ack(sync_dir) {
-            Ok(Some((warning, ahead_peers))) => {
+            Ok(publish) => {
+                if let Some(note) = publish.warning {
+                    report.warnings.push(note);
+                }
+                let Some((warning, ahead_peers)) = publish.ahead else {
+                    return Ok(report);
+                };
+                // Read here, and only here: the set is
+                // needed solely to persist claims. A
+                // failed read is a warning, not a silent
+                // empty set.
+                let known = match self.known_peers() {
+                    Ok(known) => known,
+                    Err(e) => {
+                        report.warnings.push(format!(
+                            "the known-peer set could not be read ({e}); \
+                             claim evidence was not saved"
+                        ));
+                        std::collections::BTreeSet::new()
+                    }
+                };
+                {
                 // The report carries the detection first;
                 // persisting it durably is best-effort on
                 // top (see persist_ack_ahead).
@@ -817,7 +834,7 @@ impl Vault {
                         if named.len() == 5 {
                             break;
                         }
-                        named.push(&peer[..8]);
+                        named.push(&peer[peer.len() - 8..]);
                     }
                     let suffix = if ahead_peers.len() > 5 { ", …" } else { "" };
                     format!("{warning} (claimed for: {}{suffix})", named.join(", "))
@@ -828,8 +845,8 @@ impl Vault {
                          it is in this report, but will not be shown again"
                     ));
                 }
+                }
             }
-            Ok(None) => {}
             Err(e) => report.warnings.push(format!(
                 "this device's ack could not be published ({e}); \
                  peers will prune less until it can be"
@@ -980,32 +997,6 @@ impl Vault {
         Ok(())
     }
 
-    /// Writes this vault's ack file into the sync folder:
-    /// the per-peer cursors, so peers can tell which of
-    /// their bundles every device has consumed.
-    ///
-    /// The ack cannot be trusted while a device identity
-    /// is shared. A bit-identical copy's cursors are
-    /// indistinguishable from this device's, so under an
-    /// unrestamped copy the file can claim consumption
-    /// that never happened on the original — and nothing
-    /// in the ack can tell the copies apart, because a
-    /// copy holds everything the original holds. Restamp
-    /// ends the sharing; the durable fix is the device
-    /// id moving out of the database (Phase 10b step 3).
-    /// Until then this is a known gap, not a guarantee.
-    ///
-    /// The invariant is that the ack never claims more
-    /// than this database holds, so the file is always
-    /// rewritten to this vault's cursors. A file found
-    /// AHEAD of this database can only have been written
-    /// by another copy sharing the identity, left behind
-    /// by a restore from backup, or planted — the caller
-    /// is told (the return value) and the file is
-    /// corrected downward in the same write. That makes
-    /// the apply path a detector the bundle index can't
-    /// be: an apply-only copy leaves no bundle behind,
-    /// but it moves the ack, and the move shows here.
     /// Makes an ack-ahead detection durable: the flag,
     /// plus the claims as evidence for known peers (a
     /// copy of this vault consumed those bundles, so
@@ -1032,7 +1023,33 @@ impl Vault {
         Ok(())
     }
 
-    fn publish_ack(&self, sync_dir: &Path) -> Result<Option<(String, Vec<(String, i64)>)>> {
+    /// Writes this vault's ack file into the sync folder:
+    /// the per-peer cursors, so peers can tell which of
+    /// their bundles every device has consumed.
+    ///
+    /// The ack cannot be trusted while a device identity
+    /// is shared. A bit-identical copy's cursors are
+    /// indistinguishable from this device's, so under an
+    /// unrestamped copy the file can claim consumption
+    /// that never happened on the original — and nothing
+    /// in the ack can tell the copies apart, because a
+    /// copy holds everything the original holds. Restamp
+    /// ends the sharing; the durable fix is the device
+    /// id moving out of the database (Phase 10b step 3).
+    /// Until then this is a known gap, not a guarantee.
+    ///
+    /// The invariant is that the ack never claims more
+    /// than this database holds, so the file is always
+    /// rewritten to this vault's cursors. A file found
+    /// AHEAD of this database can only have been written
+    /// by another copy sharing the identity, left behind
+    /// by a restore from backup, or planted — the caller
+    /// is told (the return value) and the file is
+    /// corrected downward in the same write. That makes
+    /// the apply path a detector the bundle index can't
+    /// be: an apply-only copy leaves no bundle behind,
+    /// but it moves the ack, and the move shows here.
+    fn publish_ack(&self, sync_dir: &Path) -> Result<AckPublish> {
         let applied = self.applied_cursors()?;
         let ack = SyncAck {
             format: ACK_FORMAT,
@@ -1044,20 +1061,22 @@ impl Vault {
         let acks_dir = sync_dir.join(ACK_DIR);
         let dest = acks_dir.join(format!("{}.json", self.device_id));
         let mut warning = None;
+        let mut note = None;
         let oversized = fs::metadata(&dest)
             .map(|m| m.len() > ACK_MAX_BYTES)
             .unwrap_or(false);
         if oversized {
             // Not readable as an ack at all: it is
             // replaced below like any stale file, and
-            // the replacement is reported — without
-            // claims, since none could be read.
-            warning = Some((
+            // the replacement is reported as a plain
+            // warning — it claims nothing, so it is not
+            // an ahead detection (a small unparseable
+            // file is likewise replaced without one).
+            note = Some(
                 "an ack file in the folder is too large to be an ack and \
                  was replaced with this device's own"
                     .to_string(),
-                Vec::new(),
-            ));
+            );
         } else if let Ok(existing) = fs::read(&dest) {
             // Write only what changed: republishing an
             // identical ack would make folder mirrors
@@ -1065,7 +1084,7 @@ impl Vault {
             // repair case (missing or stale file) is
             // exactly the differing one.
             if existing == bytes {
-                return Ok(None);
+                return Ok(AckPublish::default());
             }
             if let Ok(file_ack) = serde_json::from_slice::<SyncAck>(&existing) {
                 // Detection and persistence are separate
@@ -1096,7 +1115,7 @@ impl Vault {
                         .filter(|(peer, to)| {
                             **to > ack.applied.get(peer.as_str()).copied().unwrap_or(0)
                                 && peer.as_str() != self.device_id
-                                && is_canonical_uuid(peer)
+                                && crate::storage::is_canonical_uuid(peer)
                         })
                         .map(|(peer, to)| (peer.clone(), *to))
                         .collect()
@@ -1123,7 +1142,10 @@ impl Vault {
         let tmp = acks_dir.join(format!(".tmp-{}", self.device_id));
         fs::write(&tmp, &bytes)?;
         rename_retry(&tmp, &dest)?;
-        Ok(warning)
+        Ok(AckPublish {
+            ahead: warning,
+            warning: note,
+        })
     }
 
     /// Removes this vault's own consumed bundles — and
@@ -1161,6 +1183,24 @@ impl Vault {
         let acks = read_acks(sync_dir, &my_vault);
         let mut peers: std::collections::BTreeSet<String> =
             acks.iter().map(|a| a.device_id.clone()).collect();
+        // An ack FILE that cannot be read — torn,
+        // oversized, junk — still proves a peer: its
+        // name is the device id. It counts below with
+        // coverage 0 (no parsed ack to find), so this
+        // prune cannot take bundles that peer has not
+        // consumed. A peer set built only from parsed
+        // acks would lose exactly the devices whose
+        // acks are damaged.
+        if let Ok(items) = fs::read_dir(sync_dir.join(ACK_DIR)) {
+            for item in items.flatten() {
+                let name = item.file_name().to_string_lossy().into_owned();
+                if let Some(stem) = name.strip_suffix(".json") {
+                    if crate::storage::is_canonical_uuid(stem) {
+                        peers.insert(stem.to_string());
+                    }
+                }
+            }
+        }
         let mut mine: Vec<(PathBuf, i64)> = Vec::new();
         for item in fs::read_dir(sync_dir)? {
             let item = item?;
@@ -1239,7 +1279,22 @@ impl Vault {
     /// the original), and its emits can collide with the
     /// original's bundle names.
     pub fn restamp_device(&mut self) -> Result<String> {
-        let new_id = uuid::Uuid::now_v7().to_string();
+        let new_id = crate::new_device_id();
+        self.restamp_device_to(&new_id)?;
+        Ok(new_id)
+    }
+
+    /// Restamps to a caller-chosen id — the app, which
+    /// persists the assignment in its own settings
+    /// BEFORE calling this, so the next open assigns
+    /// the same id. The sync-state reset is unchanged.
+    pub fn restamp_device_to(&mut self, new_id: &str) -> Result<()> {
+        if !crate::storage::is_canonical_uuid(new_id) {
+            return Err(Error::InvalidInput(
+                "device id is not a canonical UUID".into(),
+            ));
+        }
+        let new_id = new_id.to_string();
         let tx = self.db.conn_mut().transaction()?;
         tx.execute(
             "INSERT OR IGNORE INTO device (id, name, created_at) VALUES (?1, 'this device', ?2)",
@@ -1256,8 +1311,8 @@ impl Vault {
             [],
         )?;
         tx.commit()?;
-        self.device_id = new_id.clone();
-        Ok(new_id)
+        self.device_id = new_id;
+        Ok(())
     }
 
 }
@@ -2801,7 +2856,7 @@ mod tests {
     }
 
     #[test]
-    fn an_oversized_ack_is_replaced_and_reported() {
+    fn an_oversized_ack_is_replaced_and_warned() {
         let (_da, _db, mut a, _b) = two_devices();
         let sync = TempDir::new().unwrap();
         a.sync_apply(sync.path()).unwrap();
@@ -2817,12 +2872,102 @@ mod tests {
         );
         fs::write(&ack_path, raw).unwrap();
         let report = a.sync_apply(sync.path()).unwrap();
-        let ahead = report.ack_ahead.expect("oversized must be reported");
-        assert!(ahead.contains("too large"), "{ahead}");
+        // A warning, not a detection: the file claimed
+        // nothing, so no flag, no failure — a small
+        // unparseable file is replaced with no report
+        // at all, and this is the same class, only
+        // louder because of its size.
+        assert!(report.ack_ahead.is_none());
+        assert!(report
+            .warnings
+            .iter()
+            .any(|w| w.contains("too large")));
         // The file is corrected: this device's own ack,
         // parseable and back under the bound.
         let now = fs::read(&ack_path).unwrap();
         assert!(now.len() <= ACK_MAX_BYTES as usize);
         assert!(serde_json::from_slice::<SyncAck>(&now).is_ok());
+    }
+
+    #[test]
+    fn a_copied_vault_opened_as_another_device_is_not_a_twin() {
+        // The step-3 shape: identity assigned by the
+        // caller, kept outside the folder. The copy is
+        // opened AS a fresh device and syncs with the
+        // original as an ordinary peer.
+        let dir_a = TempDir::new().unwrap();
+        let dir_c = TempDir::new().unwrap();
+        let sync = TempDir::new().unwrap();
+        let id_a = crate::new_device_id();
+        let (mut a, _recovery) =
+            Vault::create_with_device(dir_a.path(), PASSPHRASE, fast(), &id_a).unwrap();
+        a.create_entry(&draft("from a")).unwrap();
+        a.sync_emit(sync.path()).unwrap().unwrap();
+        a.checkpoint().unwrap();
+        copy_dir(dir_a.path(), &dir_c.path().join("v"));
+        let id_c = crate::new_device_id();
+        let mut copy =
+            Vault::open_with_passphrase_as(&dir_c.path().join("v"), PASSPHRASE, &id_c).unwrap();
+        assert_eq!(copy.device_id, id_c);
+        // A's bundle is a PEER bundle to the copy, not
+        // its own: no shared-identity refusal.
+        let report = copy.sync_apply(sync.path()).unwrap();
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        // The copy's own changes are authored by the
+        // assigned id, and the original takes them as a
+        // peer's.
+        copy.create_entry(&draft("from the copy")).unwrap();
+        let info = copy.sync_emit(sync.path()).unwrap().unwrap();
+        assert!(info.file_name.contains(&id_c), "{}", info.file_name);
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert_eq!(report.entries_applied, 1);
+        // A bad assignment is refused at the door.
+        assert!(
+            Vault::open_with_passphrase_as(&dir_c.path().join("v"), PASSPHRASE, "not-a-uuid")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn prune_counts_a_peer_whose_ack_is_unreadable() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let dir_c = TempDir::new().unwrap();
+        let sync = TempDir::new().unwrap();
+        // C is a consumer only: it publishes an ack
+        // (by applying an empty folder) and never
+        // emits, so no bundle names it as an author.
+        let (mut c, _recovery) = Vault::create(
+            dir_c.path(),
+            PASSPHRASE,
+            fast(),
+        )
+        .unwrap();
+        // C's vault is a different vault: it cannot
+        // apply A's bundles. Use a copy of A instead —
+        // a third device on A's vault, opened stored.
+        drop(c);
+        let dir_c2 = TempDir::new().unwrap();
+        copy_dir(a.dir(), &dir_c2.path().join("v"));
+        let mut c = Vault::open_with_passphrase(&dir_c2.path().join("v"), PASSPHRASE).unwrap();
+        c.restamp_device().unwrap();
+        c.sync_apply(sync.path()).unwrap();
+        // Now A emits and B consumes everything.
+        a.create_entry(&draft("x1")).unwrap();
+        a.create_entry(&draft("x2")).unwrap();
+        let info = a.sync_emit(sync.path()).unwrap().unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        // C's ack is torn after the fact. C has consumed
+        // nothing of A's stream.
+        let c_ack = sync
+            .path()
+            .join("acks")
+            .join(format!("{}.json", c.device_id));
+        fs::write(&c_ack, b"torn").unwrap();
+        // Without C in the peer set, B's coverage (2)
+        // would let this prune take the bundle C never
+        // saw. With C counted at 0, nothing is covered.
+        let report = a.sync_prune(sync.path()).unwrap();
+        assert_eq!(report.bundles_removed, 0);
+        assert!(sync.path().join(&info.file_name).exists());
     }
 }

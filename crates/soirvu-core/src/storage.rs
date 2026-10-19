@@ -157,9 +157,15 @@ impl Database {
 
     /// Returns this vault's device id, creating the device row the first time.
     ///
-    /// NOTE: for now the id lives inside the database. When sync arrives it has to
-    /// move to the app's own settings, because a copied vault folder would
-    /// otherwise carry the id to another computer.
+    /// The stored identity: the id this database was
+    /// last opened (or created) with. It is a CACHE and
+    /// a history — the authoritative assignment lives
+    /// with the caller (the app keeps it in its own
+    /// settings, outside the vault, so a copied vault
+    /// folder does not carry the identity to another
+    /// computer; see `assign_device`). Callers that
+    /// have no settings of their own (the CLI, tests)
+    /// get this stored id.
     pub fn ensure_device(&mut self) -> Result<String> {
         if let Some(id) = self.meta("device_id")? {
             return Ok(id);
@@ -176,6 +182,25 @@ impl Database {
         )?;
         tx.commit()?;
         Ok(id)
+    }
+
+    /// Opens this database AS the given device: the
+    /// device row exists afterwards and the stored
+    /// cache names it. The id itself is minted and kept
+    /// by the caller, outside the vault folder.
+    pub fn assign_device(&mut self, id: &str) -> Result<String> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT OR IGNORE INTO device (id, name, created_at) VALUES (?1, 'this device', ?2)",
+            params![id, now_ms()],
+        )?;
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES ('device_id', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [&id],
+        )?;
+        tx.commit()?;
+        Ok(id.to_string())
     }
 
     /// The raw connection (read access).
@@ -548,4 +573,12 @@ mod tests {
             .unwrap();
         assert_eq!(rows, 1);
     }
+}
+
+/// A device id in its one canonical form — the form
+/// `crate::new_device_id` mints. Anything else in a
+/// peer position is junk from a plaintext file, not a
+/// peer.
+pub(crate) fn is_canonical_uuid(s: &str) -> bool {
+    Uuid::parse_str(s).is_ok_and(|u| u.to_string() == s)
 }

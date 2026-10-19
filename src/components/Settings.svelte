@@ -309,7 +309,7 @@
             restampArm = false;
             restampNote =
                 'This copy now syncs as a new device (' +
-                id.slice(0, 8) +
+                id.slice(-8) +
                 '…). Its changes will be emitted again under the new identity.';
             await loadSync();
         } catch (e) {
@@ -704,14 +704,14 @@
             {#each syncInfo.peers as peer}
                 {#if peer.needs_reemit}
                     <p class="note">
-                        Device <code>{peer.device_id.slice(0, 8)}…</code> needs to re-emit everything, or its earlier bundles are still on their way.
+                        Device <code>{peer.device_id.slice(-8)}…</code> needs to re-emit everything, or its earlier bundles are still on their way.
                     </p>
                 {/if}
             {/each}
             <p class="note">This device: <code>{syncInfo.device_id}</code></p>
             {#each syncInfo.peers as peer}
                 <p class="note">
-                    Peer <code>{peer.device_id.slice(0, 8)}…</code>: their changes incorporated through
+                    Peer <code>{peer.device_id.slice(-8)}…</code>: their changes incorporated through
                     {peer.applied_lseq}{#if peer.waiting > 0}
                         — {peer.waiting} bundle{peer.waiting === 1 ? '' : 's'} waiting{/if}
                 </p>

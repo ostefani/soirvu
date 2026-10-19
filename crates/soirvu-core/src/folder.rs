@@ -36,7 +36,7 @@ impl Vault {
     /// Returns the open vault and the recovery key to show to the user once.
     pub fn create(dir: &Path, passphrase: &str, kdf: KdfParams) -> Result<(Vault, RecoveryKey)> {
         prepare_folder(dir)?;
-        match create_files(dir, passphrase, kdf) {
+        match create_files(dir, passphrase, kdf, None) {
             Ok(created) => Ok(created),
             Err(error) => {
                 // The folder was empty before, so everything in it is ours.
@@ -46,16 +46,59 @@ impl Vault {
         }
     }
 
+    /// Creates a new vault whose device identity is
+    /// ASSIGNED by the caller — the app, which keeps
+    /// the assignment in its own settings outside the
+    /// vault folder, so copying the folder does not
+    /// copy the identity.
+    pub fn create_with_device(
+        dir: &Path,
+        passphrase: &str,
+        kdf: KdfParams,
+        device_id: &str,
+    ) -> Result<(Vault, RecoveryKey)> {
+        prepare_folder(dir)?;
+        match create_files(dir, passphrase, kdf, Some(device_id)) {
+            Ok(created) => Ok(created),
+            Err(error) => {
+                remove_our_files(dir);
+                Err(error)
+            }
+        }
+    }
+
     pub fn open_with_passphrase(dir: &Path, passphrase: &str) -> Result<Vault> {
         let header = read_header(dir)?;
         let master = header.unlock_with_passphrase(passphrase)?;
-        finish_open(dir, header, master)
+        finish_open(dir, header, master, None)
+    }
+
+    /// Opens the vault AS the given device (the
+    /// caller-assigned identity; see `create_with_device`).
+    pub fn open_with_passphrase_as(
+        dir: &Path,
+        passphrase: &str,
+        device_id: &str,
+    ) -> Result<Vault> {
+        let header = read_header(dir)?;
+        let master = header.unlock_with_passphrase(passphrase)?;
+        finish_open(dir, header, master, Some(device_id))
     }
 
     pub fn open_with_recovery(dir: &Path, recovery: &RecoveryKey) -> Result<Vault> {
         let header = read_header(dir)?;
         let master = header.unlock_with_recovery(recovery)?;
-        finish_open(dir, header, master)
+        finish_open(dir, header, master, None)
+    }
+
+    pub fn open_with_recovery_as(
+        dir: &Path,
+        recovery: &RecoveryKey,
+        device_id: &str,
+    ) -> Result<Vault> {
+        let header = read_header(dir)?;
+        let master = header.unlock_with_recovery(recovery)?;
+        finish_open(dir, header, master, Some(device_id))
     }
 
     /// Opens the vault with the device secret (Phase 8). The
@@ -66,7 +109,17 @@ impl Vault {
     pub fn open_with_device(dir: &Path, secret: &DeviceSecret) -> Result<Vault> {
         let header = read_header(dir)?;
         let master = header.unlock_with_device(secret)?;
-        finish_open(dir, header, master)
+        finish_open(dir, header, master, None)
+    }
+
+    pub fn open_with_device_as(
+        dir: &Path,
+        secret: &DeviceSecret,
+        device_id: &str,
+    ) -> Result<Vault> {
+        let header = read_header(dir)?;
+        let master = header.unlock_with_device(secret)?;
+        finish_open(dir, header, master, Some(device_id))
     }
 
     /// Locks the vault: closes the database and wipes the keys from memory.
@@ -266,10 +319,21 @@ fn prepare_folder(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn create_files(dir: &Path, passphrase: &str, kdf: KdfParams) -> Result<(Vault, RecoveryKey)> {
+fn create_files(
+    dir: &Path,
+    passphrase: &str,
+    kdf: KdfParams,
+    device: Option<&str>,
+) -> Result<(Vault, RecoveryKey)> {
     let (header, recovery, master) = VaultHeader::create(passphrase, kdf)?;
     let mut db = Database::create(&dir.join(DB_FILE), &master.db_key(), &header.vault_id)?;
-    let device_id = db.ensure_device()?;
+    let device_id = match device {
+        Some(id) => {
+            check_device_id(id)?;
+            db.assign_device(id)?
+        }
+        None => db.ensure_device()?,
+    };
     // The header goes last. A folder only counts as a vault once this file
     // exists, so a crash half-way leaves no vault that looks usable.
     write_atomic(&dir.join(HEADER_FILE), &header.to_json()?)?;
@@ -300,13 +364,24 @@ fn read_header(dir: &Path) -> Result<VaultHeader> {
     VaultHeader::from_json(&bytes)
 }
 
-fn finish_open(dir: &Path, header: VaultHeader, master: MasterKey) -> Result<Vault> {
+fn finish_open(
+    dir: &Path,
+    header: VaultHeader,
+    master: MasterKey,
+    device: Option<&str>,
+) -> Result<Vault> {
     let mut db = Database::open(&dir.join(DB_FILE), &master.db_key(), &dir.join(BACKUPS_DIR))?;
     // Belt and braces: the database must say it belongs to this header.
     if db.meta("vault_id")?.as_deref() != Some(header.vault_id.as_str()) {
         return Err(Error::VaultMismatch);
     }
-    let device_id = db.ensure_device()?;
+    let device_id = match device {
+        Some(id) => {
+            check_device_id(id)?;
+            db.assign_device(id)?
+        }
+        None => db.ensure_device()?,
+    };
     Ok(Vault {
         dir: dir.to_path_buf(),
         header,
@@ -648,5 +723,22 @@ mod tests {
 
         let result = Vault::open_with_passphrase(&dir, PASSPHRASE);
         assert!(matches!(result, Err(Error::VaultMismatch)));
+    }
+}
+
+/// Mints a fresh device id (UUIDv7, canonical form).
+/// The caller keeps it — in the app's settings, not
+/// in the vault.
+pub fn new_device_id() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
+
+fn check_device_id(id: &str) -> Result<()> {
+    if crate::storage::is_canonical_uuid(id) {
+        Ok(())
+    } else {
+        Err(Error::InvalidInput(
+            "device id is not a canonical UUID".into(),
+        ))
     }
 }

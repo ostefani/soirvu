@@ -11,4 +11,4 @@ pub mod vault;
 pub mod verify;
 
 pub use error::{Error, Result};
-pub use folder::Vault;
+pub use folder::{Vault, new_device_id};
