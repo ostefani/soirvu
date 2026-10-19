@@ -699,7 +699,6 @@ impl Vault {
             .and_then(|v| serde_json::from_str(&v).ok())
             .unwrap_or_default();
         let mut warned_dirty = false;
-        let mut cursors_dirty = false;
         let mut files: Vec<(String, PathBuf)> = Vec::new();
         for (count, item) in fs::read_dir(sync_dir)?.enumerate() {
             if count >= MAX_SYNC_FILES {
@@ -874,7 +873,6 @@ impl Vault {
                     params![cursor_key, header.to_lseq.to_string()],
                 )?;
                 tx.commit()?;
-                cursors_dirty = true;
             }
         }
         if warned_dirty {
@@ -3106,7 +3104,7 @@ mod tests {
         // C is a consumer only: it publishes an ack
         // (by applying an empty folder) and never
         // emits, so no bundle names it as an author.
-        let (mut c, _recovery) = Vault::create(
+        let (c, _recovery) = Vault::create(
             dir_c.path(),
             PASSPHRASE,
             fast(),

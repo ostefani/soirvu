@@ -302,17 +302,6 @@ impl AppState {
         self.save_config(&inner)
     }
 
-    /// A registered vault's sync folder (a path: Rust only).
-    pub fn sync_dir(&self, vault_id: &str) -> Option<PathBuf> {
-        let inner = self.inner.lock().unwrap();
-        inner
-            .config
-            .vaults
-            .iter()
-            .find(|v| v.id == vault_id)
-            .and_then(|v| v.sync_dir.clone())
-    }
-
     /// The open vault's sync folder, if one is set.
     pub fn current_sync_dir(&self) -> Option<PathBuf> {
         let inner = self.inner.lock().unwrap();
@@ -820,18 +809,31 @@ mod tests {
 
     #[test]
     fn a_vaults_sync_folder_is_per_vault_and_survives_reload() {
+        // The read-back goes through the persisted
+        // registry: surviving the reload is the point.
+        fn stored_sync_dir(state: &AppState, id: &str) -> Option<PathBuf> {
+            state
+                .inner
+                .lock()
+                .unwrap()
+                .config
+                .vaults
+                .iter()
+                .find(|v| v.id == id)
+                .and_then(|v| v.sync_dir.clone())
+        }
         let (dir, state, id) = state_with_vault();
-        assert_eq!(state.sync_dir(&id), None);
+        assert_eq!(stored_sync_dir(&state, &id), None);
         assert_eq!(state.settings().sync_location, None);
         let sync = dir.path().join("sync-folder");
         state.set_sync_dir(&id, Some(sync.clone())).unwrap();
-        assert_eq!(state.sync_dir(&id), Some(sync));
-        assert_eq!(state.current_sync_dir(), state.sync_dir(&id));
+        assert_eq!(stored_sync_dir(&state, &id), Some(sync));
+        assert_eq!(state.current_sync_dir(), stored_sync_dir(&state, &id));
         assert_eq!(state.settings().sync_location.as_deref(), Some("sync-folder"));
         let reloaded = AppState::load(dir.path().join("config"));
-        assert_eq!(reloaded.sync_dir(&id), state.sync_dir(&id));
+        assert_eq!(stored_sync_dir(&reloaded, &id), stored_sync_dir(&state, &id));
         state.set_sync_dir(&id, None).unwrap();
-        assert_eq!(state.sync_dir(&id), None);
+        assert_eq!(stored_sync_dir(&state, &id), None);
         assert_eq!(state.settings().sync_location, None);
     }
 

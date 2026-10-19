@@ -53,6 +53,8 @@ npm run tauri dev
 
 # run leak test
 sh scripts/leak-test.sh <path-to-test_diar-folder>
+# run test
+INSTA_UPDATE=always cargo test -p soirvu --lib
 ```
 
 ## License
