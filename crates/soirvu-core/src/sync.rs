@@ -47,7 +47,8 @@
 //! Its changes are reported, not applied; the remedy is
 //! `Vault::restamp_device` on one of the copies.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
@@ -81,6 +82,12 @@ const ACK_FORMAT: u32 = 1;
 /// practice, a few KB with a hundred peers. Anything
 /// larger is not an ack; it is not read into memory.
 const ACK_MAX_BYTES: u64 = 65_536;
+/// Bounds work caused by a shared folder, which is untrusted input.
+const MAX_SYNC_FILES: usize = 20_000;
+const MAX_ACK_FILES: usize = 512;
+const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_APPLY_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_BLOB_BYTES: u64 = 1024 * 1024 * 1024;
 const ACK_DIR: &str = "acks";
 
 /// What one emit produced (or None when nothing changed).
@@ -270,28 +277,95 @@ fn header_of(bytes: &[u8]) -> Option<BundleHeader> {
     serde_json::from_slice(&bytes[..newline]).ok()
 }
 
+/// Reads only a bounded plaintext header so already-incorporated bundles
+/// can be skipped without charging them against this run's byte budget.
+fn read_bundle_header(path: &Path) -> Result<Option<BundleHeader>> {
+    let mut line = Vec::new();
+    BufReader::new(File::open(path)?)
+        .take(64 * 1024)
+        .read_until(b'\n', &mut line)?;
+    if !line.ends_with(b"\n") {
+        return Ok(None);
+    }
+    line.pop();
+    Ok(serde_json::from_slice(&line).ok())
+}
+
 /// Reads every ack file for this vault in the folder.
 /// Files that do not parse — a torn write from a peer, a
 /// stranger's file — are skipped: a missing ack only
 /// ever makes pruning more conservative.
-fn read_acks(sync_dir: &Path, vault_id: &str) -> Vec<SyncAck> {
+fn read_acks(sync_dir: &Path, vault_id: &str) -> Result<Vec<SyncAck>> {
     let mut out = Vec::new();
     let acks_dir = sync_dir.join(ACK_DIR);
-    if let Ok(items) = fs::read_dir(&acks_dir) {
-        for item in items.flatten() {
-            let path = item.path();
-            if path.extension().is_some_and(|e| e == "json")
-                && fs::metadata(&path).map(|m| m.len() <= ACK_MAX_BYTES).unwrap_or(false)
-                && let Ok(bytes) = fs::read(&path)
-                && let Ok(ack) = serde_json::from_slice::<SyncAck>(&bytes)
-                && ack.format == ACK_FORMAT
-                && ack.vault_id == vault_id
-            {
-                out.push(ack);
-            }
+    let items = match fs::read_dir(&acks_dir) {
+        Ok(items) => items,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(e.into()),
+    };
+    for (count, item) in items.enumerate() {
+        if count >= MAX_ACK_FILES {
+            return Err(Error::InvalidInput(
+                "sync folder contains too many ack files".into(),
+            ));
+        }
+        let item = item?;
+        let path = item.path();
+        if !path.extension().is_some_and(|e| e == "json") {
+            continue;
+        }
+        let bytes = match read_bounded(&path, ACK_MAX_BYTES) {
+            Ok(bytes) => bytes,
+            Err(Error::InvalidInput(_)) => continue,
+            Err(_) => continue,
+        };
+        let filename_device = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+        if let Ok(ack) = serde_json::from_slice::<SyncAck>(&bytes)
+            && ack.format == ACK_FORMAT
+            && ack.vault_id == vault_id
+            && ack.device_id == filename_device
+            && crate::storage::is_canonical_uuid(filename_device)
+        {
+            out.push(ack);
         }
     }
-    out
+    Ok(out)
+}
+
+/// Reads at most `limit + 1` bytes so a concurrent file growth cannot
+/// turn a metadata size check into an unbounded allocation.
+fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
+    let file = File::open(path)?;
+    let mut bytes = Vec::with_capacity(limit.min(1024 * 1024) as usize);
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(Error::InvalidInput("sync file exceeds size limit".into()));
+    }
+    Ok(bytes)
+}
+
+/// Copies a sync blob with a streaming byte limit and checks its advertised
+/// size before the caller commits the corresponding attachment row.
+fn copy_bounded_blob(source: &Path, dest: &Path, expected_size: i64) -> Result<()> {
+    if expected_size < 0 || expected_size as u64 > MAX_BLOB_BYTES {
+        return Err(Error::InvalidInput("attachment exceeds size limit".into()));
+    }
+    let input = File::open(source)?;
+    let mut output = File::create(dest)?;
+    let copied = std::io::copy(&mut input.take(MAX_BLOB_BYTES + 1), &mut output)?;
+    if copied > MAX_BLOB_BYTES || copied != expected_size as u64 {
+        drop(output);
+        let _ = fs::remove_file(dest);
+        return Err(Error::InvalidInput(
+            "attachment size does not match its sync record".into(),
+        ));
+    }
+    output.flush()?;
+    output.sync_all()?;
+    Ok(())
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -483,6 +557,11 @@ impl Vault {
         };
         let bundle = Bundle { entries, attachments };
         let json = serde_json::to_vec(&bundle)?;
+        if json.len() as u64 > MAX_BUNDLE_BYTES {
+            return Err(Error::InvalidInput(
+                "sync bundle exceeds the 64 MiB size limit".into(),
+            ));
+        }
         let key = self.sync_key();
         let cipher = XChaCha20Poly1305::new_from_slice(&key[..]).expect("sync key is 32 bytes");
         let nonce = random_bytes::<NONCE_LEN>()?;
@@ -620,7 +699,12 @@ impl Vault {
         let mut warned_dirty = false;
         let mut cursors_dirty = false;
         let mut files: Vec<(String, PathBuf)> = Vec::new();
-        for item in fs::read_dir(sync_dir)? {
+        for (count, item) in fs::read_dir(sync_dir)?.enumerate() {
+            if count >= MAX_SYNC_FILES {
+                return Err(Error::InvalidInput(
+                    "sync folder contains too many files".into(),
+                ));
+            }
             let item = item?;
             let name = item.file_name().to_string_lossy().into_owned();
             // The filename's vault prefix IS read: a bundle
@@ -639,14 +723,42 @@ impl Vault {
         let key = self.sync_key();
         let cipher = XChaCha20Poly1305::new_from_slice(&key[..]).expect("sync key is 32 bytes");
 
+        let mut bytes_read = 0u64;
         for (name, path) in files {
-            let bytes = match fs::read(&path) {
+            if let Ok(Some(header)) = read_bundle_header(&path)
+                && header.vault_id == my_vault
+                && header.device_id != self.device_id
+                && header.to_lseq
+                    <= self
+                        .db
+                        .meta(&format!("{APPLIED_PREFIX}{}", header.device_id))?
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0)
+            {
+                continue;
+            }
+            let bytes = match read_bounded(&path, MAX_BUNDLE_BYTES) {
                 Ok(bytes) => bytes,
+                Err(Error::InvalidInput(_)) => {
+                    report.problems.push(format!(
+                        "bundle {name}: exceeds the {} MiB size limit",
+                        MAX_BUNDLE_BYTES / (1024 * 1024)
+                    ));
+                    continue;
+                }
                 Err(_) => {
                     report.problems.push(format!("bundle {name}: cannot read"));
                     continue;
                 }
             };
+            if bytes_read + bytes.len() as u64 > MAX_APPLY_BYTES {
+                report.problems.push(format!(
+                    "sync folder exceeds the {} MiB apply limit; remaining bundles were left for the next run",
+                    MAX_APPLY_BYTES / (1024 * 1024)
+                ));
+                break;
+            }
+            bytes_read += bytes.len() as u64;
             // The plaintext header line decides whose bundle
             // this is — exactly, by full ids. open_bundle
             // re-verifies the same values as AAD below, so
@@ -1180,9 +1292,13 @@ impl Vault {
         }
         let my_vault = self.header().vault_id.clone();
         let my_vault_short = short(&my_vault).to_string();
-        let acks = read_acks(sync_dir, &my_vault);
+        let acks = read_acks(sync_dir, &my_vault)?;
+        let ack_by_device: std::collections::BTreeMap<String, SyncAck> = acks
+            .into_iter()
+            .map(|ack| (ack.device_id.clone(), ack))
+            .collect();
         let mut peers: std::collections::BTreeSet<String> =
-            acks.iter().map(|a| a.device_id.clone()).collect();
+            ack_by_device.keys().cloned().collect();
         // An ack FILE that cannot be read — torn,
         // oversized, junk — still proves a peer: its
         // name is the device id. It counts below with
@@ -1191,18 +1307,33 @@ impl Vault {
         // consumed. A peer set built only from parsed
         // acks would lose exactly the devices whose
         // acks are damaged.
-        if let Ok(items) = fs::read_dir(sync_dir.join(ACK_DIR)) {
-            for item in items.flatten() {
-                let name = item.file_name().to_string_lossy().into_owned();
-                if let Some(stem) = name.strip_suffix(".json") {
-                    if crate::storage::is_canonical_uuid(stem) {
-                        peers.insert(stem.to_string());
+        match fs::read_dir(sync_dir.join(ACK_DIR)) {
+            Ok(items) => {
+                for (count, item) in items.enumerate() {
+                    if count >= MAX_ACK_FILES {
+                        return Err(Error::InvalidInput(
+                            "sync folder contains too many ack files".into(),
+                        ));
+                    }
+                    let item = item?;
+                    let name = item.file_name().to_string_lossy().into_owned();
+                    if let Some(stem) = name.strip_suffix(".json") {
+                        if crate::storage::is_canonical_uuid(stem) {
+                            peers.insert(stem.to_string());
+                        }
                     }
                 }
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
         }
         let mut mine: Vec<(PathBuf, i64)> = Vec::new();
-        for item in fs::read_dir(sync_dir)? {
+        for (count, item) in fs::read_dir(sync_dir)?.enumerate() {
+            if count >= MAX_SYNC_FILES {
+                return Err(Error::InvalidInput(
+                    "sync folder contains too many files".into(),
+                ));
+            }
             let item = item?;
             let name = item.file_name().to_string_lossy().into_owned();
             if let Some((prefix, device, _from, to)) = parse_bundle_name_full(&name) {
@@ -1211,7 +1342,7 @@ impl Vault {
                 }
                 if device == self.device_id || device == short(&self.device_id) {
                     mine.push((item.path(), to));
-                } else if device.len() == 36 {
+                } else if crate::storage::is_canonical_uuid(&device) {
                     peers.insert(device);
                 }
             }
@@ -1223,8 +1354,8 @@ impl Vault {
         let covered = peers
             .iter()
             .map(|peer| {
-                acks.iter()
-                    .find(|a| &a.device_id == peer)
+                ack_by_device
+                    .get(peer)
                     .and_then(|a| a.applied.get(&self.device_id).copied())
                     .unwrap_or(0)
             })
@@ -1241,7 +1372,12 @@ impl Vault {
         }
         let blobs_dir = sync_dir.join("blobs");
         if blobs_dir.is_dir() {
-            for item in fs::read_dir(&blobs_dir)? {
+            for (count, item) in fs::read_dir(&blobs_dir)?.enumerate() {
+                if count >= MAX_SYNC_FILES {
+                    return Err(Error::InvalidInput(
+                        "sync folder contains too many blob files".into(),
+                    ));
+                }
                 let item = item?;
                 let path = item.path();
                 if !path.is_file() {
@@ -1519,7 +1655,17 @@ impl Vault {
                     fs::create_dir_all(parent)?;
                 }
                 let tmp = dest.with_extension("sync-tmp");
-                fs::copy(&src, &tmp)?;
+                match copy_bounded_blob(&src, &tmp, record.size) {
+                    Ok(()) => {}
+                    Err(Error::InvalidInput(_)) => {
+                        report.problems.push(format!(
+                            "attachment {}: blob size is invalid or exceeds the limit",
+                            record.id
+                        ));
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error),
+                }
                 rename_retry(&tmp, &dest)?;
                 {
                     let tx = self.db.conn_mut().transaction()?;
@@ -1530,10 +1676,7 @@ impl Vault {
                 // Authenticate what arrived: the plaintext
                 // hash must match the record (the same check
                 // JSON import makes, §8).
-                let verified = self
-                    .read_attachment(&record.id)
-                    .map(|bytes| hex(&Sha256::digest(&bytes)) == record.sha256)
-                    .unwrap_or(false);
+                let verified = self.verify_attachment_integrity(&record.id).is_ok();
                 if verified {
                     report.attachments_applied += 1;
                 } else {

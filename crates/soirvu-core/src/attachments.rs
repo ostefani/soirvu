@@ -239,6 +239,23 @@ impl Vault {
         Ok(out)
     }
 
+    /// Verifies a blob without retaining its plaintext in memory. Sync uses
+    /// this for files that can be large but are already stored on disk.
+    pub(crate) fn verify_attachment_integrity(&self, id: &str) -> Result<()> {
+        let (_, att) = load_attachment(self.db.connection(), id)?;
+        let root = self.attachment_key();
+        let (mut blob, prefix) = open_blob(self.dir(), &att)?;
+        let mut hasher = Sha256::new();
+        for counter in 0..chunk_count(att.size as u64) {
+            let plain = read_chunk(&mut blob, &att, &root, &prefix, counter)?;
+            hasher.update(&plain);
+        }
+        if HEXLOWER.encode(&hasher.finalize()) != att.sha256 {
+            return Err(corrupt(&att.id, "content does not match its row"));
+        }
+        Ok(())
+    }
+
     /// The plaintext bytes in `range` (clamped to the attachment), decrypting
     /// only the chunks the range touches. This is what the `soirvu-asset://`
     /// protocol (§6.4) answers HTTP Range requests with. Each touched chunk

@@ -155,7 +155,7 @@ async fn confirm_open_copy(app: &AppHandle, name: &str) -> bool {
     let (tx, rx) = oneshot::channel();
     app.dialog()
         .message(format!(
-            "This folder is a copy of \"{name}\"\n\nOpen the copy? Soirvu will use this folder for \"{name}\" from now on. The other folder is left untouched."
+            "This folder is a copy of \"{name}\"\n\nOpen the copy? Soirvu will use this folder for \"{name}\" from now on and assign it a new sync identity. The other folder is left untouched."
         ))
         .title("Soirvu")
         .kind(MessageDialogKind::Info)
@@ -249,6 +249,7 @@ pub async fn vault_pick_folder(
             // at another folder that still exists, this is a copy
             // (a restored backup, most often): never repoint
             // silently — ask first, natively.
+            let mut opening_copy = false;
             if let Ok(old_path) = state.vault_path(&vault_id) {
                 if old_path != path && old_path.join("vault.header.json").exists() {
                     let name = state
@@ -260,13 +261,28 @@ pub async fn vault_pick_folder(
                     if !confirm_open_copy(&app, &name).await {
                         return Ok(None);
                     }
+                    opening_copy = true;
                 }
             }
             let name = folder_name(&path);
             let warning = crate::platform::fs_warning(&path).map(str::to_string);
-            state
-                .register(vault_id.clone(), name.clone(), path)
-                .map_err(|e| e.to_ipc())?;
+            if opening_copy {
+                // The selected folder is a second copy of the same
+                // encrypted vault. Keep its vault id, but stop it
+                // sharing the original copy's sync stream identity.
+                state
+                    .register_with_device(
+                        vault_id.clone(),
+                        name.clone(),
+                        path,
+                        Some(soirvu_core::new_device_id()),
+                    )
+                    .map_err(|e| e.to_ipc())?;
+            } else {
+                state
+                    .register(vault_id.clone(), name.clone(), path)
+                    .map_err(|e| e.to_ipc())?;
+            }
             Ok(Some(Picked {
                 vault_id: Some(vault_id),
                 name,
@@ -330,8 +346,12 @@ pub async fn vault_create(
         Err(_) => return Err("internal".into()),
     };
     let vault_id = vault.header().vault_id.clone();
-    ipc(state.register(vault_id.clone(), name, path))?;
-    ipc(state.set_device_id(&vault_id, device_id))?;
+    ipc(state.register_with_device(
+        vault_id.clone(),
+        name,
+        path,
+        Some(device_id),
+    ))?;
     state.adopt_created(vault, &vault_id);
     let created = Created {
         vault_id,
@@ -698,9 +718,10 @@ pub fn vault_fork_import(
         let mut vault = Vault::open_with_passphrase(&dest, &passphrase)?;
         let recovery = vault.fork_identity(&passphrase)?;
         let new_id = vault.header().vault_id.clone();
+        let device_id = vault.device_id().to_string();
         drop(vault);
         state.clear_pending_fork();
-        state.register(new_id.clone(), folder_name(&dest), dest)?;
+        state.register_with_device(new_id.clone(), folder_name(&dest), dest, Some(device_id))?;
         Ok(Forked {
             vault_id: new_id,
             recovery_key: recovery.to_text(),

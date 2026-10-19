@@ -217,7 +217,20 @@ impl AppState {
             fs::create_dir_all(parent)?;
         }
         let text = serde_json::to_string_pretty(&inner.config)?;
-        fs::write(&self.config_file, text)?;
+        let tmp = self.config_file.with_extension(format!(
+            "json.tmp.{}",
+            std::process::id()
+        ));
+        let mut file = fs::File::create(&tmp)?;
+        use std::io::Write;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&tmp, &self.config_file)?;
+        #[cfg(unix)]
+        if let Some(parent) = self.config_file.parent() {
+            fs::File::open(parent)?.sync_all()?;
+        }
         Ok(())
     }
 
@@ -355,6 +368,7 @@ impl AppState {
     /// restamp still converges at the next open).
     pub fn set_device_id(&self, vault_id: &str, device_id: String) -> AppResult<()> {
         let mut inner = self.inner.lock().unwrap();
+        let previous = inner.config.clone();
         let entry = inner
             .config
             .vaults
@@ -362,7 +376,11 @@ impl AppState {
             .find(|v| v.id == vault_id)
             .ok_or_else(|| AppError::Code("vault_not_found".into()))?;
         entry.device_id = Some(device_id);
-        self.save_config(&inner)
+        if let Err(error) = self.save_config(&inner) {
+            inner.config = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// The vault list for the UI, with a state per vault.
@@ -389,17 +407,59 @@ impl AppState {
     /// Registers a vault folder (after its header was read, or right
     /// after creation). Returns the registry entry.
     pub fn register(&self, id: String, name: String, path: PathBuf) -> AppResult<VaultRef> {
+        self.register_with_device(id, name, path, None)
+    }
+
+    /// Registers a vault with the identity already assigned by its
+    /// creation or copy-opening operation. Existing entries keep their
+    /// assignment when `device_id` is absent (ordinary relocation).
+    pub fn register_with_device(
+        &self,
+        id: String,
+        name: String,
+        path: PathBuf,
+        device_id: Option<String>,
+    ) -> AppResult<VaultRef> {
         let mut inner = self.inner.lock().unwrap();
+        if inner.current.as_deref() == Some(id.as_str())
+            && inner.vault.is_some()
+            && inner
+                .config
+                .vaults
+                .iter()
+                .find(|v| v.id == id)
+                .is_some_and(|entry| entry.path != path)
+        {
+            return Err(AppError::Other(
+                "lock the vault before changing its folder".into(),
+            ));
+        }
+        let previous = inner.config.clone();
         if let Some(existing) = inner.config.vaults.iter_mut().find(|v| v.id == id) {
             existing.path = path;
             existing.name = name;
+            if let Some(device_id) = device_id {
+                existing.device_id = Some(device_id);
+            }
             let entry = existing.clone();
-            self.save_config(&inner)?;
+            if let Err(error) = self.save_config(&inner) {
+                inner.config = previous;
+                return Err(error);
+            }
             return Ok(entry);
         }
-        let entry = VaultRef { id, name, path, sync_dir: None, device_id: Some(soirvu_core::new_device_id()) };
+        let entry = VaultRef {
+            id,
+            name,
+            path,
+            sync_dir: None,
+            device_id: Some(device_id.unwrap_or_else(soirvu_core::new_device_id)),
+        };
         inner.config.vaults.push(entry.clone());
-        self.save_config(&inner)?;
+        if let Err(error) = self.save_config(&inner) {
+            inner.config = previous;
+            return Err(error);
+        }
         Ok(entry)
     }
 
