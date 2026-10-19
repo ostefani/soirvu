@@ -304,14 +304,19 @@ pub async fn vault_create(
         }
     };
     let name = folder_name(&path);
+    // The device identity is assigned at birth: minted
+    // here, kept in the registry (below), and handed
+    // to the core — it never lives in the vault folder.
+    let device_id = soirvu_core::new_device_id();
     // Calibration plus creation is seconds of CPU (Argon2id): keep
     // it off the async runtime's threads.
     let task_path = path.clone();
+    let task_device = device_id.clone();
     let mut task_passphrase = passphrase.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let result = (|| {
             let kdf = KdfParams::calibrate(Duration::from_millis(750))?;
-            let pair = Vault::create(&task_path, &task_passphrase, kdf)?;
+            let pair = Vault::create_with_device(&task_path, &task_passphrase, kdf, &task_device)?;
             Ok::<_, AppError>(pair)
         })();
         task_passphrase.zeroize();
@@ -326,6 +331,7 @@ pub async fn vault_create(
     };
     let vault_id = vault.header().vault_id.clone();
     ipc(state.register(vault_id.clone(), name, path))?;
+    ipc(state.set_device_id(&vault_id, device_id))?;
     state.adopt_created(vault, &vault_id);
     let created = Created {
         vault_id,
@@ -359,14 +365,22 @@ pub async fn vault_unlock(
         secret.zeroize();
         return Err(e.to_ipc());
     }
+    let device_id = match state.device_id_for(&vault_id) {
+        Ok(id) => id,
+        Err(e) => {
+            secret.zeroize();
+            return Err(e.to_ipc());
+        }
+    };
     // Opening runs Argon2id (~750 ms): keep it off the async
     // runtime's threads.
     let mut task_secret = secret.clone();
+    let task_device = device_id.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let opened = match kind.as_str() {
-            "passphrase" => Vault::open_with_passphrase(&path, &task_secret),
+            "passphrase" => Vault::open_with_passphrase_as(&path, &task_secret, &task_device),
             _ => RecoveryKey::from_text(&task_secret)
-                .and_then(|key| Vault::open_with_recovery(&path, &key)),
+                .and_then(|key| Vault::open_with_recovery_as(&path, &key, &task_device)),
         };
         task_secret.zeroize();
         opened
@@ -557,10 +571,14 @@ pub async fn vault_unlock_touch_id(
     if let Err(e) = state.begin_unlock(&vault_id) {
         return Err(e.to_ipc());
     }
+    let device_id = match state.device_id_for(&vault_id) {
+        Ok(id) => id,
+        Err(e) => return Err(e.to_ipc()),
+    };
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let bytes = crate::keychain::read(&vault_id).map_err(TouchUnlockError::Keychain)?;
         let secret = DeviceSecret::from_bytes(&bytes).map_err(TouchUnlockError::Core)?;
-        Vault::open_with_device(&path, &secret).map_err(TouchUnlockError::Core)
+        Vault::open_with_device_as(&path, &secret, &device_id).map_err(TouchUnlockError::Core)
     })
     .await;
     match joined {

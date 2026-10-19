@@ -48,6 +48,13 @@ pub struct VaultRef {
     /// only its display name (Settings::sync_location).
     #[serde(default)]
     pub sync_dir: Option<PathBuf>,
+    /// The device identity assigned to this vault
+    /// (Phase 10b step 3): minted here, in the app's
+    /// own settings, and handed to the core at open —
+    /// a copied vault folder arrives with no entry in
+    /// this app's registry and gets a fresh identity.
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -319,6 +326,51 @@ impl AppState {
         self.save_config(&inner)
     }
 
+    /// The device identity assigned to a vault,
+    /// minting and persisting one on first use. A
+    /// vault whose entry has none — registered before
+    /// step 3, or a folder copied from another
+    /// machine and registered here — gets a fresh
+    /// identity at this moment, which is the point:
+    /// the identity lives in THIS app's settings, not
+    /// in the folder that was copied.
+    pub fn device_id_for(&self, vault_id: &str) -> AppResult<String> {
+        let mut inner = self.inner.lock().unwrap();
+        let existing = inner
+            .config
+            .vaults
+            .iter()
+            .find(|v| v.id == vault_id)
+            .ok_or_else(|| AppError::Code("vault_not_found".into()))?
+            .device_id
+            .clone();
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+        let id = soirvu_core::new_device_id();
+        if let Some(entry) = inner.config.vaults.iter_mut().find(|v| v.id == vault_id) {
+            entry.device_id = Some(id.clone());
+        }
+        self.save_config(&inner)?;
+        Ok(id)
+    }
+
+    /// Replaces a vault's assigned identity (restamp:
+    /// the caller persists the new id here BEFORE the
+    /// live vault switches to it, so an interrupted
+    /// restamp still converges at the next open).
+    pub fn set_device_id(&self, vault_id: &str, device_id: String) -> AppResult<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let entry = inner
+            .config
+            .vaults
+            .iter_mut()
+            .find(|v| v.id == vault_id)
+            .ok_or_else(|| AppError::Code("vault_not_found".into()))?;
+        entry.device_id = Some(device_id);
+        self.save_config(&inner)
+    }
+
     /// The vault list for the UI, with a state per vault.
     pub fn vault_list(&self) -> Vec<VaultInfo> {
         let inner = self.inner.lock().unwrap();
@@ -351,7 +403,7 @@ impl AppState {
             self.save_config(&inner)?;
             return Ok(entry);
         }
-        let entry = VaultRef { id, name, path, sync_dir: None };
+        let entry = VaultRef { id, name, path, sync_dir: None, device_id: None };
         inner.config.vaults.push(entry.clone());
         self.save_config(&inner)?;
         Ok(entry)

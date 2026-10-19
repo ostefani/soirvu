@@ -331,7 +331,16 @@ pub fn sync_prune(state: State<'_, AppState>) -> Result<SyncPruneDto, String> {
 /// which keeps publishing under the old id.
 #[tauri::command(async)]
 pub fn restamp_device(state: State<'_, AppState>) -> Result<String, String> {
-    ipc(state.with_vault(|vault| Ok(vault.restamp_device()?)))
+    // The new identity is persisted in the registry
+    // FIRST, then the live vault switches to it: if
+    // the switch were interrupted, the next open
+    // assigns the persisted id and writes its device
+    // row then — the two cannot drift apart.
+    let vault_id = state.current_id().ok_or("locked")?;
+    let new_id = soirvu_core::new_device_id();
+    ipc(state.set_device_id(&vault_id, new_id.clone()))?;
+    ipc(state.with_vault(|vault| Ok(vault.restamp_device_to(&new_id)?)))?;
+    Ok(new_id)
 }
 
 #[cfg(test)]
