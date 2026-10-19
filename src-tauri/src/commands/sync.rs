@@ -333,3 +333,43 @@ pub fn sync_prune(state: State<'_, AppState>) -> Result<SyncPruneDto, String> {
 pub fn restamp_device(state: State<'_, AppState>) -> Result<String, String> {
     ipc(state.with_vault(|vault| Ok(vault.restamp_device()?)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soirvu_core::sync::SyncPeerCursor;
+
+    fn overview_with_peer(applied: i64, seen: i64) -> SyncOverview {
+        SyncOverview {
+            device_id: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa".to_string(),
+            emitted_lseq: 0,
+            peers: vec![SyncPeerCursor {
+                device_id: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb".to_string(),
+                applied_lseq: applied,
+                seen_emitted: seen,
+            }],
+            ack_ahead_seen: false,
+        }
+    }
+
+    #[test]
+    fn needs_reemit_until_a_covering_bundle_is_in_the_folder() {
+        let vault_id = "0123456789abcdef0123456789abcdef";
+        // Evidence past the cursor, nothing in the
+        // folder: the peer is owed a re-emit.
+        let dto = assemble_overview(&overview_with_peer(5, 10), None, vault_id);
+        assert_eq!(dto.peers[0].emitted_lseq, Some(10));
+        assert!(dto.peers[0].needs_reemit);
+        // A bundle covering the gap (6..10) sits in the
+        // folder: the peer is only behind the courier.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path()
+                .join("01234567-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb-00000006-00000010.sync"),
+            b"",
+        )
+        .unwrap();
+        let dto = assemble_overview(&overview_with_peer(5, 10), Some(dir.path()), vault_id);
+        assert!(!dto.peers[0].needs_reemit);
+    }
+}

@@ -700,14 +700,14 @@
                     copy is the one to restamp. Once the missing entries are back, dismiss this note.
                     <button class="quiet" onclick={dismissAckAhead} disabled={syncBusy}>Dismiss</button>
                 </p>
-                {#each syncInfo.peers as peer}
-                    {#if peer.needs_reemit}
-                        <p class="note">
-                            Device <code>{peer.device_id.slice(0, 8)}…</code> needs to re-emit everything, or its earlier bundles are still on their way.
-                        </p>
-                    {/if}
-                {/each}
             {/if}
+            {#each syncInfo.peers as peer}
+                {#if peer.needs_reemit}
+                    <p class="note">
+                        Device <code>{peer.device_id.slice(0, 8)}…</code> needs to re-emit everything, or its earlier bundles are still on their way.
+                    </p>
+                {/if}
+            {/each}
             <p class="note">This device: <code>{syncInfo.device_id}</code></p>
             {#each syncInfo.peers as peer}
                 <p class="note">
