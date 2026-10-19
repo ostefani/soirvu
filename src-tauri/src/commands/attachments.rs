@@ -112,7 +112,7 @@ pub fn attachment_chunk(
     ipc(state.push_chunk(&upload_id, &bytes))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn attachment_finish(
     state: State<'_, AppState>,
     upload_id: String,
@@ -153,7 +153,7 @@ fn finish_upload(
 // ---------------------------------------------------------------------------
 // Info, import, save a copy
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn attachment_info(
     state: State<'_, AppState>,
     id: String,
@@ -274,7 +274,7 @@ pub fn write_copy(state: &AppState, id: &str, path: &std::path::Path) -> Result<
 /// bytes are written to the app-managed opened folder (wiped on
 /// lock) under the file's own name, and the OS takes it from
 /// there. The webview never sees the path.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn attachment_open(state: State<'_, AppState>, id: String) -> Result<bool, String> {
     let path = ipc(materialize_open_copy(&state, &id))?;
     Ok(crate::platform::open_external(&path.to_string_lossy()).is_ok())

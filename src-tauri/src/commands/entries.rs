@@ -108,7 +108,7 @@ pub struct SaveDraft {
 }
 
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn entry_list(
     state: State<'_, AppState>,
     cursor: Option<String>,
@@ -132,7 +132,7 @@ pub fn entry_list(
 }
 
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn entry_get(state: State<'_, AppState>, id: String) -> Result<EntryDto, String> {
     ipc(state.with_vault(|vault| {
         let entry = vault.get_entry(&id)?;
@@ -141,7 +141,7 @@ pub fn entry_get(state: State<'_, AppState>, id: String) -> Result<EntryDto, Str
 }
 
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn entry_save(state: State<'_, AppState>, draft: SaveDraft) -> Result<EntryDto, String> {
     ipc(state.with_vault(|vault| {
         let core_draft = EntryDraft {
@@ -161,7 +161,7 @@ pub fn entry_save(state: State<'_, AppState>, draft: SaveDraft) -> Result<EntryD
 }
 
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn entry_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
     ipc(state.with_vault(|vault| {
         vault.delete_entry(&id)?;
@@ -192,7 +192,7 @@ impl From<&SearchHit> for HitDto {
 }
 
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn search(state: State<'_, AppState>, query: String) -> Result<Vec<HitDto>, String> {
     ipc(state.with_vault(|vault| {
         let hits = vault.search(&query, 50)?;
@@ -233,7 +233,7 @@ impl From<&soirvu_core::entries::DayCount> for CalendarDay {
 }
 
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn on_this_day(
     state: State<'_, AppState>,
     date: String,
@@ -244,7 +244,7 @@ pub fn on_this_day(
     }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn calendar_days(
     state: State<'_, AppState>,
     from: String,
@@ -257,7 +257,7 @@ pub fn calendar_days(
 }
 
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn tag_list(state: State<'_, AppState>) -> Result<Vec<TagDto>, String> {
     ipc(state.with_vault(|vault| {
         let tags = vault.list_tags()?;
@@ -269,7 +269,7 @@ pub fn tag_list(state: State<'_, AppState>) -> Result<Vec<TagDto>, String> {
 /// (for a merge: the entries that had `from`). That is the core's
 /// count, not the size of the target tag afterwards.
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn tag_rename(state: State<'_, AppState>, from: String, to: String) -> Result<i64, String> {
     ipc(state.with_vault(|vault| {
         let count = vault.rename_tag(&from, &to)?;
@@ -279,7 +279,7 @@ pub fn tag_rename(state: State<'_, AppState>, from: String, to: String) -> Resul
 }
 
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn tag_merge(state: State<'_, AppState>, from: String, into: String) -> Result<i64, String> {
     ipc(state.with_vault(|vault| {
         let count = vault.merge_tags(&from, &into)?;
@@ -287,7 +287,7 @@ pub fn tag_merge(state: State<'_, AppState>, from: String, into: String) -> Resu
     }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn tag_delete(state: State<'_, AppState>, name: String) -> Result<i64, String> {
     ipc(state.with_vault(|vault| {
         let count = vault.delete_tag(&name)?;

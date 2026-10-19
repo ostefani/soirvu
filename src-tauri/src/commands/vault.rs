@@ -439,7 +439,7 @@ pub async fn vault_unlock(
 }
 
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn vault_lock(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     state.lock();
     super::emit_status(&app, &state);
@@ -452,7 +452,7 @@ pub fn vault_lock(app: AppHandle, state: State<'_, AppState>) -> Result<(), Stri
 }
 
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn vault_forget(state: State<'_, AppState>, vault_id: String) -> Result<(), String> {
     ipc(state.forget(&vault_id))
 }
@@ -666,7 +666,7 @@ pub async fn vault_unlock_touch_id(
 /// goes into the keychain. If the keychain store fails, the
 /// header slot is removed again — a slot without its secret
 /// would only pretend to work.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn touch_id_enroll(state: State<'_, AppState>) -> Result<(), String> {
     ipc(state.with_vault(|vault| {
         if !crate::keychain::capable() {
@@ -684,7 +684,7 @@ pub fn touch_id_enroll(state: State<'_, AppState>) -> Result<(), String> {
 
 /// Removes the open vault's Touch ID enrollment: the header
 /// slot goes, and the keychain item with it.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn touch_id_disable(state: State<'_, AppState>) -> Result<(), String> {
     ipc(state.with_vault(|vault| {
         let vault_id = vault.header().vault_id.clone();
@@ -706,7 +706,7 @@ pub struct Forked {
 /// forks its identity in the core, and registers it under the
 /// new id, next to the original. A wrong passphrase changes
 /// nothing; the pending copy stays pending.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn vault_fork_import(
     state: State<'_, AppState>,
     mut passphrase: String,
@@ -734,7 +734,7 @@ pub fn vault_fork_import(
 /// Changes the open vault's passphrase (§13 Phase 6). The
 /// core verifies the current one; the KDF for the new slot is
 /// calibrated like at creation.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn vault_change_passphrase(
     state: State<'_, AppState>,
     current_passphrase: String,
@@ -754,7 +754,7 @@ pub fn vault_change_passphrase(
 
 /// Replaces the open vault's recovery key with a fresh one;
 /// returns its text — the UI shows it exactly once.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn vault_regenerate_recovery(
     state: State<'_, AppState>,
     current_passphrase: String,
