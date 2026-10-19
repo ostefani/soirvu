@@ -9,10 +9,10 @@
 //!   soirvu-cli header-info <vault-dir>
 //!   soirvu-cli verify <vault-dir> [--recovery <key>]
 //!   soirvu-cli export <vault-dir> <out-dir> [--recovery <key>]
-//!   soirvu-cli sync-emit <vault-dir> <sync-dir> [--recovery <key>]
-//!   soirvu-cli sync-apply <vault-dir> <sync-dir> [--recovery <key>]
-//!   soirvu-cli sync-prune <vault-dir> <sync-dir> [--recovery <key>]
-//!   soirvu-cli sync-reemit <vault-dir> <sync-dir> [--recovery <key>]
+//!   soirvu-cli sync-emit <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
+//!   soirvu-cli sync-apply <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
+//!   soirvu-cli sync-prune <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
+//!   soirvu-cli sync-reemit <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
 //!   soirvu-cli sync-dismiss-ack-ahead <vault-dir> [--recovery <key>]
 //!   soirvu-cli restamp-device <vault-dir> [--recovery <key>]
 //!
@@ -66,10 +66,10 @@ soirvu-cli — create, check and export a Soirvu vault without the app
   soirvu-cli header-info <vault-dir>
   soirvu-cli verify <vault-dir> [--recovery <key>]
   soirvu-cli export <vault-dir> <out-dir> [--recovery <key>]
-  soirvu-cli sync-emit <vault-dir> <sync-dir> [--recovery <key>]
-  soirvu-cli sync-apply <vault-dir> <sync-dir> [--recovery <key>]
-  soirvu-cli sync-prune <vault-dir> <sync-dir> [--recovery <key>]
-  soirvu-cli sync-reemit <vault-dir> <sync-dir> [--recovery <key>]
+  soirvu-cli sync-emit <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
+  soirvu-cli sync-apply <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
+  soirvu-cli sync-prune <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
+  soirvu-cli sync-reemit <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
   soirvu-cli sync-dismiss-ack-ahead <vault-dir> [--recovery <key>]
   soirvu-cli restamp-device <vault-dir> [--recovery <key>]
 
@@ -97,39 +97,39 @@ fn run(args: &[String]) -> Result<(), RunError> {
             export(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
         }
         "sync-emit" if rest.len() >= 2 => {
-            let (dirs, recovery) = open_args(rest)?;
+            let (dirs, recovery, device) = sync_args(rest)?;
             if dirs.len() != 2 {
                 return Err(RunError::Usage);
             }
-            sync_emit(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
+            sync_emit(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery, device)
         }
         "sync-reemit" if rest.len() >= 2 => {
-            let (dirs, recovery) = open_args(rest)?;
+            let (dirs, recovery, device) = sync_args(rest)?;
             if dirs.len() != 2 {
                 return Err(RunError::Usage);
             }
-            sync_reemit(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
+            sync_reemit(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery, device)
         }
         "sync-dismiss-ack-ahead" if !rest.is_empty() => {
-            let (dirs, recovery) = open_args(rest)?;
+            let (dirs, recovery, device) = sync_args(rest)?;
             if dirs.len() != 1 {
                 return Err(RunError::Usage);
             }
-            sync_dismiss_ack_ahead(Path::new(&dirs[0]), recovery)
+            sync_dismiss_ack_ahead(Path::new(&dirs[0]), recovery, device)
         }
         "sync-apply" if rest.len() >= 2 => {
-            let (dirs, recovery) = open_args(rest)?;
+            let (dirs, recovery, device) = sync_args(rest)?;
             if dirs.len() != 2 {
                 return Err(RunError::Usage);
             }
-            sync_apply(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
+            sync_apply(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery, device)
         }
         "sync-prune" if rest.len() >= 2 => {
-            let (dirs, recovery) = open_args(rest)?;
+            let (dirs, recovery, device) = sync_args(rest)?;
             if dirs.len() != 2 {
                 return Err(RunError::Usage);
             }
-            sync_prune(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
+            sync_prune(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery, device)
         }
         "restamp-device" if !rest.is_empty() => {
             let (dirs, recovery) = open_args(rest)?;
@@ -204,6 +204,62 @@ fn open(dir: &Path, recovery: Option<&str>) -> Result<Vault, RunError> {
     }
 }
 
+/// Splits the sync verbs' arguments: the paths, plus
+/// the trailing `--recovery <key>` and `--device
+/// <uuid>` flags in either order.
+fn sync_args(args: &[String]) -> Result<(&[String], Option<&str>, Option<&str>), RunError> {
+    let mut rest = args;
+    let mut recovery = None;
+    let mut device = None;
+    while rest.len() >= 2 {
+        let value = rest[rest.len() - 1].as_str();
+        match rest[rest.len() - 2].as_str() {
+            "--recovery" if recovery.is_none() => recovery = Some(value),
+            "--device" if device.is_none() => device = Some(value),
+            _ => break,
+        }
+        rest = &rest[..rest.len() - 2];
+    }
+    if rest.iter().any(|a| a == "--recovery" || a == "--device") {
+        return Err(RunError::Usage);
+    }
+    Ok((rest, recovery, device))
+}
+
+/// Opens a vault for a sync verb. Without `--device`
+/// the vault syncs under the id STORED in it — the
+/// CLI has no app settings to take an assignment
+/// from, so the stored id is its identity, and the
+/// note says so out loud: a copied vault used only
+/// through the CLI shares the original's identity
+/// until it is restamped or driven with `--device`.
+fn open_sync(
+    dir: &Path,
+    recovery: Option<&str>,
+    device: Option<&str>,
+) -> Result<Vault, RunError> {
+    let vault = match (recovery, device) {
+        (Some(text), Some(id)) => {
+            let key = RecoveryKey::from_text(text).map_err(failed)?;
+            Vault::open_with_recovery_as(dir, &key, id).map_err(failed)?
+        }
+        (None, Some(id)) => {
+            let passphrase = read_passphrase("Passphrase: ")?;
+            Vault::open_with_passphrase_as(dir, &passphrase, id).map_err(failed)?
+        }
+        _ => open(dir, recovery)?,
+    };
+    if device.is_none() {
+        eprintln!(
+            "note: syncing as the device id stored in the vault ({}) — \
+             a copy of this vault shares it; pass --device <uuid> for \
+             another identity, or restamp-device on the copy",
+            vault.device_id()
+        );
+    }
+    Ok(vault)
+}
+
 fn verify(dir: &Path, recovery: Option<&str>) -> Result<(), RunError> {
     let vault = open(dir, recovery)?;
     let report = vault.verify().map_err(failed)?;
@@ -270,8 +326,8 @@ fn read_passphrase(prompt: &str) -> Result<String, RunError> {
     Ok(line.trim_end_matches(['\n', '\r']).to_string())
 }
 
-fn sync_emit(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(), RunError> {
-    let mut vault = open(dir, recovery)?;
+fn sync_emit(dir: &Path, sync_dir: &Path, recovery: Option<&str>, device: Option<&str>) -> Result<(), RunError> {
+    let mut vault = open_sync(dir, recovery, device)?;
     match vault.sync_emit(sync_dir).map_err(failed)? {
         Some(info) => {
             println!(
@@ -287,8 +343,8 @@ fn sync_emit(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(), 
     }
 }
 
-fn sync_reemit(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(), RunError> {
-    let mut vault = open(dir, recovery)?;
+fn sync_reemit(dir: &Path, sync_dir: &Path, recovery: Option<&str>, device: Option<&str>) -> Result<(), RunError> {
+    let mut vault = open_sync(dir, recovery, device)?;
     match vault.sync_reemit(sync_dir).map_err(failed)? {
         Some(info) => {
             println!(
@@ -304,15 +360,15 @@ fn sync_reemit(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<()
     }
 }
 
-fn sync_dismiss_ack_ahead(dir: &Path, recovery: Option<&str>) -> Result<(), RunError> {
-    let mut vault = open(dir, recovery)?;
+fn sync_dismiss_ack_ahead(dir: &Path, recovery: Option<&str>, device: Option<&str>) -> Result<(), RunError> {
+    let mut vault = open_sync(dir, recovery, device)?;
     vault.clear_ack_ahead().map_err(failed)?;
     println!("ahead-of-vault flag cleared");
     Ok(())
 }
 
-fn sync_apply(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(), RunError> {
-    let mut vault = open(dir, recovery)?;
+fn sync_apply(dir: &Path, sync_dir: &Path, recovery: Option<&str>, device: Option<&str>) -> Result<(), RunError> {
+    let mut vault = open_sync(dir, recovery, device)?;
     let report = vault.sync_apply(sync_dir).map_err(failed)?;
     println!(
         "bundles: {} applied of {} seen; entries: {} applied, {} conflict copies; attachments: {} applied",
@@ -353,8 +409,8 @@ fn sync_apply(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(),
     }
 }
 
-fn sync_prune(dir: &Path, sync_dir: &Path, recovery: Option<&str>) -> Result<(), RunError> {
-    let mut vault = open(dir, recovery)?;
+fn sync_prune(dir: &Path, sync_dir: &Path, recovery: Option<&str>, device: Option<&str>) -> Result<(), RunError> {
+    let mut vault = open_sync(dir, recovery, device)?;
     let report = vault.sync_prune(sync_dir).map_err(failed)?;
     println!(
         "pruned {} bundle(s), {} blob(s); every known peer has consumed through lseq {}",

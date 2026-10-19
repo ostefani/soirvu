@@ -188,8 +188,27 @@ impl Database {
     /// device row exists afterwards and the stored
     /// cache names it. The id itself is minted and kept
     /// by the caller, outside the vault folder.
+    ///
+    /// When the assigned id DIFFERS from the stored
+    /// one, this database changes identity (a copied
+    /// vault opened as a new device): the previous
+    /// identity's device-local sync state is reset in
+    /// the same transaction — the emitted watermark
+    /// (the new identity's stream starts at 1, or a
+    /// peer's contiguity check wedges its cursor at 0
+    /// forever), the ack-ahead flag and the claimed
+    /// evidence (a detector state of the old identity).
+    /// The same set `restamp_device` clears. Peer
+    /// cursors and seen evidence stay: they are facts
+    /// about OTHER devices, and the records they count
+    /// are in this database.
     pub fn assign_device(&mut self, id: &str) -> Result<String> {
         let tx = self.conn.transaction()?;
+        let previous: Option<String> = tx
+            .query_row("SELECT value FROM meta WHERE key = 'device_id'", [], |row| {
+                row.get(0)
+            })
+            .optional()?;
         tx.execute(
             "INSERT OR IGNORE INTO device (id, name, created_at) VALUES (?1, 'this device', ?2)",
             params![id, now_ms()],
@@ -199,6 +218,23 @@ impl Database {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [&id],
         )?;
+        if previous.is_some() && previous.as_deref() != Some(id) {
+            tx.execute(
+                "DELETE FROM meta WHERE key = ?1",
+                [crate::sync::EMITTED_KEY],
+            )?;
+            tx.execute(
+                "DELETE FROM meta WHERE key = ?1",
+                [crate::sync::ACK_AHEAD_KEY],
+            )?;
+            tx.execute(
+                &format!(
+                    "DELETE FROM meta WHERE key LIKE '{}%'",
+                    crate::sync::CLAIMED_PREFIX
+                ),
+                [],
+            )?;
+        }
         tx.commit()?;
         Ok(id.to_string())
     }

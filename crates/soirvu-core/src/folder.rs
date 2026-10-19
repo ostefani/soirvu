@@ -288,6 +288,13 @@ impl Vault {
         &self.header
     }
 
+    /// The device identity this vault was opened (or
+    /// created) AS — the caller-assigned id, or the
+    /// stored one for settings-less callers.
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
     pub fn database(&self) -> &Database {
         &self.db
     }

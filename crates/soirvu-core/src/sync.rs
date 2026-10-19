@@ -63,19 +63,19 @@ use crate::error::{Error, Result};
 use crate::folder::{Vault, rename_retry};
 
 const BUNDLE_FORMAT: u32 = 1;
-const EMITTED_KEY: &str = "sync_emitted_lseq";
+pub(crate) const EMITTED_KEY: &str = "sync_emitted_lseq";
 /// Bundle names already reported as a twin's (see
 /// sync_apply): the warning is loud ONCE per file, not on
 /// every run for as long as the stale file sits there.
 const WARNED_KEY: &str = "sync_warned_bundles";
-const ACK_AHEAD_KEY: &str = "sync_ack_ahead";
+pub(crate) const ACK_AHEAD_KEY: &str = "sync_ack_ahead";
 /// Meta key prefix for the per-peer applied cursors: how
 /// far this vault has incorporated each peer's bundle
 /// stream. Published into the folder as ack files, they
 /// are what makes pruning safe.
 const APPLIED_PREFIX: &str = "sync_applied:";
 const SEEN_PREFIX: &str = "sync_seen:";
-const CLAIMED_PREFIX: &str = "sync_claimed:";
+pub(crate) const CLAIMED_PREFIX: &str = "sync_claimed:";
 const ACK_FORMAT: u32 = 1;
 /// An ack is ids and counters — a few hundred bytes in
 /// practice, a few KB with a hundred peers. Anything
@@ -2926,6 +2926,31 @@ mod tests {
             Vault::open_with_passphrase_as(&dir_c.path().join("v"), PASSPHRASE, "not-a-uuid")
                 .is_err()
         );
+    }
+
+
+    #[test]
+    fn a_copied_vault_starts_its_stream_at_one() {
+        let dir_a = TempDir::new().unwrap();
+        let dir_c = TempDir::new().unwrap();
+        let sync = TempDir::new().unwrap();
+        let id_a = crate::new_device_id();
+        let (mut a, _) = Vault::create_with_device(dir_a.path(), PASSPHRASE, fast(), &id_a).unwrap();
+        a.create_entry(&draft("e1")).unwrap();
+        a.create_entry(&draft("e2")).unwrap();
+        a.sync_emit(sync.path()).unwrap().unwrap();
+        a.checkpoint().unwrap();
+        copy_dir(dir_a.path(), &dir_c.path().join("v"));
+        let id_c = crate::new_device_id();
+        let mut copy =
+            Vault::open_with_passphrase_as(&dir_c.path().join("v"), PASSPHRASE, &id_c).unwrap();
+        copy.create_entry(&draft("e3")).unwrap();
+        let info = copy.sync_emit(sync.path()).unwrap().unwrap();
+        assert_eq!(info.from_lseq, 1, "copy stream must start at 1");
+        a.sync_apply(sync.path()).unwrap();
+        let ov = a.sync_overview().unwrap();
+        let peer = ov.peers.iter().find(|p| p.device_id == id_c).expect("peer");
+        assert_eq!(peer.applied_lseq, 3, "A cursor for the copy must advance");
     }
 
     #[test]

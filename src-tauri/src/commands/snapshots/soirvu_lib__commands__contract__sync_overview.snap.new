@@ -12,7 +12,9 @@ expression: json
     {
       "device_id": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
       "applied_lseq": 40,
-      "waiting": 1
+      "waiting": 1,
+      "emitted_lseq": 57,
+      "needs_reemit": true
     }
   ],
   "ack_ahead_seen": false

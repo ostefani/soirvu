@@ -365,8 +365,8 @@ pub async fn vault_unlock(
         secret.zeroize();
         return Err(e.to_ipc());
     }
-    let device_id = match state.device_id_for(&vault_id) {
-        Ok(id) => id,
+    let assignment = match state.assignment(&vault_id) {
+        Ok(a) => a,
         Err(e) => {
             secret.zeroize();
             return Err(e.to_ipc());
@@ -375,12 +375,17 @@ pub async fn vault_unlock(
     // Opening runs Argon2id (~750 ms): keep it off the async
     // runtime's threads.
     let mut task_secret = secret.clone();
-    let task_device = device_id.clone();
+    let task_assignment = assignment.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        let opened = match kind.as_str() {
-            "passphrase" => Vault::open_with_passphrase_as(&path, &task_secret, &task_device),
-            _ => RecoveryKey::from_text(&task_secret)
-                .and_then(|key| Vault::open_with_recovery_as(&path, &key, &task_device)),
+        let opened = match (kind.as_str(), task_assignment.as_deref()) {
+            ("passphrase", Some(device)) => {
+                Vault::open_with_passphrase_as(&path, &task_secret, device)
+            }
+            (_, Some(device)) => RecoveryKey::from_text(&task_secret)
+                .and_then(|key| Vault::open_with_recovery_as(&path, &key, device)),
+            ("passphrase", None) => Vault::open_with_passphrase(&path, &task_secret),
+            (_, None) => RecoveryKey::from_text(&task_secret)
+                .and_then(|key| Vault::open_with_recovery(&path, &key)),
         };
         task_secret.zeroize();
         opened
@@ -389,6 +394,15 @@ pub async fn vault_unlock(
     secret.zeroize();
     match joined {
         Ok(Ok(vault)) => {
+            if assignment.is_none() {
+                // A pre-step-3 entry: adopt the identity
+                // this vault already syncs under.
+                // Best effort — the vault is open either
+                // way, and a stored open yields the same
+                // id next time, so a failed write just
+                // retries then.
+                let _ = state.set_device_id(&vault_id, vault.device_id().to_string());
+            }
             state.unlock_ok(vault);
             super::emit_status(&app, &state);
             Ok(())
@@ -571,18 +585,29 @@ pub async fn vault_unlock_touch_id(
     if let Err(e) = state.begin_unlock(&vault_id) {
         return Err(e.to_ipc());
     }
-    let device_id = match state.device_id_for(&vault_id) {
-        Ok(id) => id,
+    let assignment = match state.assignment(&vault_id) {
+        Ok(a) => a,
         Err(e) => return Err(e.to_ipc()),
     };
+    let task_assignment = assignment.clone();
+    let keychain_id = vault_id.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        let bytes = crate::keychain::read(&vault_id).map_err(TouchUnlockError::Keychain)?;
+        let bytes = crate::keychain::read(&keychain_id).map_err(TouchUnlockError::Keychain)?;
         let secret = DeviceSecret::from_bytes(&bytes).map_err(TouchUnlockError::Core)?;
-        Vault::open_with_device_as(&path, &secret, &device_id).map_err(TouchUnlockError::Core)
+        match task_assignment.as_deref() {
+            Some(device) => {
+                Vault::open_with_device_as(&path, &secret, device).map_err(TouchUnlockError::Core)
+            }
+            None => Vault::open_with_device(&path, &secret).map_err(TouchUnlockError::Core),
+        }
     })
     .await;
     match joined {
         Ok(Ok(vault)) => {
+            if assignment.is_none() {
+                // Adopt, as in vault_unlock.
+                let _ = state.set_device_id(&vault_id, vault.device_id().to_string());
+            }
             state.unlock_ok(vault);
             super::emit_status(&app, &state);
             Ok(())

@@ -326,33 +326,27 @@ impl AppState {
         self.save_config(&inner)
     }
 
-    /// The device identity assigned to a vault,
-    /// minting and persisting one on first use. A
-    /// vault whose entry has none — registered before
-    /// step 3, or a folder copied from another
-    /// machine and registered here — gets a fresh
-    /// identity at this moment, which is the point:
-    /// the identity lives in THIS app's settings, not
-    /// in the folder that was copied.
-    pub fn device_id_for(&self, vault_id: &str) -> AppResult<String> {
-        let mut inner = self.inner.lock().unwrap();
-        let existing = inner
+    /// The device identity assigned to a vault, if
+    /// one has been assigned yet.
+    ///
+    /// Entries registered before identities lived
+    /// here (Phase 10b step 3) have none — their first
+    /// unlock ADOPTS the id the vault already syncs
+    /// under, so an existing diary never changes
+    /// identity by upgrading. Entries registered
+    /// since then were minted an identity at
+    /// registration (see `register`): a folder that
+    /// arrives at this app is a copy until it proves
+    /// otherwise.
+    pub fn assignment(&self, vault_id: &str) -> AppResult<Option<String>> {
+        let inner = self.inner.lock().unwrap();
+        inner
             .config
             .vaults
             .iter()
             .find(|v| v.id == vault_id)
-            .ok_or_else(|| AppError::Code("vault_not_found".into()))?
-            .device_id
-            .clone();
-        if let Some(id) = existing {
-            return Ok(id);
-        }
-        let id = soirvu_core::new_device_id();
-        if let Some(entry) = inner.config.vaults.iter_mut().find(|v| v.id == vault_id) {
-            entry.device_id = Some(id.clone());
-        }
-        self.save_config(&inner)?;
-        Ok(id)
+            .map(|v| v.device_id.clone())
+            .ok_or_else(|| AppError::Code("vault_not_found".into()))
     }
 
     /// Replaces a vault's assigned identity (restamp:
@@ -403,7 +397,7 @@ impl AppState {
             self.save_config(&inner)?;
             return Ok(entry);
         }
-        let entry = VaultRef { id, name, path, sync_dir: None, device_id: None };
+        let entry = VaultRef { id, name, path, sync_dir: None, device_id: Some(soirvu_core::new_device_id()) };
         inner.config.vaults.push(entry.clone());
         self.save_config(&inner)?;
         Ok(entry)
