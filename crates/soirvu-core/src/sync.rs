@@ -352,6 +352,19 @@ impl Vault {
             .meta(EMITTED_KEY)?
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
+        self.emit_from(sync_dir, watermark)
+    }
+
+    /// Emits every record past `watermark` as one bundle
+    /// and, on success only, commits `to_lseq` as the new
+    /// watermark. A failed emit — an identity collision, a
+    /// disk error — changes nothing, which is what makes
+    /// re-emit safe to retry.
+    fn emit_from(
+        &mut self,
+        sync_dir: &Path,
+        watermark: i64,
+    ) -> Result<Option<SyncBundleInfo>> {
         let (entries, attachments, to_lseq) = {
             let conn = self.db.connection();
             let mut stmt = conn.prepare(
@@ -537,25 +550,20 @@ impl Vault {
         }))
     }
 
-    /// Re-emits this vault's whole sync state: the emit
-    /// watermark is reset and the next bundle covers
-    /// every record from lseq 1. The recovery when a peer
-    /// lost bundles to a prune (an overstated ack, a
-    /// restore): the full-range bundle satisfies the
-    /// peer's contiguity check, so its cursor unsticks
-    /// and the missing records land. Identity is NOT
-    /// touched — that is restamp's job, and restamp as a
-    /// recovery tool strands the old identity's ack file
-    /// and cursor in the folder as a phantom peer.
+    /// Re-emits this vault's whole sync state as one
+    /// bundle covering every record from lseq 1. The
+    /// recovery when a peer lost bundles to a prune (an
+    /// overstated ack, a restore): the full-range bundle
+    /// satisfies the peer's contiguity check, so its
+    /// cursor unsticks and the missing records land.
+    /// Identity is NOT touched — that is restamp's job,
+    /// and restamp as a recovery tool strands the old
+    /// identity's ack file and cursor in the folder as a
+    /// phantom peer. Just an emit from watermark 0: the
+    /// stored watermark moves only when the emit lands.
     pub fn sync_reemit(&mut self, sync_dir: &Path) -> Result<Option<SyncBundleInfo>> {
-        {
-            let tx = self.db.conn_mut().transaction()?;
-            tx.execute("DELETE FROM meta WHERE key = ?1", [EMITTED_KEY])?;
-            tx.commit()?;
-        }
-        self.sync_emit(sync_dir)
+        self.emit_from(sync_dir, 0)
     }
-
 
     /// Applies every bundle in `sync_dir` this vault has not
     /// incorporated yet. Safe to re-run: incorporated records
@@ -864,13 +872,13 @@ impl Vault {
                         .any(|(peer, to)| *to > *ack.applied.get(peer).unwrap_or(&0));
                 if ahead {
                     warning = Some(
-                        "this device's ack in the folder is ahead of this vault — \
+                        "this device's ack in the folder is ahead of this vault: \
                          another copy may share its identity, or the vault was \
                          restored. Bundles a peer already pruned on the strength \
                          of it are lost to this vault until that peer re-emits \
-                         everything (sync re-emit); restamp is for the shared- \
-                         identity case only — as a recovery tool it strands the \
-                         old identity's ack and cursor in the folder"
+                         everything. If a copy shares this identity, restamp \
+                         the copy — restamping is not a recovery tool: it \
+                         strands the old identity's ack and cursor in the folder"
                             .to_string(),
                     );
                 }
@@ -2276,7 +2284,7 @@ mod tests {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
         b.create_entry(&draft("y1")).unwrap();
-        let info1 = b.sync_emit(sync.path()).unwrap().unwrap();
+        b.sync_emit(sync.path()).unwrap();
         a.sync_apply(sync.path()).unwrap();
         // A twin of A moves A's ack past y2; B prunes on
         // the strength of it; y2 never reaches A.
@@ -2290,6 +2298,13 @@ mod tests {
         b.sync_prune(sync.path()).unwrap();
         let report = a.sync_apply(sync.path()).unwrap();
         assert!(report.ack_ahead.is_some());
+        let count = |v: &Vault| {
+            v.list_entries(&crate::entries::ListQuery::default())
+                .unwrap()
+                .items
+                .len()
+        };
+        assert_eq!(count(&a), 1, "y2 must be lost");
         // The peer re-emits everything, same identity:
         // the full-range bundle lands, y2 arrives, and
         // A's cursor for B unsticks to the end.
@@ -2297,6 +2312,7 @@ mod tests {
         assert_eq!(full.from_lseq, 1);
         let healed = a.sync_apply(sync.path()).unwrap();
         assert_eq!(healed.entries_applied, 1);
+        assert_eq!(count(&a), 2, "y2 must be back");
         let over_a = a.sync_overview().unwrap();
         assert_eq!(
             over_a.peers,
@@ -2305,6 +2321,69 @@ mod tests {
                 applied_lseq: full.to_lseq,
             }]
         );
-        let _ = info1;
+    }
+
+    #[test]
+    fn two_reemits_in_a_row_agree() {
+        let (_da, _db, _a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        b.create_entry(&draft("y1")).unwrap();
+        let first = b.sync_reemit(sync.path()).unwrap().unwrap();
+        let bytes = fs::read(sync.path().join(&first.file_name)).unwrap();
+        // Nothing changed since: the same range name and
+        // the identical payload, so the guard passes.
+        let second = b.sync_reemit(sync.path()).unwrap().unwrap();
+        assert_eq!(first.file_name, second.file_name);
+        assert_eq!(fs::read(sync.path().join(&second.file_name)).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_failed_reemit_keeps_the_watermark() {
+        let (_da, _db, _a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        b.create_entry(&draft("y1")).unwrap();
+        b.create_entry(&draft("y2")).unwrap();
+        b.sync_emit(sync.path()).unwrap();
+        assert_eq!(b.sync_overview().unwrap().emitted_lseq, 2);
+        b.create_entry(&draft("y3")).unwrap();
+        // A torn bundle already sits at the full-range
+        // name: the re-emit must fail with SharedDeviceId
+        // and leave the stored watermark exactly as it was.
+        let name = format!(
+            "{}-{}-00000001-00000003.sync",
+            &b.header().vault_id[..8],
+            b.device_id
+        );
+        fs::write(sync.path().join(&name), b"torn\n").unwrap();
+        let err = b.sync_reemit(sync.path()).unwrap_err();
+        assert!(matches!(err, Error::SharedDeviceId), "{err}");
+        assert_eq!(b.sync_overview().unwrap().emitted_lseq, 2);
+        // And the next ordinary emit is an ordinary emit:
+        // just the new record, from the intact watermark.
+        fs::remove_file(sync.path().join(&name)).unwrap();
+        let info = b.sync_emit(sync.path()).unwrap().unwrap();
+        assert_eq!(info.from_lseq, 3);
+    }
+
+    #[test]
+    fn a_twin_reemit_with_a_colliding_name_is_shared_device_id() {
+        let (_da, _db, _a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        b.create_entry(&draft("y1")).unwrap();
+        b.sync_emit(sync.path()).unwrap();
+        // A bit-identical copy adds its own record and
+        // re-emits the full range under the shared name.
+        let dir_t = TempDir::new().unwrap();
+        let t_dir = dir_t.path().join("v");
+        copy_dir(b.dir(), &t_dir);
+        let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
+        twin.create_entry(&draft("twin's")).unwrap();
+        twin.sync_reemit(sync.path()).unwrap();
+        // The original's diverging record takes the same
+        // lseq, so its full-range bundle takes the same
+        // name with a different payload: the guard fires.
+        b.create_entry(&draft("original's")).unwrap();
+        let err = b.sync_reemit(sync.path()).unwrap_err();
+        assert!(matches!(err, Error::SharedDeviceId), "{err}");
     }
 }

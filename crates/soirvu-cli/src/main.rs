@@ -12,6 +12,8 @@
 //!   soirvu-cli sync-emit <vault-dir> <sync-dir> [--recovery <key>]
 //!   soirvu-cli sync-apply <vault-dir> <sync-dir> [--recovery <key>]
 //!   soirvu-cli sync-prune <vault-dir> <sync-dir> [--recovery <key>]
+//!   soirvu-cli sync-reemit <vault-dir> <sync-dir> [--recovery <key>]
+//!   soirvu-cli sync-dismiss-ack-ahead <vault-dir> [--recovery <key>]
 //!   soirvu-cli restamp-device <vault-dir> [--recovery <key>]
 //!
 //! The passphrase comes from the SOIRVU_PASSPHRASE environment variable,
@@ -67,6 +69,8 @@ soirvu-cli — create, check and export a Soirvu vault without the app
   soirvu-cli sync-emit <vault-dir> <sync-dir> [--recovery <key>]
   soirvu-cli sync-apply <vault-dir> <sync-dir> [--recovery <key>]
   soirvu-cli sync-prune <vault-dir> <sync-dir> [--recovery <key>]
+  soirvu-cli sync-reemit <vault-dir> <sync-dir> [--recovery <key>]
+  soirvu-cli sync-dismiss-ack-ahead <vault-dir> [--recovery <key>]
   soirvu-cli restamp-device <vault-dir> [--recovery <key>]
 
 The passphrase is read from SOIRVU_PASSPHRASE, or asked for at the
@@ -106,7 +110,7 @@ fn run(args: &[String]) -> Result<(), RunError> {
             }
             sync_reemit(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
         }
-        "sync-dismiss-ack-ahead" if rest.len() >= 2 => {
+        "sync-dismiss-ack-ahead" if !rest.is_empty() => {
             let (dirs, recovery) = open_args(rest)?;
             if dirs.len() != 1 {
                 return Err(RunError::Usage);

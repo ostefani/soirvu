@@ -203,7 +203,7 @@
         try {
             const bundle = await api.syncReemit();
             syncNote = bundle
-                ? 'Re-emitted everything as ' + bundle.file_name + ' — peers that lost bundles to a prune recover them on their next apply.'
+                ? 'Everything is emitted as ' + bundle.file_name + ' — peers that lost bundles to a prune recover them on their next apply.'
                 : 'Nothing to re-emit.';
             await loadSync();
         } catch (e) {
@@ -695,9 +695,16 @@
                     An ack in this folder has claimed more than this vault holds — a copy may share its identity,
                     or this vault was restored. Entries a peer pruned on the strength of it return when that peer
                     re-emits everything. If THIS diary is the copy, restamp it below; if it is the original, the
-                    copy is the one to restamp.
+                    copy is the one to restamp. Once the missing entries are back, dismiss this note.
                     <button class="quiet" onclick={dismissAckAhead} disabled={syncBusy}>Dismiss</button>
                 </p>
+                {#each syncInfo.peers as peer}
+                    {#if peer.waiting > 0}
+                        <p class="note">
+                            Device <code>{peer.device_id.slice(0, 8)}…</code> needs to re-emit everything.
+                        </p>
+                    {/if}
+                {/each}
             {/if}
             <p class="note">This device: <code>{syncInfo.device_id}</code></p>
             {#each syncInfo.peers as peer}
