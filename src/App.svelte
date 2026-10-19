@@ -102,7 +102,19 @@
         selectedId = null;
         await refresh();
     }
+    // The drop safety net: a file dropped anywhere no
+    // component claims (the lock screen, the list,
+    // settings) must not navigate the webview to the
+    // file. The editor claims its own drops and
+    // prevents the default itself; this catches the
+    // rest. Dragging over the window gets the same
+    // treatment, or the drop never fires cleanly.
+    function swallowDrop(event) {
+        event.preventDefault();
+    }
 </script>
+
+<svelte:window ondragover={swallowDrop} ondrop={swallowDrop} />
 
 {#if screen === "boot"}
     <p class="note">Starting…</p>

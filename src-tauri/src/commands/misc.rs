@@ -43,7 +43,7 @@ pub fn settings_get(state: State<'_, AppState>) -> Settings {
     state.settings()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn settings_set(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     ipc(state.set_settings(settings))
 }
@@ -65,7 +65,7 @@ pub async fn settings_pick_backup_dir(
     Ok(Some(state.settings()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn settings_clear_backup_dir(
     state: State<'_, AppState>,
 ) -> Result<Settings, String> {
@@ -97,7 +97,7 @@ pub fn clipboard_note_copy(state: State<'_, AppState>) -> Result<(), String> {
 /// §13 Phase 6: copy the open vault to the backup location
 /// now, whatever the schedule says. Returns the new folder's
 /// display name; the path never crosses the boundary.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn backup_now(state: State<'_, AppState>) -> Result<String, String> {
     ipc(crate::backup::make_backup(&state))
 }
