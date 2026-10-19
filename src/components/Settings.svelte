@@ -134,6 +134,8 @@
         switch (String(e)) {
             case 'sync_shared_identity':
                 return 'Another copy of this diary is using this device identity — restamp this copy below to fix it.';
+            case 'sync_unreadable':
+                return 'A file in the sync folder sits at a bundle name and cannot be read — remove it there and try again.';
             case 'sync_folder_missing':
                 return 'The sync folder is not there — is the drive mounted?';
             case 'sync_not_configured':
@@ -699,7 +701,7 @@
                     <button class="quiet" onclick={dismissAckAhead} disabled={syncBusy}>Dismiss</button>
                 </p>
                 {#each syncInfo.peers as peer}
-                    {#if peer.waiting > 0}
+                    {#if peer.needs_reemit}
                         <p class="note">
                             Device <code>{peer.device_id.slice(0, 8)}…</code> needs to re-emit everything.
                         </p>

@@ -47,6 +47,13 @@ pub enum Error {
     /// Kept apart from `Sync` so the app can point at the
     /// restamp remedy instead of a generic failure.
     SharedDeviceId,
+    /// A file sits at the name this device's next bundle
+    /// would take, but it cannot be read as a sync bundle
+    /// of this vault at all — not a header of this vault,
+    /// not decryptable. Kept apart from `SharedDeviceId`:
+    /// the remedy is removing the file, and restamping
+    /// for it would only strand a phantom identity.
+    SyncUnreadable(String),
     /// No tag with this name is used by a live entry.
     TagNotFound,
     /// A rename would give a tag the name of a different tag that is in use.
@@ -82,6 +89,11 @@ impl fmt::Display for Error {
                 f,
                 "another copy of this vault is using this device id; \
                  run restamp-device on one of the copies"
+            ),
+            Error::SyncUnreadable(name) => write!(
+                f,
+                "a file at this bundle's name in the sync folder cannot be \
+                 read as a sync bundle ({name}); remove it there and retry"
             ),
             Error::TagNotFound => write!(f, "tag not found"),
             Error::TagExists => write!(f, "a tag with that name already exists"),

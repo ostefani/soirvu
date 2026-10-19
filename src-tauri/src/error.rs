@@ -55,6 +55,7 @@ impl From<Error> for AppError {
             InvalidInput(_) => "invalid_input",
             Sync(_) => "sync",
             SharedDeviceId => "sync_shared_identity",
+            SyncUnreadable(_) => "sync_unreadable",
             Io(_) | Database(_) => "storage",
             Random(_) | Json(_) => "internal",
         };

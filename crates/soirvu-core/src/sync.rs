@@ -154,6 +154,13 @@ struct SyncAck {
     vault_id: String,
     device_id: String,
     applied: std::collections::BTreeMap<String, i64>,
+    /// How far the PUBLISHER's own stream has been
+    /// emitted. Self-reported — the same trust class as
+    /// the cursors it reports for others. Acks written
+    /// before this field existed read as 0: unknown,
+    /// never a fact.
+    #[serde(default)]
+    emitted: i64,
 }
 
 /// The plaintext bundle header: metadata only (the same
@@ -251,6 +258,18 @@ fn header_of(bytes: &[u8]) -> Option<BundleHeader> {
 /// Files that do not parse — a torn write from a peer, a
 /// stranger's file — are skipped: a missing ack only
 /// ever makes pruning more conservative.
+/// What each device says IT has emitted, from the ack
+/// files in the folder: (device id, emitted lseq). A
+/// peer is provably owed a re-emit when this vault's
+/// cursor for it is behind the value here and no bundle
+/// in the folder covers the gap.
+pub fn ack_emitted(sync_dir: &Path, vault_id: &str) -> Vec<(String, i64)> {
+    read_acks(sync_dir, vault_id)
+        .into_iter()
+        .map(|ack| (ack.device_id, ack.emitted))
+        .collect()
+}
+
 fn read_acks(sync_dir: &Path, vault_id: &str) -> Vec<SyncAck> {
     let mut out = Vec::new();
     let acks_dir = sync_dir.join(ACK_DIR);
@@ -516,7 +535,15 @@ impl Vault {
                         h.vault_id == header.vault_id && h.device_id == header.device_id
                     });
                     if !mine {
-                        return Err(Error::SharedDeviceId);
+                        // Not readable as a bundle of this
+                        // vault at all — a foreign or
+                        // damaged file squatting at my
+                        // bundle's name. That is not an
+                        // identity clash (a twin's bundle
+                        // would decrypt, and lands in the
+                        // branch above): the remedy is
+                        // removing the file, not restamp.
+                        return Err(Error::SyncUnreadable(file_name.clone()));
                     }
                     let tmp = sync_dir.join(format!(".tmp-{file_name}"));
                     fs::write(&tmp, &bytes)?;
@@ -850,6 +877,11 @@ impl Vault {
             vault_id: self.header().vault_id.clone(),
             device_id: self.device_id.clone(),
             applied,
+            emitted: self
+                .db
+                .meta(EMITTED_KEY)?
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
         };
         let bytes = serde_json::to_vec(&ack)?;
         let acks_dir = sync_dir.join(ACK_DIR);
@@ -2346,9 +2378,11 @@ mod tests {
         b.sync_emit(sync.path()).unwrap();
         assert_eq!(b.sync_overview().unwrap().emitted_lseq, 2);
         b.create_entry(&draft("y3")).unwrap();
-        // A torn bundle already sits at the full-range
-        // name: the re-emit must fail with SharedDeviceId
-        // and leave the stored watermark exactly as it was.
+        // A garbage file already sits at the full-range
+        // name: the re-emit must fail with SyncUnreadable
+        // (not an identity clash — nothing there decrypts
+        // or even parses) and leave the stored watermark
+        // exactly as it was.
         let name = format!(
             "{}-{}-00000001-00000003.sync",
             &b.header().vault_id[..8],
@@ -2356,7 +2390,7 @@ mod tests {
         );
         fs::write(sync.path().join(&name), b"torn\n").unwrap();
         let err = b.sync_reemit(sync.path()).unwrap_err();
-        assert!(matches!(err, Error::SharedDeviceId), "{err}");
+        assert!(matches!(err, Error::SyncUnreadable(_)), "{err}");
         assert_eq!(b.sync_overview().unwrap().emitted_lseq, 2);
         // And the next ordinary emit is an ordinary emit:
         // just the new record, from the intact watermark.
@@ -2385,5 +2419,44 @@ mod tests {
         b.create_entry(&draft("original's")).unwrap();
         let err = b.sync_reemit(sync.path()).unwrap_err();
         assert!(matches!(err, Error::SharedDeviceId), "{err}");
+    }
+
+    #[test]
+    fn a_torn_own_bundle_is_replaced_silently() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        b.create_entry(&draft("y1")).unwrap();
+        b.create_entry(&draft("y2")).unwrap();
+        let info = b.sync_emit(sync.path()).unwrap().unwrap();
+        // Tear the bundle: the header line survives (it
+        // still names this vault and device), the sealed
+        // body does not. A re-emit over the same range
+        // replaces it without a word — the crash-between-
+        // write-and-commit case from the emit guard.
+        let path = sync.path().join(&info.file_name);
+        let bytes = fs::read(&path).unwrap();
+        let head_end = bytes.iter().position(|c| *c == b'\n').unwrap();
+        let mut torn = bytes[..=head_end].to_vec();
+        torn.extend_from_slice(b"garbagegarbagegarbagegarbage12");
+        fs::write(&path, torn).unwrap();
+        let info2 = b.sync_reemit(sync.path()).unwrap().unwrap();
+        assert_eq!(info2.file_name, info.file_name);
+        // And the replacement is a working bundle.
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert_eq!(report.entries_applied, 2);
+    }
+
+    #[test]
+    fn acks_carry_the_publishers_emitted_lseq() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        a.create_entry(&draft("x")).unwrap();
+        b.create_entry(&draft("y1")).unwrap();
+        b.create_entry(&draft("y2")).unwrap();
+        let info = b.sync_emit(sync.path()).unwrap().unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        let emitted = ack_emitted(sync.path(), &b.header().vault_id);
+        assert_eq!(emitted, vec![(b.device_id.clone(), info.to_lseq)]);
+        let _ = a;
     }
 }

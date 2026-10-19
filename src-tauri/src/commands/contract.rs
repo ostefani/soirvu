@@ -277,6 +277,8 @@ fn sync_shapes() {
                 device_id: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb".into(),
                 applied_lseq: 40,
                 waiting: 1,
+                emitted_lseq: Some(57),
+                needs_reemit: true,
             }],
             ack_ahead_seen: false,
         },

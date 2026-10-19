@@ -46,6 +46,15 @@ pub struct SyncPeerDto {
     /// bundle that will not apply — the apply report's
     /// problems name it.
     pub waiting: usize,
+    /// How far that peer says IT has emitted (from its
+    /// ack); null when its ack predates the field or it
+    /// has never published one.
+    pub emitted_lseq: Option<i64>,
+    /// Provably owed a re-emit: this vault's cursor is
+    /// behind the peer's emitted point and no bundle in
+    /// the folder covers the gap (the covering ones were
+    /// pruned). Self-clearing once the gap is covered.
+    pub needs_reemit: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -171,15 +180,25 @@ fn assemble_overview(overview: &SyncOverview, dir: Option<&Path>, vault_id: &str
             device_id: p.device_id.clone(),
             applied_lseq: p.applied_lseq,
             waiting: 0,
+            emitted_lseq: None,
+            needs_reemit: false,
         })
         .collect();
     let mut bundles_in_folder = 0;
+    let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut ack_emitted: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
     if let Some(dir) = dir {
+        for (device, emitted) in soirvu_core::sync::ack_emitted(dir, vault_id) {
+            if emitted > 0 {
+                ack_emitted.insert(device, emitted);
+            }
+        }
         let prefix = &vault_id[..8.min(vault_id.len())];
         if let Ok(items) = std::fs::read_dir(dir) {
             for item in items.flatten() {
                 let name = item.file_name().to_string_lossy().into_owned();
-                let Some((vault, device, _from, to)) = bundle_name_parts(&name) else {
+                let Some((vault, device, from, to)) = bundle_name_parts(&name) else {
                     continue;
                 };
                 if vault != prefix {
@@ -192,6 +211,14 @@ fn assemble_overview(overview: &SyncOverview, dir: Option<&Path>, vault_id: &str
                 if overview.device_id.starts_with(&device) {
                     continue;
                 }
+                let applied = peers
+                    .iter()
+                    .find(|p| p.device_id == device)
+                    .map(|p| p.applied_lseq)
+                    .unwrap_or(0);
+                if from <= applied + 1 && to > applied {
+                    covered.insert(device.clone());
+                }
                 match peers.iter_mut().find(|p| p.device_id == device) {
                     Some(peer) => {
                         if to > peer.applied_lseq {
@@ -202,10 +229,17 @@ fn assemble_overview(overview: &SyncOverview, dir: Option<&Path>, vault_id: &str
                         device_id: device,
                         applied_lseq: 0,
                         waiting: 1,
+                        emitted_lseq: None,
+                        needs_reemit: false,
                     }),
                 }
             }
         }
+    }
+    for peer in peers.iter_mut() {
+        peer.emitted_lseq = ack_emitted.get(&peer.device_id).copied();
+        peer.needs_reemit = matches!(peer.emitted_lseq, Some(e) if e > peer.applied_lseq)
+            && !covered.contains(&peer.device_id);
     }
     peers.sort_by(|a, b| a.device_id.cmp(&b.device_id));
     SyncOverviewDto {
