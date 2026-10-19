@@ -46,9 +46,9 @@ pub struct SyncPeerDto {
     /// bundle that will not apply — the apply report's
     /// problems name it.
     pub waiting: usize,
-    /// How far that peer says IT has emitted (from its
-    /// ack); null when its ack predates the field or it
-    /// has never published one.
+    /// How far that peer's stream is evidenced to have
+    /// been emitted (bundles this vault opened, or an ack
+    /// claim its detector read); null with no evidence.
     pub emitted_lseq: Option<i64>,
     /// Provably owed a re-emit: this vault's cursor is
     /// behind the peer's emitted point and no bundle in
@@ -180,20 +180,13 @@ fn assemble_overview(overview: &SyncOverview, dir: Option<&Path>, vault_id: &str
             device_id: p.device_id.clone(),
             applied_lseq: p.applied_lseq,
             waiting: 0,
-            emitted_lseq: None,
+            emitted_lseq: (p.seen_emitted > 0).then_some(p.seen_emitted),
             needs_reemit: false,
         })
         .collect();
     let mut bundles_in_folder = 0;
     let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut ack_emitted: std::collections::HashMap<String, i64> =
-        std::collections::HashMap::new();
     if let Some(dir) = dir {
-        for (device, emitted) in soirvu_core::sync::ack_emitted(dir, vault_id) {
-            if emitted > 0 {
-                ack_emitted.insert(device, emitted);
-            }
-        }
         let prefix = &vault_id[..8.min(vault_id.len())];
         if let Ok(items) = std::fs::read_dir(dir) {
             for item in items.flatten() {
@@ -237,7 +230,6 @@ fn assemble_overview(overview: &SyncOverview, dir: Option<&Path>, vault_id: &str
         }
     }
     for peer in peers.iter_mut() {
-        peer.emitted_lseq = ack_emitted.get(&peer.device_id).copied();
         peer.needs_reemit = matches!(peer.emitted_lseq, Some(e) if e > peer.applied_lseq)
             && !covered.contains(&peer.device_id);
     }

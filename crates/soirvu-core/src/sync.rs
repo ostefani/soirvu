@@ -74,6 +74,7 @@ const ACK_AHEAD_KEY: &str = "sync_ack_ahead";
 /// stream. Published into the folder as ack files, they
 /// are what makes pruning safe.
 const APPLIED_PREFIX: &str = "sync_applied:";
+const SEEN_PREFIX: &str = "sync_seen:";
 const ACK_FORMAT: u32 = 1;
 const ACK_DIR: &str = "acks";
 
@@ -141,6 +142,13 @@ pub struct SyncOverview {
 pub struct SyncPeerCursor {
     pub device_id: String,
     pub applied_lseq: i64,
+    /// The furthest point of that peer's stream this
+    /// vault has EVIDENCE of: bundles it opened, or an
+    /// ack claim its detector read. Kept apart from the
+    /// cursor — a bundle across a gap still proves the
+    /// emission, and the difference between the two is
+    /// exactly what a re-emit heals.
+    pub seen_emitted: i64,
 }
 
 /// One device's published cursors, written to
@@ -154,13 +162,6 @@ struct SyncAck {
     vault_id: String,
     device_id: String,
     applied: std::collections::BTreeMap<String, i64>,
-    /// How far the PUBLISHER's own stream has been
-    /// emitted. Self-reported — the same trust class as
-    /// the cursors it reports for others. Acks written
-    /// before this field existed read as 0: unknown,
-    /// never a fact.
-    #[serde(default)]
-    emitted: i64,
 }
 
 /// The plaintext bundle header: metadata only (the same
@@ -258,18 +259,6 @@ fn header_of(bytes: &[u8]) -> Option<BundleHeader> {
 /// Files that do not parse — a torn write from a peer, a
 /// stranger's file — are skipped: a missing ack only
 /// ever makes pruning more conservative.
-/// What each device says IT has emitted, from the ack
-/// files in the folder: (device id, emitted lseq). A
-/// peer is provably owed a re-emit when this vault's
-/// cursor for it is behind the value here and no bundle
-/// in the folder covers the gap.
-pub fn ack_emitted(sync_dir: &Path, vault_id: &str) -> Vec<(String, i64)> {
-    read_acks(sync_dir, vault_id)
-        .into_iter()
-        .map(|ack| (ack.device_id, ack.emitted))
-        .collect()
-}
-
 fn read_acks(sync_dir: &Path, vault_id: &str) -> Vec<SyncAck> {
     let mut out = Vec::new();
     let acks_dir = sync_dir.join(ACK_DIR);
@@ -684,6 +673,16 @@ impl Vault {
                 continue;
             }
             report.bundles_applied += 1;
+            // Emission evidence: this bundle proves its
+            // author emitted through to_lseq — even when
+            // it lands across a gap and the cursor below
+            // cannot move. The difference is the overview's
+            // re-emit signal.
+            {
+                let tx = self.db.conn_mut().transaction()?;
+                Self::note_seen(&tx, &header.device_id, header.to_lseq)?;
+                tx.commit()?;
+            }
             let problems_before = report.problems.len();
             let tx = self.db.conn_mut().transaction()?;
             // Entry rows reference their author device
@@ -772,7 +771,7 @@ impl Vault {
         // corrected either, so the failure warning below
         // is the whole signal for that case.
         match self.publish_ack(sync_dir) {
-            Ok(Some(warning)) => {
+            Ok(Some((warning, ahead_peers))) => {
                 // Durable: the publish just corrected the
                 // file, so without a flag the signal would
                 // vanish with the apply that found it. It
@@ -784,6 +783,13 @@ impl Vault {
                      ON CONFLICT(key) DO UPDATE SET value = '1'",
                     params![ACK_AHEAD_KEY],
                 )?;
+                // The claims are evidence too: a copy of
+                // this vault consumed those bundles, so
+                // their authors emitted at least that far —
+                // even though THIS vault never saw them.
+                for (peer, to) in &ahead_peers {
+                    Self::note_seen(&tx, peer, *to)?;
+                }
                 tx.commit()?;
                 report.ack_ahead = Some(warning);
             }
@@ -794,6 +800,47 @@ impl Vault {
             )),
         }
         Ok(report)
+    }
+
+    /// Every peer emission point this vault has evidence
+    /// of, by peer (see `SyncPeerCursor::seen_emitted`).
+    fn seen_emitted(&self) -> Result<std::collections::BTreeMap<String, i64>> {
+        let mut seen = std::collections::BTreeMap::new();
+        let conn = self.db.connection();
+        let mut stmt =
+            conn.prepare("SELECT key, value FROM meta WHERE key LIKE 'sync_seen:%'")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (key, value) = row?;
+            if let (Some(peer), Ok(to)) =
+                (key.strip_prefix(SEEN_PREFIX), value.parse::<i64>())
+            {
+                seen.insert(peer.to_string(), to);
+            }
+        }
+        Ok(seen)
+    }
+
+    /// Records emission evidence for one peer: bundles
+    /// opened here, or an ack claim the detector read.
+    fn note_seen(tx: &rusqlite::Transaction<'_>, peer: &str, to_lseq: i64) -> Result<()> {
+        let key = format!("{SEEN_PREFIX}{peer}");
+        let previous: Option<String> = tx
+            .query_row("SELECT value FROM meta WHERE key = ?1", [&key], |row| {
+                row.get(0)
+            })
+            .ok();
+        let previous = previous.and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        if to_lseq > previous {
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, to_lseq.to_string()],
+            )?;
+        }
+        Ok(())
     }
 
     /// Every per-peer cursor this vault holds, by peer.
@@ -826,11 +873,20 @@ impl Vault {
                 .meta(EMITTED_KEY)?
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),
-            peers: self
-                .applied_cursors()?
-                .into_iter()
-                .map(|(device_id, applied_lseq)| SyncPeerCursor { device_id, applied_lseq })
-                .collect(),
+            peers: {
+                let applied = self.applied_cursors()?;
+                let seen = self.seen_emitted()?;
+                let mut ids: std::collections::BTreeSet<&String> =
+                    applied.keys().collect();
+                ids.extend(seen.keys());
+                ids.into_iter()
+                    .map(|device_id| SyncPeerCursor {
+                        device_id: device_id.clone(),
+                        applied_lseq: applied.get(device_id).copied().unwrap_or(0),
+                        seen_emitted: seen.get(device_id).copied().unwrap_or(0),
+                    })
+                    .collect()
+            },
             ack_ahead_seen: self.db.meta(ACK_AHEAD_KEY)?.is_some(),
         })
     }
@@ -870,18 +926,13 @@ impl Vault {
     /// the apply path a detector the bundle index can't
     /// be: an apply-only copy leaves no bundle behind,
     /// but it moves the ack, and the move shows here.
-    fn publish_ack(&self, sync_dir: &Path) -> Result<Option<String>> {
+    fn publish_ack(&self, sync_dir: &Path) -> Result<Option<(String, Vec<(String, i64)>)>> {
         let applied = self.applied_cursors()?;
         let ack = SyncAck {
             format: ACK_FORMAT,
             vault_id: self.header().vault_id.clone(),
             device_id: self.device_id.clone(),
             applied,
-            emitted: self
-                .db
-                .meta(EMITTED_KEY)?
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0),
         };
         let bytes = serde_json::to_vec(&ack)?;
         let acks_dir = sync_dir.join(ACK_DIR);
@@ -897,13 +948,19 @@ impl Vault {
                 return Ok(None);
             }
             if let Ok(file_ack) = serde_json::from_slice::<SyncAck>(&existing) {
-                let ahead = file_ack.vault_id == ack.vault_id
-                    && file_ack
+                let ahead_peers: Vec<(String, i64)> = if file_ack.vault_id == ack.vault_id {
+                    file_ack
                         .applied
                         .iter()
-                        .any(|(peer, to)| *to > *ack.applied.get(peer).unwrap_or(&0));
+                        .filter(|(peer, to)| **to > ack.applied.get(peer.as_str()).copied().unwrap_or(0))
+                        .map(|(peer, to)| (peer.clone(), *to))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let ahead = !ahead_peers.is_empty();
                 if ahead {
-                    warning = Some(
+                    warning = Some((
                         "this device's ack in the folder is ahead of this vault: \
                          another copy may share its identity, or the vault was \
                          restored. Bundles a peer already pruned on the strength \
@@ -912,7 +969,8 @@ impl Vault {
                          the copy — restamping is not a recovery tool: it \
                          strands the old identity's ack and cursor in the folder"
                             .to_string(),
-                    );
+                        ahead_peers,
+                    ));
                 }
             }
         }
@@ -2158,6 +2216,7 @@ mod tests {
             vec![SyncPeerCursor {
                 device_id: a.device_id.clone(),
                 applied_lseq: info.to_lseq,
+                seen_emitted: info.to_lseq,
             }]
         );
     }
@@ -2294,6 +2353,7 @@ mod tests {
             vec![SyncPeerCursor {
                 device_id: b.device_id.clone(),
                 applied_lseq: info1.to_lseq,
+                seen_emitted: info1.to_lseq,
             }]
         );
         // The original's next apply detects the ahead
@@ -2351,6 +2411,7 @@ mod tests {
             vec![SyncPeerCursor {
                 device_id: b.device_id.clone(),
                 applied_lseq: full.to_lseq,
+                seen_emitted: full.to_lseq,
             }]
         );
     }
@@ -2447,16 +2508,31 @@ mod tests {
     }
 
     #[test]
-    fn acks_carry_the_publishers_emitted_lseq() {
+    fn seen_emitted_tracks_bundles_and_ack_claims() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        a.create_entry(&draft("x")).unwrap();
+        // Direct evidence: a bundle A opens.
         b.create_entry(&draft("y1")).unwrap();
+        let info1 = b.sync_emit(sync.path()).unwrap().unwrap();
+        a.sync_apply(sync.path()).unwrap();
+        let peer = a.sync_overview().unwrap().peers.remove(0);
+        assert_eq!(peer.applied_lseq, info1.to_lseq);
+        assert_eq!(peer.seen_emitted, info1.to_lseq);
+        // Detector evidence: a twin consumes y2, the ack
+        // it moves claims the consumption, B prunes the
+        // bundle — A never sees it, yet the emission is
+        // on record here.
+        let dir_t = TempDir::new().unwrap();
+        let t_dir = dir_t.path().join("v");
+        copy_dir(a.dir(), &t_dir);
+        let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
         b.create_entry(&draft("y2")).unwrap();
-        let info = b.sync_emit(sync.path()).unwrap().unwrap();
-        b.sync_apply(sync.path()).unwrap();
-        let emitted = ack_emitted(sync.path(), &b.header().vault_id);
-        assert_eq!(emitted, vec![(b.device_id.clone(), info.to_lseq)]);
-        let _ = a;
+        let info2 = b.sync_emit(sync.path()).unwrap().unwrap();
+        twin.sync_apply(sync.path()).unwrap();
+        b.sync_prune(sync.path()).unwrap();
+        a.sync_apply(sync.path()).unwrap();
+        let peer = a.sync_overview().unwrap().peers.remove(0);
+        assert_eq!(peer.applied_lseq, info1.to_lseq);
+        assert_eq!(peer.seen_emitted, info2.to_lseq);
     }
 }

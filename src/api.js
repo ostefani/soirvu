@@ -519,8 +519,8 @@ export function settingsClearBackupDir() {
  * @property {number} waiting That peer's bundles in the
  *   folder past the cursor.
  * @property {number | null} emitted_lseq How far that
- *   peer says it has emitted (from its ack); null when
- *   unknown.
+ *   peer's stream is evidenced to have been emitted;
+ *   null with no evidence.
  * @property {boolean} needs_reemit This device is
  *   provably behind that peer with no covering bundle
  *   in the folder: the peer needs to re-emit.
