@@ -19,12 +19,24 @@ where
     T: Send + 'static,
     F: FnOnce(&AppState) -> Result<T, String> + Send + 'static,
 {
-    tauri::async_runtime::spawn_blocking(move || {
+    run_blocking(move || {
         let state = app.state::<AppState>();
         work(&state)
     })
     .await
-    .map_err(|_| "internal".to_string())?
+}
+
+/// Runs synchronous work that does not need managed state on Tokio's
+/// blocking pool. Keep this separate from `run_blocking_state` so pure file
+/// operations do not need a dummy state closure.
+pub async fn run_blocking<T, F>(work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|_| "internal".to_string())?
 }
 
 /// Tells the UI the lock status changed (unlock, lock, auto-lock).

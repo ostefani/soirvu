@@ -191,8 +191,13 @@ pub async fn vault_pick_folder(
     };
     match mode.as_str() {
         "open" => {
-            let resolved = resolve_vault_folder(&path);
-            let vault_id = read_vault_id(&resolved).map_err(|e| e.to_ipc())?;
+            let picked_path = path.clone();
+            let (resolved, vault_id) = crate::commands::run_blocking(move || {
+                let resolved = resolve_vault_folder(&picked_path);
+                let vault_id = read_vault_id(&resolved).map_err(|e| e.to_ipc())?;
+                Ok((resolved, vault_id))
+            })
+            .await?;
             // A backup is an archive, not a home: restoring
             // imports it into a folder the user chooses, and
             // the backup folder itself is never registered.
@@ -225,7 +230,7 @@ pub async fn vault_pick_folder(
                 }
                 let copy_from = resolved.clone();
                 let copy_to = dest.clone();
-                crate::commands::run_blocking_state(app.clone(), move |_| {
+                crate::commands::run_blocking(move || {
                     import_copy(&copy_from, &copy_to).map_err(|e| e.to_ipc())
                 })
                 .await?;
@@ -264,22 +269,32 @@ pub async fn vault_pick_folder(
             // (a restored backup, most often): never repoint
             // silently — ask first, natively.
             let mut opening_copy = false;
-            if let Ok(old_path) = state.vault_path(&vault_id) {
-                if old_path != path && old_path.join("vault.header.json").exists() {
-                    let vaults = crate::commands::run_blocking_state(app.clone(), |state| {
-                        Ok(state.vault_list())
-                    })
+            let vault_id_for_lookup = vault_id.clone();
+            let selected_path = path.clone();
+            let old_path = crate::commands::run_blocking_state(app.clone(), move |state| {
+                let old_path = state.vault_path(&vault_id_for_lookup).ok();
+                let is_existing_copy = old_path.as_ref().is_some_and(|old_path| {
+                    old_path != &selected_path && old_path.join("vault.header.json").exists()
+                });
+                Ok((old_path, is_existing_copy))
+            })
+            .await?;
+            if let (Some(old_path), true) = old_path {
+                let vaults =
+                    crate::commands::run_blocking_state(
+                        app.clone(),
+                        |state| Ok(state.vault_list()),
+                    )
                     .await?;
-                    let name = vaults
-                        .into_iter()
-                        .find(|v| v.id == vault_id)
-                        .map(|v| v.name)
-                        .unwrap_or_else(|| folder_name(&old_path));
-                    if !confirm_open_copy(&app, &name).await {
-                        return Ok(None);
-                    }
-                    opening_copy = true;
+                let name = vaults
+                    .into_iter()
+                    .find(|v| v.id == vault_id)
+                    .map(|v| v.name)
+                    .unwrap_or_else(|| folder_name(&old_path));
+                if !confirm_open_copy(&app, &name).await {
+                    return Ok(None);
                 }
+                opening_copy = true;
             }
             let name = folder_name(&path);
             let warning = crate::platform::fs_warning(&path).map(str::to_string);

@@ -12,8 +12,9 @@
 //! `locked` error code. Commands never check the state themselves.
 
 use std::fs;
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -211,6 +212,63 @@ pub struct AppState {
     config_file: PathBuf,
 }
 
+/// Temporarily owns the open vault while a command uses it without holding
+/// the state mutex. If the command unwinds, the vault is returned to state so
+/// `Unlocked` cannot be left without its corresponding vault.
+struct VaultLease<'a> {
+    state: &'a AppState,
+    vault: Option<Vault>,
+}
+
+impl Deref for VaultLease<'_> {
+    type Target = Vault;
+
+    fn deref(&self) -> &Self::Target {
+        self.vault.as_ref().expect("vault lease is active")
+    }
+}
+
+impl DerefMut for VaultLease<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.vault.as_mut().expect("vault lease is active")
+    }
+}
+
+impl VaultLease<'_> {
+    fn lock(mut self) {
+        // Mark the state as transitioning before consuming the vault. If the
+        // vault lock operation unwinds, Drop must not restore a locked vault
+        // under an `Unlocked` status.
+        {
+            let mut inner = self
+                .state
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            inner.status = Status::Locking;
+        }
+        self.vault.take().expect("vault lease is active").lock();
+    }
+}
+
+impl Drop for VaultLease<'_> {
+    fn drop(&mut self) {
+        let Some(vault) = self.vault.take() else {
+            return;
+        };
+        let mut inner = self
+            .state
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A completed lock transition intentionally discards the lease.
+        // For an ordinary operation (including panic unwinding), restore it.
+        if inner.status == Status::Unlocked {
+            inner.vault = Some(vault);
+        }
+    }
+}
+
 impl AppState {
     /// Loads (or starts) app.json in the app config folder (§3).
     pub fn load(app_config_dir: PathBuf) -> AppState {
@@ -261,6 +319,14 @@ impl AppState {
             fs::File::open(parent)?.sync_all()?;
         }
         Ok(())
+    }
+
+    /// The operation mutex only represents exclusive access; recovering its
+    /// guard after unwinding is safe because it contains no mutable data.
+    fn lock_vault_operations(&self) -> MutexGuard<'_, ()> {
+        self.vault_operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn status(&self) -> Status {
@@ -342,7 +408,7 @@ impl AppState {
     /// Stores (or clears) a vault's sync folder, chosen
     /// through the native picker. Only Rust sees the path.
     pub fn set_sync_dir(&self, vault_id: &str, dir: Option<PathBuf>) -> AppResult<()> {
-        let _operation = self.vault_operations.lock().unwrap();
+        let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
         let entry = inner
             .config
@@ -382,7 +448,7 @@ impl AppState {
     /// live vault switches to it, so an interrupted
     /// restamp still converges at the next open).
     pub fn set_device_id(&self, vault_id: &str, device_id: String) -> AppResult<()> {
-        let _operation = self.vault_operations.lock().unwrap();
+        let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
         let previous = inner.config.clone();
         let entry = inner
@@ -403,7 +469,7 @@ impl AppState {
     /// operation. Persistence precedes the core write so an interrupted
     /// update converges to the assigned identity on the next open.
     pub fn restamp_current_device(&self, device_id: String) -> AppResult<()> {
-        let _operation = self.vault_operations.lock().unwrap();
+        let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
         if inner.status != Status::Unlocked {
             return Err(AppError::Code("locked".into()));
@@ -431,17 +497,23 @@ impl AppState {
 
     /// The vault list for the UI, with a state per vault.
     pub fn vault_list(&self) -> Vec<VaultInfo> {
-        let _operation = self.vault_operations.lock().unwrap();
-        let inner = self.inner.lock().unwrap();
-        inner
-            .config
-            .vaults
-            .iter()
+        // Snapshot registry state briefly. Availability checks touch the
+        // filesystem, so do them after releasing the state mutex and without
+        // waiting for long-running sync or backup operations.
+        let (vaults, current, status) = {
+            let inner = self.inner.lock().unwrap();
+            (
+                inner.config.vaults.clone(),
+                inner.current.clone(),
+                inner.status,
+            )
+        };
+        vaults
+            .into_iter()
             .map(|v| VaultInfo {
                 id: v.id.clone(),
                 name: v.name.clone(),
-                state: if Some(&v.id) == inner.current.as_ref() && inner.status == Status::Unlocked
-                {
+                state: if Some(&v.id) == current.as_ref() && status == Status::Unlocked {
                     "unlocked".into()
                 } else {
                     availability_of(&v.path).into()
@@ -466,7 +538,7 @@ impl AppState {
         path: PathBuf,
         device_id: Option<String>,
     ) -> AppResult<VaultRef> {
-        let _operation = self.vault_operations.lock().unwrap();
+        let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
         if inner.current.as_deref() == Some(id.as_str())
             && inner.vault.is_some()
@@ -511,7 +583,7 @@ impl AppState {
     }
 
     pub fn forget(&self, vault_id: &str) -> AppResult<()> {
-        let _operation = self.vault_operations.lock().unwrap();
+        let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
         if inner.current.as_deref() == Some(vault_id) && inner.vault.is_some() {
             return Err(AppError::Other("vault is open — lock it first".into()));
@@ -595,7 +667,7 @@ impl AppState {
     /// A vault created in this session starts Unlocked: its keys
     /// were just derived here, there is nothing to re-ask.
     pub fn adopt_created(&self, vault: Vault, vault_id: &str) {
-        let _operation = self.vault_operations.lock().unwrap();
+        let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
         inner.current = Some(vault_id.to_string());
         inner.vault = Some(vault);
@@ -631,7 +703,7 @@ impl AppState {
         // never taken from the hint, so it is not stored.
         _mime_hint: Option<String>,
     ) -> AppResult<String> {
-        let _operation = self.vault_operations.lock().unwrap();
+        let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
         if inner.vault.is_none() {
             return Err(AppError::Code("locked".into()));
@@ -723,7 +795,7 @@ impl AppState {
     /// Unlocked ──► Locking ──► Locked (or Unavailable if the vault
     /// folder is gone). Zeroizes the keys via the core's lock().
     pub fn lock(&self) -> AppResult<()> {
-        let _operation = self.vault_operations.lock().unwrap();
+        let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
         inner.uploads.clear();
         inner.upload_bytes = 0;
@@ -803,7 +875,7 @@ impl AppState {
         if self.lock_if_current_missing() {
             return Err(AppError::Code("vault_unavailable".into()));
         }
-        let _operation = self.vault_operations.lock().unwrap();
+        let _operation = self.lock_vault_operations();
         self.with_vault_locked(work)
     }
 
@@ -816,7 +888,7 @@ impl AppState {
         if self.lock_if_current_missing() {
             return Err(AppError::Code("vault_unavailable".into()));
         }
-        let _operation = self.vault_operations.lock().unwrap();
+        let _operation = self.lock_vault_operations();
         self.with_vault_locked(work)
     }
 
@@ -832,7 +904,7 @@ impl AppState {
         if self.lock_if_current_missing() {
             return Err(AppError::Code("vault_unavailable".into()));
         }
-        let _operation = self.vault_operations.lock().unwrap();
+        let _operation = self.lock_vault_operations();
         let mut vault = {
             let mut inner = self.inner.lock().unwrap();
             if inner.status != Status::Unlocked {
@@ -846,21 +918,15 @@ impl AppState {
             if !current_matches {
                 return Err(AppError::Code("vault_mismatch".into()));
             }
-            inner.vault.take().expect("Unlocked implies a vault")
-        };
-        let result = match work(&mut vault) {
-            Ok(result) => result,
-            Err(error) => {
-                let mut inner = self.inner.lock().unwrap();
-                inner.vault = Some(vault);
-                inner.status = Status::Unlocked;
-                return Err(error);
+            VaultLease {
+                state: self,
+                vault: Some(inner.vault.take().expect("Unlocked implies a vault")),
             }
         };
+        let result = work(&mut vault)?;
         vault.lock();
         {
             let mut inner = self.inner.lock().unwrap();
-            inner.status = Status::Locking;
             inner.uploads.clear();
             inner.upload_bytes = 0;
             inner.status = match &inner.current {
@@ -894,12 +960,12 @@ impl AppState {
                 return Err(AppError::Code("locked".into()));
             }
             inner.last_activity = Instant::now();
-            inner.vault.take().expect("Unlocked implies a vault")
+            VaultLease {
+                state: self,
+                vault: Some(inner.vault.take().expect("Unlocked implies a vault")),
+            }
         };
-        let result = work(&mut vault);
-        let mut inner = self.inner.lock().unwrap();
-        inner.vault = Some(vault);
-        result
+        work(&mut vault)
     }
 }
 

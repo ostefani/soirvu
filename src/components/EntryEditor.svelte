@@ -25,6 +25,12 @@
     let editor = null;
     let saveTimer = null;
     let dirty = false;
+    // Matches the backend's MAX_ACTIVE_UPLOADS safety limit.
+    const MAX_CONCURRENT_UPLOADS = 8;
+    const attachmentQueue = [];
+    let activeAttachments = 0;
+    let pendingAttachments = 0;
+    let attachmentFailures = [];
 
     // The toolbar is a fixed bar in the window (§6.5), always
     // visible; this only keeps its active states current — the
@@ -115,9 +121,39 @@
     // of files lands here too, through the editor's onAttach.
     const ATTACH_CHUNK = 1024 * 1024;
 
-    async function attachFile(file) {
+    function attachFile(file) {
         if (!entry || !editor) return;
-        status = `Attaching ${file.name}…`;
+        if (pendingAttachments === 0) attachmentFailures = [];
+        attachmentQueue.push(file);
+        pendingAttachments++;
+        status = `Attaching ${pendingAttachments} file${pendingAttachments === 1 ? '' : 's'}…`;
+        drainAttachmentQueue();
+    }
+
+    function drainAttachmentQueue() {
+        while (activeAttachments < MAX_CONCURRENT_UPLOADS && attachmentQueue.length) {
+            const file = attachmentQueue.shift();
+            activeAttachments++;
+            void uploadFile(file).then((error) => {
+                if (error) attachmentFailures.push(error);
+            }).finally(() => {
+                activeAttachments--;
+                pendingAttachments--;
+                if (pendingAttachments === 0) {
+                    status = attachmentFailures.length === 0
+                        ? 'Saved'
+                        : attachmentFailures.length === 1
+                          ? attachmentFailures[0]
+                          : `${attachmentFailures.length} files could not be attached. ${attachmentFailures[0]}`;
+                } else {
+                    status = `Attaching ${pendingAttachments} file${pendingAttachments === 1 ? '' : 's'}…`;
+                }
+                drainAttachmentQueue();
+            });
+        }
+    }
+
+    async function uploadFile(file) {
         let uploadId = null;
         try {
             uploadId = await api.attachmentBegin(entry.id, file.name, file.type || null);
@@ -128,18 +164,20 @@
             const added = await api.attachmentFinish(uploadId);
             uploadId = null;
             editor.insertAttachment({ id: added.id, mime: added.mime, name: file.name });
-            status = 'Saved';
+            return null;
         } catch (e) {
-            if (uploadId) api.attachmentAbort(uploadId).catch(() => {});
-            if (e === 'too_large') status = 'That file is too large for its type.';
-            else if (e === 'unsupported_type') status = 'That file type is not supported.';
-            else if (e === 'locked') status = 'The diary is locked.';
-            else status = `Could not attach the file (${e}).`;
+            if (uploadId) await api.attachmentAbort(uploadId).catch(() => {});
+            if (e === 'too_large') return `${file.name}: that file is too large for its type.`;
+            if (e === 'unsupported_type') return `${file.name}: that file type is not supported.`;
+            if (e === 'locked') return 'The diary is locked.';
+            if (e === 'too_many_uploads') return 'Too many files are being attached. Please try again.';
+            return `${file.name}: could not attach the file (${e}).`;
         }
     }
 
     function onFilesPicked() {
-        for (const file of fileInput.files) attachFile(file);
+        if (!fileInput) return;
+        for (const file of Array.from(fileInput.files || [])) attachFile(file);
         fileInput.value = '';
     }
 
