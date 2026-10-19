@@ -75,6 +75,7 @@ const ACK_AHEAD_KEY: &str = "sync_ack_ahead";
 /// are what makes pruning safe.
 const APPLIED_PREFIX: &str = "sync_applied:";
 const SEEN_PREFIX: &str = "sync_seen:";
+const CLAIMED_PREFIX: &str = "sync_claimed:";
 const ACK_FORMAT: u32 = 1;
 const ACK_DIR: &str = "acks";
 
@@ -259,6 +260,14 @@ fn header_of(bytes: &[u8]) -> Option<BundleHeader> {
 /// Files that do not parse — a torn write from a peer, a
 /// stranger's file — are skipped: a missing ack only
 /// ever makes pruning more conservative.
+/// A device id in its one canonical form — the form
+/// `restamp_device` and vault creation mint. Anything
+/// else in a peer position is junk from a plaintext
+/// file, not a peer.
+fn is_canonical_uuid(s: &str) -> bool {
+    uuid::Uuid::parse_str(s).is_ok_and(|u| u.to_string() == s)
+}
+
 fn read_acks(sync_dir: &Path, vault_id: &str) -> Vec<SyncAck> {
     let mut out = Vec::new();
     let acks_dir = sync_dir.join(ACK_DIR);
@@ -788,7 +797,7 @@ impl Vault {
                 // their authors emitted at least that far —
                 // even though THIS vault never saw them.
                 for (peer, to) in &ahead_peers {
-                    Self::note_seen(&tx, peer, *to)?;
+                    Self::note_claimed(&tx, peer, *to)?;
                 }
                 tx.commit()?;
                 report.ack_ahead = Some(warning);
@@ -803,21 +812,27 @@ impl Vault {
     }
 
     /// Every peer emission point this vault has evidence
-    /// of, by peer (see `SyncPeerCursor::seen_emitted`).
+    /// of, by peer (see `SyncPeerCursor::seen_emitted`):
+    /// the further of the bundle-derived point and any
+    /// claim-derived point.
     fn seen_emitted(&self) -> Result<std::collections::BTreeMap<String, i64>> {
         let mut seen = std::collections::BTreeMap::new();
-        let conn = self.db.connection();
-        let mut stmt =
-            conn.prepare("SELECT key, value FROM meta WHERE key LIKE 'sync_seen:%'")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            let (key, value) = row?;
-            if let (Some(peer), Ok(to)) =
-                (key.strip_prefix(SEEN_PREFIX), value.parse::<i64>())
-            {
-                seen.insert(peer.to_string(), to);
+        for prefix in [SEEN_PREFIX, CLAIMED_PREFIX] {
+            let conn = self.db.connection();
+            let mut stmt = conn.prepare(&format!(
+                "SELECT key, value FROM meta WHERE key LIKE '{prefix}%'"
+            ))?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (key, value) = row?;
+                if let (Some(peer), Ok(to)) =
+                    (key.strip_prefix(prefix), value.parse::<i64>())
+                {
+                    let entry = seen.entry(peer.to_string()).or_insert(0);
+                    *entry = (*entry).max(to);
+                }
             }
         }
         Ok(seen)
@@ -826,7 +841,22 @@ impl Vault {
     /// Records emission evidence for one peer: bundles
     /// opened here, or an ack claim the detector read.
     fn note_seen(tx: &rusqlite::Transaction<'_>, peer: &str, to_lseq: i64) -> Result<()> {
-        let key = format!("{SEEN_PREFIX}{peer}");
+        Self::note_point(tx, &format!("{SEEN_PREFIX}{peer}"), to_lseq)
+    }
+
+    /// Claim-derived evidence, kept apart from the
+    /// bundle-derived kind: a claim comes from a
+    /// plaintext file anyone with folder write access
+    /// can plant, so dismiss and restamp clear this
+    /// kind — a garbled claim must not wedge the
+    /// re-emit hint forever. Bundle evidence needs no
+    /// clearing: the bundle existed and was opened.
+    fn note_claimed(tx: &rusqlite::Transaction<'_>, peer: &str, to_lseq: i64) -> Result<()> {
+        Self::note_point(tx, &format!("{CLAIMED_PREFIX}{peer}"), to_lseq)
+    }
+
+    fn note_point(tx: &rusqlite::Transaction<'_>, key: &str, to_lseq: i64) -> Result<()> {
+        let key = key.to_string();
         let previous: Option<String> = tx
             .query_row("SELECT value FROM meta WHERE key = ?1", [&key], |row| {
                 row.get(0)
@@ -896,6 +926,11 @@ impl Vault {
     pub fn clear_ack_ahead(&mut self) -> Result<()> {
         let tx = self.db.conn_mut().transaction()?;
         tx.execute("DELETE FROM meta WHERE key = ?1", [ACK_AHEAD_KEY])?;
+        // Dismissing the note retires the claims it was
+        // built on: they were never verified, and left
+        // in place a garbled one would hold the re-emit
+        // hint open forever.
+        tx.execute("DELETE FROM meta WHERE key LIKE 'sync_claimed:%'", [])?;
         tx.commit()?;
         Ok(())
     }
@@ -948,11 +983,24 @@ impl Vault {
                 return Ok(None);
             }
             if let Ok(file_ack) = serde_json::from_slice::<SyncAck>(&existing) {
+                // Only claims that will be persisted are
+                // collected, and they are validated at
+                // this boundary: a peer key must be a
+                // canonical device id (the ack is a
+                // plaintext file — junk keys must not
+                // become meta rows and phantom peers),
+                // never this device itself, and the count
+                // is capped.
                 let ahead_peers: Vec<(String, i64)> = if file_ack.vault_id == ack.vault_id {
                     file_ack
                         .applied
                         .iter()
-                        .filter(|(peer, to)| **to > ack.applied.get(peer.as_str()).copied().unwrap_or(0))
+                        .filter(|(peer, to)| {
+                            **to > ack.applied.get(peer.as_str()).copied().unwrap_or(0)
+                                && peer.as_str() != self.device_id
+                                && is_canonical_uuid(peer)
+                        })
+                        .take(64)
                         .map(|(peer, to)| (peer.clone(), *to))
                         .collect()
                 } else {
@@ -1106,6 +1154,7 @@ impl Vault {
         )?;
         tx.execute("DELETE FROM meta WHERE key = ?1", [EMITTED_KEY])?;
         tx.execute("DELETE FROM meta WHERE key = ?1", [ACK_AHEAD_KEY])?;
+        tx.execute("DELETE FROM meta WHERE key LIKE 'sync_claimed:%'", [])?;
         tx.commit()?;
         self.device_id = new_id.clone();
         Ok(new_id)
@@ -2534,5 +2583,59 @@ mod tests {
         let peer = a.sync_overview().unwrap().peers.remove(0);
         assert_eq!(peer.applied_lseq, info1.to_lseq);
         assert_eq!(peer.seen_emitted, info2.to_lseq);
+    }
+
+    #[test]
+    fn dismiss_and_restamp_clear_claimed_evidence() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        b.create_entry(&draft("y1")).unwrap();
+        b.sync_emit(sync.path()).unwrap().unwrap();
+        a.sync_apply(sync.path()).unwrap();
+        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
+        let plant = |ack_path: &std::path::Path, b_id: &str| {
+            let mut file_ack: SyncAck =
+                serde_json::from_slice(&fs::read(ack_path).unwrap()).unwrap();
+            file_ack.applied.insert(b_id.to_string(), 99999);
+            fs::write(ack_path, serde_json::to_vec(&file_ack).unwrap()).unwrap();
+        };
+        // The claim lands: seen jumps to the claimed point.
+        plant(&ack_path, &b.device_id);
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert!(report.ack_ahead.is_some());
+        assert_eq!(a.sync_overview().unwrap().peers[0].seen_emitted, 99999);
+        // Dismiss retires it with the flag: only the
+        // bundle-derived point (1) remains.
+        a.clear_ack_ahead().unwrap();
+        assert_eq!(a.sync_overview().unwrap().peers[0].seen_emitted, 1);
+        // Restamp clears claims the same way.
+        plant(&ack_path, &b.device_id);
+        a.sync_apply(sync.path()).unwrap();
+        a.restamp_device().unwrap();
+        let over = a.sync_overview().unwrap();
+        assert_eq!(over.peers[0].seen_emitted, 1);
+        assert!(!over.ack_ahead_seen);
+    }
+
+    #[test]
+    fn junk_and_excess_claims_are_not_persisted() {
+        let (_da, _db, mut a, _b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        a.sync_apply(sync.path()).unwrap();
+        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
+        let mut file_ack: SyncAck =
+            serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
+        file_ack.applied.insert("not-a-uuid".to_string(), 50);
+        for _ in 0..100 {
+            file_ack
+                .applied
+                .insert(uuid::Uuid::now_v7().to_string(), 50);
+        }
+        fs::write(&ack_path, serde_json::to_vec(&file_ack).unwrap()).unwrap();
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert!(report.ack_ahead.is_some());
+        let over = a.sync_overview().unwrap();
+        assert_eq!(over.peers.len(), 64);
+        assert!(over.peers.iter().all(|p| is_canonical_uuid(&p.device_id)));
     }
 }

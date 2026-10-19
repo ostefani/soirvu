@@ -703,7 +703,7 @@
                 {#each syncInfo.peers as peer}
                     {#if peer.needs_reemit}
                         <p class="note">
-                            Device <code>{peer.device_id.slice(0, 8)}…</code> needs to re-emit everything.
+                            Device <code>{peer.device_id.slice(0, 8)}…</code> needs to re-emit everything, or its earlier bundles are still on their way.
                         </p>
                     {/if}
                 {/each}
