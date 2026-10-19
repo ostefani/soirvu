@@ -801,6 +801,26 @@ impl Vault {
                 report.problems.push(format!("bundle {name}: not for this vault"));
                 continue;
             }
+            // AEAD authenticates the sender, but a buggy or newer peer can
+            // still produce structurally invalid records. Validate the whole
+            // payload before writing any part of it: ids become filesystem
+            // paths below, and malformed hashes used to panic while being
+            // decoded into attachment rows.
+            if !crate::storage::is_canonical_uuid(&header.device_id)
+                || header.from_lseq < 1
+                || header.to_lseq < header.from_lseq
+            {
+                report
+                    .problems
+                    .push(format!("bundle {name}: invalid bundle header"));
+                continue;
+            }
+            if let Err(reason) = validate_bundle_records(&bundle) {
+                report
+                    .problems
+                    .push(format!("bundle {name}: invalid record ({reason})"));
+                continue;
+            }
             report.bundles_applied += 1;
             // Emission evidence: this bundle proves its
             // author emitted through to_lseq — even when
@@ -1724,6 +1744,53 @@ fn open_bundle(cipher: &XChaCha20Poly1305, bytes: &[u8]) -> Result<(BundleHeader
     Ok((header, bundle))
 }
 
+fn validate_bundle_records(bundle: &Bundle) -> std::result::Result<(), &'static str> {
+    for entry in &bundle.entries {
+        if !crate::storage::is_canonical_uuid(&entry.id)
+            || !crate::storage::is_canonical_uuid(&entry.device_id)
+            || (!entry.base_device.is_empty()
+                && !crate::storage::is_canonical_uuid(&entry.base_device))
+        {
+            return Err("entry id or device id is invalid");
+        }
+        if entry.rev < 1 || entry.base_rev < 0 {
+            return Err("entry revision is invalid");
+        }
+        if crate::entries::validate_date(&entry.entry_date).is_err() {
+            return Err("entry date is invalid");
+        }
+        if entry.tz.as_ref().is_some_and(|tz| tz.is_empty() || tz.chars().count() > 64) {
+            return Err("time zone is invalid");
+        }
+        if entry.tags.iter().any(|tag| {
+            tag.trim().is_empty()
+                || tag.chars().count() > 64
+                || tag.chars().any(char::is_control)
+        }) {
+            return Err("tag is invalid");
+        }
+    }
+    for attachment in &bundle.attachments {
+        if !crate::storage::is_canonical_uuid(&attachment.id)
+            || !crate::storage::is_canonical_uuid(&attachment.entry_id)
+        {
+            return Err("attachment id is invalid");
+        }
+        if attachment.sha256.len() != 64
+            || !attachment
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("attachment hash is invalid");
+        }
+        if attachment.size < 0 || attachment.size as u64 > MAX_BLOB_PLAINTEXT_BYTES {
+            return Err("attachment size is invalid");
+        }
+    }
+    Ok(())
+}
+
 fn entry_tags(conn: &rusqlite::Connection, entry_id: &str) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT t.name FROM entry_tag et
@@ -1821,10 +1888,17 @@ fn replace_record(tx: &Transaction, record: &EntryRecord) -> Result<()> {
 }
 
 fn insert_attachment_row(tx: &Transaction, record: &AttachmentRecord, lseq: i64, sha_hex: &str) -> Result<()> {
-    let sha: Vec<u8> = (0..sha_hex.len())
+    // Callers validate the wire record before it reaches this function. Keep
+    // decoding fallible anyway so a future caller cannot turn malformed input
+    // into a panic or silently substitute zero bytes.
+    if sha_hex.len() != 64 || !sha_hex.is_ascii() {
+        return Err(Error::InvalidInput("attachment hash is invalid".into()));
+    }
+    let sha = (0..sha_hex.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&sha_hex[i..i + 2], 16).unwrap_or(0))
-        .collect();
+        .map(|i| u8::from_str_radix(&sha_hex[i..i + 2], 16))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| Error::InvalidInput("attachment hash is invalid".into()))?;
     tx.execute(
         "INSERT INTO attachment
            (id, entry_id, name, mime, size, sha256, created_at, deleted_at, lseq)

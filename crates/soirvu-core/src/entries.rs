@@ -784,7 +784,7 @@ fn validate_draft(draft: &EntryDraft) -> Result<()> {
 }
 
 /// Accepts only real calendar dates written as YYYY-MM-DD.
-fn validate_date(date: &str) -> Result<()> {
+pub(crate) fn validate_date(date: &str) -> Result<()> {
     let bad = || Error::InvalidInput("entry_date must be a real date written YYYY-MM-DD".into());
     let bytes = date.as_bytes();
     if !date.is_ascii() || bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
