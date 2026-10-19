@@ -1519,10 +1519,21 @@ fn apply_entry(
             return Ok(());
         }
         // Both sides moved away from their bases: a true
-        // divergence. The higher (rev, device_id) wins the
-        // entry; both sides compute the same winner.
-        let incoming_wins =
-            (record.rev, record.device_id.as_str()) > (local.rev, local.device_id.as_str());
+        // divergence. The records apply in the order they
+        // happened: a delete removes whatever is there
+        // when its turn comes, and an edit can only act on
+        // an entry that still exists — so when exactly one
+        // side is a tombstone, the entry ends deleted
+        // whichever of them is newer, and the edit's text
+        // is preserved below as a conflict copy. Two live
+        // records (or two tombstones) keep the
+        // deterministic (rev, device_id) order; both
+        // devices compute the same winner.
+        let incoming_wins = match (record.deleted_at.is_some(), local.deleted_at.is_some()) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => (record.rev, record.device_id.as_str()) > (local.rev, local.device_id.as_str()),
+        };
         let loser = if incoming_wins { &local } else { record };
         if incoming_wins {
             replace_record(tx, record)?;
@@ -1989,6 +2000,33 @@ mod tests {
         let page = a.list_entries(&crate::entries::ListQuery::default()).unwrap();
         assert_eq!(page.items.len(), 1, "only the conflict copy remains");
         assert_eq!(a.get_entry(&page.items[0].id).unwrap().body_md, "still writing");
+    }
+
+    #[test]
+    fn an_edit_against_a_delete_does_not_resurrect_the_entry() {
+        // The mirror image of the test above: here the
+        // EDIT carries the winning (rev, device_id), so
+        // the plain ordering let it win and the deleted
+        // entry came back. A delete removes whatever is
+        // there when its turn comes, and an edit cannot
+        // act on an entry that no longer exists.
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let entry = a.create_entry(&draft("base")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+
+        a.delete_entry(&entry.id).unwrap();
+        b.update_entry(&entry.id, &draft("still writing")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        exchange(&mut a, &mut b, sync.path());
+
+        assert!(a.get_entry(&entry.id).is_err());
+        assert!(b.get_entry(&entry.id).is_err(), "the delete won the entry on B too");
+        for vault in [&a, &b] {
+            let page = vault.list_entries(&crate::entries::ListQuery::default()).unwrap();
+            assert_eq!(page.items.len(), 1, "only the conflict copy remains");
+            assert_eq!(vault.get_entry(&page.items[0].id).unwrap().body_md, "still writing");
+        }
     }
 
     #[test]
