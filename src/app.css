@@ -26,6 +26,11 @@ body {
     width: 100%;
 }
 
+#__tauri_isolation__ {
+    display: none !important;
+}
+
+
 input,
 button {
     border-radius: 8px;
@@ -83,8 +88,8 @@ button {
 
 .center-col {
     max-width: 26rem;
-    margin: 12vh auto 0;
-    padding: 0 1rem;
+    margin: 0 auto 0;
+    padding: 12vh 1rem;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
