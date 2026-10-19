@@ -1,9 +1,5 @@
 <script>
-    // The month at a glance (§13 Phase 6): days with entries
-    // carry a dot, today is bold, the day the list is filtered
-    // to is ringed. Clicking a day filters the entry list to
-    // it; clicking it again clears the filter.
-    import * as api from '../api.js';
+    import * as api from '../../api.js';
 
     let { selectedDate = null, onSelect, version = 0, large = false } = $props();
 
@@ -13,8 +9,18 @@
     let counts = $state({});
 
     const MONTH_NAMES = [
-        'January', 'February', 'March', 'April', 'May', 'June',
-        'July', 'August', 'September', 'October', 'November', 'December',
+        'January',
+        'February',
+        'March',
+        'April',
+        'May',
+        'June',
+        'July',
+        'August',
+        'September',
+        'October',
+        'November',
+        'December',
     ];
     const WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
 
@@ -62,6 +68,7 @@
         onSelect(date === selectedDate ? null : date);
     }
 </script>
+<style src="./Calendar.css"></style>
 
 <div class="calendar" class:large>
     <div class="cal-head">
@@ -84,101 +91,10 @@
                     class:today={date === todayIso}
                     class:selected={date === selectedDate}
                     title={counts[date] ? `${counts[date]} ${counts[date] === 1 ? 'entry' : 'entries'}` : ''}
-                    onclick={() => pick(day)}
-                >
+                    onclick={() => pick(day)}>
                     {day}
                 </button>
             {/if}
         {/each}
     </div>
 </div>
-
-<style>
-    .calendar {
-        padding: 0.5rem 0.75rem 0.75rem;
-    }
-
-    .calendar.large {
-        max-width: 620px;
-        margin: 0 auto;
-        padding: 1rem 1.25rem 1.25rem;
-    }
-
-    .calendar.large .cal-title {
-        font-size: 1.15rem;
-    }
-
-    .calendar.large .cal-day {
-        font-size: 1rem;
-        padding: 0.55rem 0;
-    }
-
-    .calendar.large .cal-weekday {
-        font-size: 0.8rem;
-    }
-
-    .cal-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 0.35rem;
-    }
-
-    .cal-title {
-        font-weight: 600;
-        font-size: 0.9rem;
-    }
-
-    .cal-grid {
-        display: grid;
-        grid-template-columns: repeat(7, 1fr);
-        gap: 2px;
-        text-align: center;
-    }
-
-    .cal-weekday {
-        font-size: 0.7rem;
-        opacity: 0.55;
-        padding: 0.15rem 0;
-    }
-
-    .cal-day {
-        position: relative;
-        border: none;
-        background: none;
-        border-radius: 999px;
-        padding: 0.22rem 0;
-        font-size: 0.82rem;
-        cursor: pointer;
-        color: inherit;
-    }
-
-    .cal-day:hover {
-        background: rgba(0, 0, 0, 0.06);
-    }
-
-    .cal-day.has-entries::after {
-        content: '';
-        position: absolute;
-        left: 50%;
-        bottom: 1px;
-        width: 4px;
-        height: 4px;
-        margin-left: -2px;
-        border-radius: 999px;
-        background: #396cd8;
-    }
-
-    .cal-day.today {
-        font-weight: 700;
-    }
-
-    .cal-day.selected {
-        background: #396cd8;
-        color: #fff;
-    }
-
-    .cal-day.selected::after {
-        background: #fff;
-    }
-</style>

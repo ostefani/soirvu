@@ -4,8 +4,26 @@
     line-height: 24px;
     font-weight: 400;
 
-    color: #0f0f0f;
+    /* Theme tokens. Light is the diary's own scheme: warm
+       peach paper, near-black ink, one blue accent. Every
+       color the app paints comes from here; the dark block
+       below only re-points the same variables. */
     --bg: #fff1e8;
+    --surface: #ffffff;
+    --surface-pressed: #e8e8e8;
+    --ink: #0f0f0f;
+    --ink-muted: #6f635a;
+    --line: rgba(127, 127, 127, 0.35);
+    --line-strong: rgba(127, 127, 127, 0.75);
+    --accent: #396cd8;
+    --accent-soft: rgba(57, 108, 216, 0.12);
+    --danger: #b3261e;
+    --danger-soft: rgba(179, 38, 30, 0.08);
+    --mark: #ffe08a;
+    --shadow: rgba(0, 0, 0, 0.2);
+
+    color: var(--ink);
+    color-scheme: light;
 
     font-synthesis: none;
     text-rendering: optimizeLegibility;
@@ -39,10 +57,10 @@ button {
     font-size: 1em;
     font-weight: 500;
     font-family: inherit;
-    color: #0f0f0f;
-    background-color: #ffffff;
+    color: var(--ink);
+    background-color: var(--surface);
     transition: border-color 0.25s;
-    box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 2px 2px var(--shadow);
 }
 
 button {
@@ -50,12 +68,12 @@ button {
 }
 
 button:hover {
-    border-color: #396cd8;
+    border-color: var(--accent);
 }
 
 button:active {
-    border-color: #396cd8;
-    background-color: #e8e8e8;
+    border-color: var(--accent);
+    background-color: var(--surface-pressed);
 }
 
 input,
@@ -65,18 +83,30 @@ button {
 
 @media (prefers-color-scheme: dark) {
     :root {
-        color: #f6f6f6;
-        background-color: #2f2f2f;
-    }
+        /* Night navy: the background is a deep blue
+           (#08102e), so the whole set is one blue family
+           stepped up from it — surfaces are lighter
+           shades of the same hue, ink is a blue-white,
+           lines are pale blue at low alpha. The warm
+           roles stay warm on purpose: the salmon danger
+           and the amber mark are the contrast notes
+           against the blue. The accent is the light
+           blue the editor already uses. */
+        --bg: #08102e;
+        --surface: #131f45;
+        --surface-pressed: #1a2957;
+        --ink: #e9edf8;
+        --ink-muted: #98a3c0;
+        --line: rgba(190, 205, 240, 0.2);
+        --line-strong: rgba(190, 205, 240, 0.42);
+        --accent: #8db4f2;
+        --accent-soft: rgba(141, 180, 242, 0.16);
+        --danger: #f19a8d;
+        --danger-soft: rgba(241, 154, 141, 0.13);
+        --mark: #86681c;
+        --shadow: rgba(0, 0, 0, 0.55);
 
-    input,
-    button {
-        color: #ffffff;
-        background-color: #0f0f0f98;
-    }
-
-    button:active {
-        background-color: #0f0f0f69;
+        color-scheme: dark;
     }
 }
 
@@ -114,7 +144,7 @@ button {
 }
 
 .error {
-    color: #b3261e;
+    color: var(--danger);
 }
 
 .note {
@@ -128,5 +158,5 @@ button.quiet {
 }
 
 button.active {
-    border-color: #396cd8;
+    border-color: var(--accent);
 }

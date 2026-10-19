@@ -1,0 +1,42 @@
+    .settings {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        max-width: 26rem;
+    }
+
+    .settings label {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        font-size: 0.9em;
+    }
+
+    .settings .row {
+        display: flex;
+        gap: 0.4rem;
+    }
+    .progress {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .spinner {
+        width: 0.9em;
+        height: 0.9em;
+        flex: none;
+        border: 2px solid currentColor;
+        border-top-color: transparent;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+    .warning {
+        color: #8a5a00;
+    }

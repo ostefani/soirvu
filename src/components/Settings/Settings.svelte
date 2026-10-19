@@ -1,10 +1,7 @@
 <script>
-    // App settings (Phase 3): the lock timeout and the backup
-    // location. The backup folder is picked through Rust — the
-    // UI only ever sees its display name, never the path (§3).
     import { onMount } from 'svelte';
     import { listen } from '@tauri-apps/api/event';
-    import * as api from '../api.js';
+    import * as api from '../../api.js';
 
     let { onBack, onImported } = $props();
 
@@ -50,9 +47,7 @@
     async function rotateMasterKey() {
         secNote = '';
         secBusy = true;
-        // The spinner starts on the bridge's rotation-started
-        // event — after the native confirmation, when the work
-        // actually begins — not on this click.
+
         const unlisten = await listen('rotation-started', () => {
             rotating = true;
         });
@@ -205,7 +200,9 @@
         try {
             const bundle = await api.syncReemit();
             syncNote = bundle
-                ? 'Everything is emitted as ' + bundle.file_name + ' — peers that lost bundles to a prune recover them on their next apply.'
+                ? 'Everything is emitted as ' +
+                  bundle.file_name +
+                  ' — peers that lost bundles to a prune recover them on their next apply.'
                 : 'Nothing to re-emit.';
             await loadSync();
         } catch (e) {
@@ -496,6 +493,7 @@
         }
     }
 </script>
+<style src="./Settings.css"></style>
 
 <div class="settings">
     <h2>Settings</h2>
@@ -694,17 +692,18 @@
         {#if settings.sync_location && syncInfo}
             {#if syncInfo.ack_ahead_seen}
                 <p class="error">
-                    An ack in this folder has claimed more than this vault holds — a copy may share its identity,
-                    or this vault was restored. Entries a peer pruned on the strength of it return when that peer
-                    re-emits everything. If THIS diary is the copy, restamp it below; if it is the original, the
-                    copy is the one to restamp. Once the missing entries are back, dismiss this note.
+                    An ack in this folder has claimed more than this vault holds — a copy may share its identity, or
+                    this vault was restored. Entries a peer pruned on the strength of it return when that peer re-emits
+                    everything. If THIS diary is the copy, restamp it below; if it is the original, the copy is the one
+                    to restamp. Once the missing entries are back, dismiss this note.
                     <button class="quiet" onclick={dismissAckAhead} disabled={syncBusy}>Dismiss</button>
                 </p>
             {/if}
             {#each syncInfo.peers as peer}
                 {#if peer.needs_reemit}
                     <p class="note">
-                        Device <code>{peer.device_id.slice(-8)}…</code> needs to re-emit everything, or its earlier bundles are still on their way.
+                        Device <code>{peer.device_id.slice(-8)}…</code> needs to re-emit everything, or its earlier bundles
+                        are still on their way.
                     </p>
                 {/if}
             {/each}
@@ -768,48 +767,3 @@
 
     <button class="quiet" onclick={() => onBack()}>Back to the diary</button>
 </div>
-
-<style>
-    .settings {
-        display: flex;
-        flex-direction: column;
-        gap: 0.75rem;
-        max-width: 26rem;
-    }
-
-    .settings label {
-        display: flex;
-        flex-direction: column;
-        gap: 0.25rem;
-        font-size: 0.9em;
-    }
-
-    .settings .row {
-        display: flex;
-        gap: 0.4rem;
-    }
-    .progress {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-    }
-
-    .spinner {
-        width: 0.9em;
-        height: 0.9em;
-        flex: none;
-        border: 2px solid currentColor;
-        border-top-color: transparent;
-        border-radius: 50%;
-        animation: spin 0.8s linear infinite;
-    }
-
-    @keyframes spin {
-        to {
-            transform: rotate(360deg);
-        }
-    }
-    .warning {
-        color: #8a5a00;
-    }
-</style>

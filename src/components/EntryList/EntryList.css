@@ -1,0 +1,117 @@
+    /* The entry list, tag chips and search results. */
+    .entry-list {
+        padding: 0.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .list-top {
+        display: flex;
+        gap: 0.4rem;
+    }
+
+    .list-top input {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .tags-toggle {
+        align-self: flex-start;
+        font-size: 0.9em;
+    }
+
+    .tag-flow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem 0.6rem;
+        margin-top: 0.3rem;
+    }
+
+    .tag-wrap {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.2rem;
+    }
+
+    .tag-count {
+        font-size: 0.8em;
+        opacity: 0.65;
+    }
+
+    button.mini {
+        font-size: 0.8em;
+        padding: 0.1em 0.4em;
+    }
+
+    .tag-x {
+        opacity: 0;
+        border: none;
+        background: none;
+        padding: 0 0.25em;
+        font-size: 1em;
+        line-height: 1;
+        cursor: pointer;
+    }
+
+    .tag-wrap:hover .tag-x,
+    .tag-x:focus-visible {
+        opacity: 0.7;
+    }
+
+    .confirm-row {
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        flex-wrap: wrap;
+        font-size: 0.9em;
+    }
+    button.chip {
+        padding: 0.15em 0.7em;
+        font-size: 0.85em;
+        border-radius: 999px;
+    }
+
+    .entries,
+    .results {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+
+    button.entry-row,
+    button.result {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.1rem;
+        text-align: left;
+        width: 100%;
+    }
+
+    .entry-date {
+        font-size: 0.8em;
+        opacity: 0.65;
+    }
+
+    .entry-title {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+    }
+
+    .result-head {
+        font-weight: 600;
+        font-size: 0.9em;
+    }
+
+    .snippet {
+        font-size: 0.9em;
+        opacity: 0.85;
+    }
+
+    .snippet mark {
+        background: #ffe58a;
+        color: inherit;
+    }

@@ -1,9 +1,5 @@
 <script>
-    // The lock screen: pick a known vault, unlock it with the
-    // passphrase or the recovery key. Missing vaults can be located
-    // or forgotten here. Error text comes from the bridge's stable
-    // codes — never from Rust error prose.
-    import * as api from '../api.js';
+    import * as api from '../../api.js';
 
     let { vaults, onUnlocked, onVaultsChanged, onCreate } = $props();
 
@@ -152,6 +148,7 @@
         }
     }
 </script>
+<style src="./LockScreen.css"></style>
 
 <div class="center-col">
     <div class="vault-list">
@@ -225,37 +222,3 @@
     {#if note}<p class="note">{note}</p>{/if}
     {#if error}<p class="error">{error}</p>{/if}
 </div>
-
-<style>
-    /* The vault rows and the passphrase/recovery toggle. */
-    .vault-list {
-        display: flex;
-        flex-direction: column;
-        gap: 0.4rem;
-    }
-
-    .vault-row {
-        display: flex;
-        gap: 0.4rem;
-        align-items: center;
-    }
-
-    .vault-name {
-        flex: 1;
-        text-align: left;
-    }
-
-    .missing {
-        opacity: 0.6;
-        font-size: 0.85em;
-    }
-
-    .kind-toggle {
-        display: flex;
-        gap: 0.4rem;
-    }
-
-    .kind-toggle button {
-        flex: 1;
-    }
-</style>

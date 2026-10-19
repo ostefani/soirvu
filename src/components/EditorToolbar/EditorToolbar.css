@@ -1,0 +1,52 @@
+    /* A fixed row in the editor pane: no positioning, the bar
+       sits in the normal flow above the text area. */
+    .editor-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding: 4px;
+        background: #ffffff;
+        border: 1px solid #e2e2e2;
+        border-radius: 10px;
+    }
+
+    .editor-toolbar button {
+        min-width: 28px;
+        height: 28px;
+        padding: 0 6px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: #333;
+        font-size: 13px;
+        box-shadow: none;
+    }
+
+    .editor-toolbar button:hover {
+        background: #f0f0f0;
+    }
+
+    .editor-toolbar button.active {
+        background: rgba(57, 108, 216, 0.12);
+        color: #396cd8;
+    }
+
+    .tb-strike {
+        text-decoration: line-through;
+    }
+
+    .tb-sep {
+        width: 1px;
+        align-self: stretch;
+        margin: 3px 3px;
+        background: #e2e2e2;
+    }
+    .tb-lang {
+        height: 24px;
+        width: 7em;
+        padding: 0 6px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        font-size: 13px;
+        box-shadow: none;
+    }

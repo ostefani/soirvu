@@ -1,14 +1,9 @@
 <script>
-    // The shell: which screen shows follows the Rust lock state,
-    // never local guesses. A vault-status event saying anything
-    // but "unlocked" (manual lock, idle lock) tears the diary down
-    // and returns to the lock screen; the editor component's own
-    // cleanup saves its tail first.
     import { onMount } from 'svelte';
     import * as api from './api.js';
-    import Onboarding from './components/Onboarding.svelte';
-    import LockScreen from './components/LockScreen.svelte';
-    import Diary from './components/Diary.svelte';
+    import Onboarding from './components/Onboarding/Onboarding.svelte';
+    import LockScreen from './components/LockScreen/LockScreen.svelte';
+    import Diary from './components/Diary/Diary.svelte';
 
     let screen = $state('boot'); // boot | welcome | create | locked | diary
     let vaults = $state([]);
@@ -35,15 +30,12 @@
                 await refresh();
             }
         });
-        // §9 clipboard clearing: report copies; Rust checks the
-        // setting and clears after 30 s if the clipboard is
-        // untouched since. The content is never read.
+        // clipboard clearing: report copies;
         document.addEventListener('copy', () => {
             api.clipboardNoteCopy().catch(() => {});
         });
-        // Manual lock (§9): Cmd/Ctrl+Shift+L from anywhere in
-        // the diary. The shell lives for the app's lifetime and
-        // the document reloads on lock, so no cleanup is needed.
+        // Manual lock: Cmd/Ctrl+Shift+L from anywhere in
+        // the diary.
         window.addEventListener('keydown', (e) => {
             if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'l' && screen === 'diary') {
                 e.preventDefault();
@@ -102,5 +94,4 @@
     <LockScreen {vaults} onUnlocked={refresh} onVaultsChanged={refresh} onCreate={() => (screen = 'create')} />
 {:else if screen === 'diary'}
     <Diary vault={currentVault} onLock={lock} />
-
 {/if}

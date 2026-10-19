@@ -1,8 +1,6 @@
 <script>
-    // Create-a-vault flow (§13 Phase 2 onboarding): pick an empty
-    // folder, set a passphrase, then see the recovery key exactly
-    // once and confirm it is saved before entering the diary.
-    import * as api from '../api.js';
+    // Create-a-vault flow.
+    import * as api from '../../api.js';
 
     let { onDone, onCancel = null } = $props();
 
@@ -66,6 +64,7 @@
         }
     }
 </script>
+<style src="./Onboarding.css"></style>
 
 <div class="center-col">
     {#if step === 1}
@@ -102,17 +101,3 @@
 
     {#if error}<p class="error">{error}</p>{/if}
 </div>
-
-<style>
-    /* The recovery key is shown once, here, so its style lives here. */
-    .recovery-key {
-        font-family: ui-monospace, Menlo, monospace;
-        font-size: 1.25em;
-        letter-spacing: 0.08em;
-        text-align: center;
-        padding: 1rem;
-        border: 1px dashed currentColor;
-        border-radius: 8px;
-        word-break: break-all;
-    }
-</style>
