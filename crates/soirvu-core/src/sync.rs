@@ -786,18 +786,29 @@ impl Vault {
                 // vanish with the apply that found it. It
                 // rides in sync_overview until restamp or
                 // an explicit dismiss clears it.
+                // The claims are evidence too: a copy of
+                // this vault consumed those bundles, so
+                // their authors emitted at least that far —
+                // even though THIS vault never saw them.
+                // Only known peers' claims are persisted
+                // (see publish_ack): the rest raised the
+                // flag and go no further. The known set is
+                // read before the transaction opens.
+                let known = if ahead_peers.is_empty() {
+                    std::collections::BTreeSet::new()
+                } else {
+                    self.known_peers()?
+                };
                 let tx = self.db.conn_mut().transaction()?;
                 tx.execute(
                     "INSERT INTO meta (key, value) VALUES (?1, '1')
                      ON CONFLICT(key) DO UPDATE SET value = '1'",
                     params![ACK_AHEAD_KEY],
                 )?;
-                // The claims are evidence too: a copy of
-                // this vault consumed those bundles, so
-                // their authors emitted at least that far —
-                // even though THIS vault never saw them.
                 for (peer, to) in &ahead_peers {
-                    Self::note_claimed(&tx, peer, *to)?;
+                    if known.contains(peer.as_str()) {
+                        Self::note_claimed(&tx, peer, *to)?;
+                    }
                 }
                 tx.commit()?;
                 report.ack_ahead = Some(warning);
@@ -838,35 +849,23 @@ impl Vault {
         Ok(seen)
     }
 
-    /// Peers this vault has any first-hand tie to: a
-    /// cursor, evidence of either kind, or a bundle in
-    /// the folder. Claims are accepted only for these —
-    /// an unknown id in a plaintext file is not a peer,
-    /// it is just a string.
-    fn known_peers(
-        &self,
-        sync_dir: &Path,
-        vault_id: &str,
-    ) -> Result<std::collections::BTreeSet<String>> {
+    /// Peers this vault has a first-hand tie to: a
+    /// cursor or evidence, both of which come from
+    /// bundles it opened. Claim evidence is persisted
+    /// only for these — an unknown id in a plaintext
+    /// file is not a peer, it is just a string. (A file
+    /// NAME in the folder proves nothing: anyone who
+    /// can write the folder can name a file.)
+    fn known_peers(&self) -> Result<std::collections::BTreeSet<String>> {
         let mut known: std::collections::BTreeSet<String> =
             self.applied_cursors()?.into_keys().collect();
         known.extend(self.seen_emitted()?.into_keys());
-        let prefix = short(vault_id).to_string();
-        if let Ok(items) = fs::read_dir(sync_dir) {
-            for item in items.flatten() {
-                let name = item.file_name().to_string_lossy().into_owned();
-                if let Some((p, device, _, _)) = parse_bundle_name_full(&name) {
-                    if p == prefix {
-                        known.insert(device);
-                    }
-                }
-            }
-        }
         Ok(known)
     }
 
-    /// Records emission evidence for one peer: bundles
-    /// opened here, or an ack claim the detector read.
+    /// Records bundle-derived evidence for one peer:
+    /// a bundle this vault opened. Claim-derived
+    /// evidence has its own writer (note_claimed).
     fn note_seen(tx: &rusqlite::Transaction<'_>, peer: &str, to_lseq: i64) -> Result<()> {
         Self::note_point(tx, &format!("{SEEN_PREFIX}{peer}"), to_lseq)
     }
@@ -1013,21 +1012,27 @@ impl Vault {
                 return Ok(None);
             }
             if let Ok(file_ack) = serde_json::from_slice::<SyncAck>(&existing) {
-                // Only claims that will be persisted are
-                // collected, and they are validated at
-                // this boundary: a peer key must be a
-                // canonical device id (the ack is a
-                // plaintext file — junk keys must not
-                // become meta rows and phantom peers),
-                // never this device itself, only a peer
-                // this vault already knows (a stranger's
-                // id repeated a thousand times is still a
-                // stranger), and the count is capped.
-                // Detection rides on these validated
-                // claims alone: a file ahead only in junk
-                // or self claims is corrected silently —
-                // there is nothing actionable to report.
-                let known = self.known_peers(sync_dir, &ack.vault_id)?;
+                // Detection and persistence are separate
+                // gates. Detection — the warning and the
+                // flag — takes any claim that is a
+                // canonical device id, not this device,
+                // and ahead of the truth: a peer this
+                // vault has never seen can still have
+                // lost entries to a copy's claim, and
+                // silence there is the worst outcome. The
+                // flag is a single row, so forged ids
+                // cannot spam anything with it.
+                // Persistence of the claims as evidence
+                // is the narrow gate, applied by the
+                // caller: known peers only, so junk ids
+                // never become meta rows or phantom
+                // peers. (No cap on this list: it is
+                // transient, and a sorted cap would cut
+                // real peers out from behind forged ones;
+                // persistence is the bounded step.)
+                // A file ahead only in junk or
+                // self claims raises nothing: there is
+                // nothing actionable to report.
                 let ahead_peers: Vec<(String, i64)> = if file_ack.vault_id == ack.vault_id {
                     file_ack
                         .applied
@@ -1036,9 +1041,7 @@ impl Vault {
                             **to > ack.applied.get(peer.as_str()).copied().unwrap_or(0)
                                 && peer.as_str() != self.device_id
                                 && is_canonical_uuid(peer)
-                                && known.contains(peer.as_str())
                         })
-                        .take(64)
                         .map(|(peer, to)| (peer.clone(), *to))
                         .collect()
                 } else {
@@ -2659,7 +2662,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_and_junk_claims_are_not_persisted() {
+    fn unknown_claims_flag_but_do_not_persist() {
         let (_da, _db, mut a, _b) = two_devices();
         let sync = TempDir::new().unwrap();
         a.sync_apply(sync.path()).unwrap();
@@ -2673,21 +2676,56 @@ mod tests {
                 .insert(uuid::Uuid::now_v7().to_string(), 50);
         }
         fs::write(&ack_path, serde_json::to_vec(&file_ack).unwrap()).unwrap();
-        // None of the claimed peers is known to this
-        // vault: nothing persists, nothing flags, and the
-        // overview stays empty.
+        // Detection is the wide gate: canonical claims
+        // ahead of the truth raise the flag — a peer
+        // this vault has never seen can still have lost
+        // entries to a copy's claim. Persistence is the
+        // narrow gate: no rows, no phantom peers.
         let report = a.sync_apply(sync.path()).unwrap();
-        assert!(report.ack_ahead.is_none());
+        assert!(report.ack_ahead.is_some());
+        assert!(a.sync_overview().unwrap().ack_ahead_seen);
         assert!(a.sync_overview().unwrap().peers.is_empty());
+    }
+
+    #[test]
+    fn a_known_peer_persists_among_strangers() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        b.create_entry(&draft("y1")).unwrap();
+        b.sync_emit(sync.path()).unwrap().unwrap();
+        a.sync_apply(sync.path()).unwrap();
+        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
+        let mut file_ack: SyncAck =
+            serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
+        file_ack.applied.insert(b.device_id.clone(), 999);
+        for _ in 0..100 {
+            file_ack
+                .applied
+                .insert(uuid::Uuid::now_v7().to_string(), 50);
+        }
+        fs::write(&ack_path, serde_json::to_vec(&file_ack).unwrap()).unwrap();
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert!(report.ack_ahead.is_some());
+        let over = a.sync_overview().unwrap();
+        assert_eq!(over.peers.len(), 1);
+        assert_eq!(over.peers[0].device_id, b.device_id);
+        assert_eq!(over.peers[0].seen_emitted, 999);
     }
 
     #[test]
     fn a_claim_about_this_device_itself_is_not_persisted() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
+        a.create_entry(&draft("x")).unwrap();
+        a.sync_emit(sync.path()).unwrap().unwrap();
         b.create_entry(&draft("y1")).unwrap();
         b.sync_emit(sync.path()).unwrap().unwrap();
         a.sync_apply(sync.path()).unwrap();
+        // A copy's ack claims this device consumed its
+        // OWN stream to 50. This device's bundle is in
+        // the folder and its cursor for B exists — only
+        // the explicit self rule keeps the claim out of
+        // both detection and persistence.
         let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
         let mut file_ack: SyncAck =
             serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
