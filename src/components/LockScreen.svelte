@@ -3,23 +3,23 @@
     // passphrase or the recovery key. Missing vaults can be located
     // or forgotten here. Error text comes from the bridge's stable
     // codes — never from Rust error prose.
-    import * as api from "../api.js";
+    import * as api from '../api.js';
 
     let { vaults, onUnlocked, onVaultsChanged, onCreate } = $props();
 
     let selectedId = $state(null);
-    let kind = $state("passphrase");
-    let secret = $state("");
-    let error = $state("");
+    let kind = $state('passphrase');
+    let secret = $state('');
+    let error = $state('');
     let busy = $state(false);
     let forgetArmed = $state(null);
     let forkDest = $state(null);
-    let forkSecret = $state("");
+    let forkSecret = $state('');
     let forkKey = $state(null);
     let forkNewId = $state(null);
-    let forkError = $state("");
+    let forkError = $state('');
     let forkBusy = $state(false);
-    let note = $state("");
+    let note = $state('');
     let touchId = $state(null);
 
     const FS_WARNINGS = {
@@ -29,24 +29,22 @@
             "That folder is on a network share. The diary's database is unreliable over network filesystems — the vault is registered, but keeping it there is risky.",
     };
 
-    const selected = $derived(
-        vaults.find((v) => v.id === (selectedId ?? vaults[0]?.id)) ?? null,
-    );
+    const selected = $derived(vaults.find((v) => v.id === (selectedId ?? vaults[0]?.id)) ?? null);
 
     function describeError(e) {
-        if (typeof e === "string" && e.startsWith("backoff:")) {
-            return `Too many wrong attempts. Wait ${e.slice("backoff:".length)} seconds and try again.`;
+        if (typeof e === 'string' && e.startsWith('backoff:')) {
+            return `Too many wrong attempts. Wait ${e.slice('backoff:'.length)} seconds and try again.`;
         }
         return (
             {
-                wrong_passphrase: "Wrong passphrase or recovery key.",
-                invalid_recovery_key: "That does not look like a recovery key.",
-                storage: "The vault folder is not available right now.",
-                vault_not_found: "This vault is no longer in the list.",
-                vault_mismatch: "That folder holds a different vault.",
-                touch_id_unavailable: "Touch ID is not available for this diary right now.",
-                destination_not_empty: "That folder is not empty. Pick an empty folder for the restored diary.",
-                corrupt: "The vault looks damaged. The CLI can check it: soirvu-cli verify.",
+                wrong_passphrase: 'Wrong passphrase or recovery key.',
+                invalid_recovery_key: 'That does not look like a recovery key.',
+                storage: 'The vault folder is not available right now.',
+                vault_not_found: 'This vault is no longer in the list.',
+                vault_mismatch: 'That folder holds a different vault.',
+                touch_id_unavailable: 'Touch ID is not available for this diary right now.',
+                destination_not_empty: 'That folder is not empty. Pick an empty folder for the restored diary.',
+                corrupt: 'The vault looks damaged. The CLI can check it: soirvu-cli verify.',
             }[e] || `Something went wrong (${e}).`
         );
     }
@@ -54,10 +52,10 @@
     async function unlock() {
         if (!selected || !secret) return;
         busy = true;
-        error = "";
+        error = '';
         try {
             await api.vaultUnlock(selected.id, kind, secret);
-            secret = "";
+            secret = '';
             onUnlocked(selected);
         } catch (e) {
             error = describeError(e);
@@ -84,20 +82,20 @@
     async function unlockTouchId() {
         if (!selected) return;
         busy = true;
-        error = "";
+        error = '';
         try {
             await api.vaultUnlockTouchId(selected.id);
             onUnlocked(selected);
         } catch (e) {
             // A dismissed prompt is not an error to report.
-            if (e !== "touch_id_cancelled") error = describeError(e);
+            if (e !== 'touch_id_cancelled') error = describeError(e);
         } finally {
             busy = false;
         }
     }
 
     async function relocate(vault) {
-        error = "";
+        error = '';
         try {
             if (await api.vaultRelocate(vault.id)) onVaultsChanged();
         } catch (e) {
@@ -112,11 +110,11 @@
     }
 
     async function doFork() {
-        forkError = "";
+        forkError = '';
         forkBusy = true;
         try {
             const forked = await api.vaultForkImport(forkSecret);
-            forkSecret = "";
+            forkSecret = '';
             forkNewId = forked.vault_id;
             forkKey = forked.recovery_key;
             onVaultsChanged();
@@ -135,18 +133,18 @@
     }
 
     async function openAnother() {
-        error = "";
-        note = "";
+        error = '';
+        note = '';
         try {
-            const picked = await api.vaultPickFolder("open");
+            const picked = await api.vaultPickFolder('open');
             if (picked && picked.fork_required) {
                 forkDest = picked.name;
-                forkSecret = "";
-                forkError = "";
-                if (picked.warning) note = FS_WARNINGS[picked.warning] || "";
+                forkSecret = '';
+                forkError = '';
+                if (picked.warning) note = FS_WARNINGS[picked.warning] || '';
             } else if (picked) {
                 selectedId = picked.vault_id;
-                if (picked.warning) note = FS_WARNINGS[picked.warning] || "";
+                if (picked.warning) note = FS_WARNINGS[picked.warning] || '';
                 onVaultsChanged();
             }
         } catch (e) {
@@ -156,24 +154,21 @@
 </script>
 
 <div class="center-col">
-    <h1>Soirvu</h1>
-
     <div class="vault-list">
         {#each vaults as vault (vault.id)}
             <div class="vault-row">
                 <button
                     class="vault-name"
                     class:active={selected?.id === vault.id}
-                    onclick={() => (selectedId = vault.id)}
-                >
+                    onclick={() => (selectedId = vault.id)}>
                     {vault.name}
-                    {#if vault.state === "not_found"}<span class="missing"> — folder not found</span>{/if}
-                    {#if vault.state === "volume_missing"}<span class="missing"> — volume not mounted</span>{/if}
+                    {#if vault.state === 'not_found'}<span class="missing"> — folder not found</span>{/if}
+                    {#if vault.state === 'volume_missing'}<span class="missing"> — volume not mounted</span>{/if}
                 </button>
-                {#if vault.state === "not_found"}
+                {#if vault.state === 'not_found'}
                     <button onclick={() => relocate(vault)}>Locate…</button>
                 {/if}
-                {#if vault.state === "volume_missing"}
+                {#if vault.state === 'volume_missing'}
                     <button onclick={() => onVaultsChanged()}>Retry</button>
                 {/if}
                 {#if forgetArmed === vault.id}
@@ -185,21 +180,16 @@
         {/each}
     </div>
 
-    {#if selected && selected.state === "available"}
+    {#if selected && selected.state === 'available'}
         <div class="kind-toggle">
-            <button class:active={kind === "passphrase"} onclick={() => (kind = "passphrase")}>
-                Passphrase
-            </button>
-            <button class:active={kind === "recovery"} onclick={() => (kind = "recovery")}>
-                Recovery key
-            </button>
+            <button class:active={kind === 'passphrase'} onclick={() => (kind = 'passphrase')}> Passphrase </button>
+            <button class:active={kind === 'recovery'} onclick={() => (kind = 'recovery')}> Recovery key </button>
         </div>
         <input
             type="password"
-            placeholder={kind === "passphrase" ? "Passphrase" : "XXXX-XXXX-…"}
+            placeholder={kind === 'passphrase' ? 'Passphrase' : 'XXXX-XXXX-…'}
             bind:value={secret}
-            onkeydown={(e) => e.key === "Enter" && unlock()}
-        />
+            onkeydown={(e) => e.key === 'Enter' && unlock()} />
         <button onclick={unlock} disabled={busy || !secret}>Unlock</button>
         {#if touchId?.capable && touchId?.enrolled}
             <button onclick={unlockTouchId} disabled={busy}>Unlock with Touch ID</button>
@@ -216,15 +206,13 @@
     {:else if forkDest}
         <div class="fork-panel">
             <p>
-                “{forkDest}” is a copy of a diary you already have. To keep both, the copy
-                needs its own identity.
+                “{forkDest}” is a copy of a diary you already have. To keep both, the copy needs its own identity.
             </p>
             <input
                 type="password"
                 placeholder="The diary's passphrase"
                 bind:value={forkSecret}
-                onkeydown={(e) => e.key === "Enter" && doFork()}
-            />
+                onkeydown={(e) => e.key === 'Enter' && doFork()} />
             <button onclick={doFork} disabled={forkBusy || !forkSecret}>Make it a separate diary</button>
             <button class="quiet" onclick={() => (forkDest = null)}>Not now</button>
             {#if forkError}<p class="error">{forkError}</p>{/if}

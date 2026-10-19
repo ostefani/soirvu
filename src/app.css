@@ -87,7 +87,8 @@ button {
    components' own <style> blocks. */
 
 .center-col {
-    max-width: 26rem;
+    max-width: 500px;
+    min-width: 320px;
     margin: 0 auto 0;
     padding: 12vh 1rem;
     display: flex;

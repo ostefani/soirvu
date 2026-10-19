@@ -4,76 +4,48 @@
     // but "unlocked" (manual lock, idle lock) tears the diary down
     // and returns to the lock screen; the editor component's own
     // cleanup saves its tail first.
-    import { onMount } from "svelte";
-    import * as api from "./api.js";
-    import Onboarding from "./components/Onboarding.svelte";
-    import LockScreen from "./components/LockScreen.svelte";
-    import EntryList from "./components/EntryList.svelte";
-    import Calendar from "./components/Calendar.svelte";
-    import EntryEditor from "./components/EntryEditor.svelte";
-    import Settings from "./components/Settings.svelte";
+    import { onMount } from 'svelte';
+    import * as api from './api.js';
+    import Onboarding from './components/Onboarding.svelte';
+    import LockScreen from './components/LockScreen.svelte';
+    import Diary from './components/Diary.svelte';
 
-    let screen = $state("boot"); // boot | welcome | create | locked | diary
+    let screen = $state('boot'); // boot | welcome | create | locked | diary
     let vaults = $state([]);
     let currentVault = $state(null);
-    let selectedId = $state(null);
-    let listEl = $state(null);
-    let showSettings = $state(false);
-    let listDate = $state(null);
-    let calVersion = $state(0);
-    let onThisDay = $state([]);
-
-    async function loadOnThisDay() {
-        const now = new Date();
-        const pad = (n) => String(n).padStart(2, "0");
-        const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-        try {
-            onThisDay = await api.onThisDay(today);
-        } catch {
-            onThisDay = [];
-        }
-    }
-
-    $effect(() => {
-        if (screen === "diary") {
-            void calVersion;
-            loadOnThisDay();
-        }
-    });
-    let welcomeNote = $state("");
+    let welcomeNote = $state('');
 
     async function refresh() {
         vaults = await api.vaultList();
-        const open = vaults.find((v) => v.state === "unlocked");
+        const open = vaults.find((v) => v.state === 'unlocked');
         if (open) {
             currentVault = open;
-            screen = "diary";
+            screen = 'diary';
         } else if (vaults.length === 0) {
-            screen = "welcome";
+            screen = 'welcome';
         } else {
             currentVault = null;
-            screen = "locked";
+            screen = 'locked';
         }
     }
 
     onMount(async () => {
         await api.onVaultStatus(async ({ status }) => {
-            if (status !== "unlocked") {
-                selectedId = null;
+            if (status !== 'unlocked') {
                 await refresh();
             }
         });
         // §9 clipboard clearing: report copies; Rust checks the
         // setting and clears after 30 s if the clipboard is
         // untouched since. The content is never read.
-        document.addEventListener("copy", () => {
+        document.addEventListener('copy', () => {
             api.clipboardNoteCopy().catch(() => {});
         });
         // Manual lock (§9): Cmd/Ctrl+Shift+L from anywhere in
         // the diary. The shell lives for the app's lifetime and
         // the document reloads on lock, so no cleanup is needed.
-        window.addEventListener("keydown", (e) => {
-            if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "l" && screen === "diary") {
+        window.addEventListener('keydown', (e) => {
+            if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'l' && screen === 'diary') {
                 e.preventDefault();
                 lock();
             }
@@ -89,17 +61,16 @@
     };
 
     async function openExisting() {
-        welcomeNote = "";
-        const picked = await api.vaultPickFolder("open");
+        welcomeNote = '';
+        const picked = await api.vaultPickFolder('open');
         if (picked) {
-            if (picked.warning) welcomeNote = FS_WARNINGS[picked.warning] || "";
+            if (picked.warning) welcomeNote = FS_WARNINGS[picked.warning] || '';
             await refresh();
         }
     }
 
     async function lock() {
         await api.vaultLock();
-        selectedId = null;
         await refresh();
     }
     // The drop safety net: a file dropped anywhere no
@@ -116,149 +87,20 @@
 
 <svelte:window ondragover={swallowDrop} ondrop={swallowDrop} />
 
-{#if screen === "boot"}
+{#if screen === 'boot'}
     <p class="note">Starting…</p>
-{:else if screen === "welcome"}
+{:else if screen === 'welcome'}
     <div class="center-col">
-        <h1>Soirvu</h1>
         <p>An encrypted diary. It lives in a folder you choose; nothing leaves your machine.</p>
-        <button onclick={() => (screen = "create")}>Create a new diary</button>
+        <button onclick={() => (screen = 'create')}>Create a new diary</button>
         <button class="quiet" onclick={openExisting}>Open an existing diary folder…</button>
         {#if welcomeNote}<p class="note">{welcomeNote}</p>{/if}
     </div>
-{:else if screen === "create"}
+{:else if screen === 'create'}
     <Onboarding onDone={refresh} onCancel={vaults.length > 0 ? refresh : undefined} />
-{:else if screen === "locked"}
-    <LockScreen {vaults} onUnlocked={refresh} onVaultsChanged={refresh} onCreate={() => (screen = "create")} />
-{:else if screen === "diary"}
-    <div class="diary">
-        <header class="diary-head">
-            <span class="vault-label">{currentVault?.name}</span>
-            <span>
-                <button class="quiet" onclick={() => (showSettings = true)}>Settings</button>
-                <button class="quiet" onclick={lock}>Lock</button>
-            </span>
-        </header>
-        <div class="diary-body">
-            <aside>
-                <EntryList
-                    bind:this={listEl}
-                    selectedId={selectedId}
-                    onSelect={(id) => (selectedId = id)}
-                    date={listDate}
-                    onClearDate={() => (listDate = null)}
-                />
-            </aside>
-            <main>
-                {#if showSettings}
-                    <Settings
-                        onBack={() => (showSettings = false)}
-                        onImported={() => {
-                            listEl?.refresh();
-                            calVersion++;
-                        }}
-                    />
-                {:else if selectedId}
-                    {#key selectedId}
-                        <EntryEditor
-                            entryId={selectedId}
-                            onBack={() => (selectedId = null)}
-                            onDeleted={() => {
-                                selectedId = null;
-                                listEl?.refresh();
-                                calVersion++;
-                            }}
-                            onSaved={() => {
-                                listEl?.refresh();
-                                calVersion++;
-                            }}
-                        />
-                    {/key}
-                {:else}
-                    <div class="calendar-home">
-                        <Calendar large selectedDate={listDate} onSelect={(d) => (listDate = d)} version={calVersion} />
-                        <p class="note">Pick a day to see its entries in the list — or pick a recent entry on the left.</p>
-                        {#if onThisDay.length}
-                            <div class="on-this-day">
-                                <h3>On this day</h3>
-                                {#each onThisDay as entry (entry.id)}
-                                    <button class="otd-row" onclick={() => (selectedId = entry.id)}>
-                                        <span class="otd-year">{entry.entry_date.slice(0, 4)}</span>
-                                        <span>{entry.title || "Untitled"}</span>
-                                    </button>
-                                {/each}
-                            </div>
-                        {/if}
-                    </div>
-                {/if}
-            </main>
-        </div>
-    </div>
+{:else if screen === 'locked'}
+    <LockScreen {vaults} onUnlocked={refresh} onVaultsChanged={refresh} onCreate={() => (screen = 'create')} />
+{:else if screen === 'diary'}
+    <Diary vault={currentVault} onLock={lock} />
+
 {/if}
-
-<style>
-    /* The diary shell: header bar and the two-pane body. */
-    .diary {
-        display: flex;
-        flex-direction: column;
-        height: 100vh;
-    }
-
-    .diary-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 0.5rem 1rem;
-        border-bottom: 1px solid rgba(127, 127, 127, 0.35);
-    }
-
-    .vault-label {
-        font-weight: 600;
-    }
-
-    .diary-body {
-        display: flex;
-        flex: 1;
-        min-height: 0;
-    }
-
-    .diary-body aside {
-        width: 19rem;
-        flex-shrink: 0;
-        border-right: 1px solid rgba(127, 127, 127, 0.35);
-        overflow-y: auto;
-    }
-
-    .diary-body main {
-        flex: 1;
-        overflow-y: auto;
-        padding: 1rem 1.5rem;
-    }
-    .on-this-day {
-        width: 100%;
-        max-width: 620px;
-        margin-top: 1.5rem;
-        text-align: left;
-    }
-
-    .on-this-day h3 {
-        margin: 0 0 0.4rem;
-        font-size: 1rem;
-    }
-
-    .otd-row {
-        display: flex;
-        gap: 0.75rem;
-        width: 100%;
-        text-align: left;
-        background: none;
-        border: none;
-        padding: 0.35rem 0.25rem;
-        cursor: pointer;
-    }
-
-    .otd-year {
-        opacity: 0.55;
-        font-variant-numeric: tabular-nums;
-    }
-</style>

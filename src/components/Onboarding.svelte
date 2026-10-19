@@ -2,13 +2,13 @@
     // Create-a-vault flow (§13 Phase 2 onboarding): pick an empty
     // folder, set a passphrase, then see the recovery key exactly
     // once and confirm it is saved before entering the diary.
-    import * as api from "../api.js";
+    import * as api from '../api.js';
 
     let { onDone, onCancel = null } = $props();
 
     let step = $state(1); // 1 folder, 2 passphrase, 3 recovery key
-    let folderName = $state("");
-    let warning = $state("");
+    let folderName = $state('');
+    let warning = $state('');
 
     const FS_WARNINGS = {
         cloud_sync:
@@ -16,47 +16,48 @@
         network_fs:
             "This folder is on a network share. The diary's database (SQLite) is unreliable over network filesystems. You can continue, but a local folder is safer.",
     };
-    let passphrase = $state("");
-    let confirm = $state("");
-    let recoveryKey = $state("");
+    let passphrase = $state('');
+    let confirm = $state('');
+    let recoveryKey = $state('');
     let saved = $state(false);
-    let error = $state("");
+    let error = $state('');
     let busy = $state(false);
 
     const ERRORS = {
         folder_not_empty:
-            "That folder is not empty. A vault needs an empty folder — pick one, or create a new subfolder for it.",
-        empty_passphrase: "The passphrase must not be empty.",
-        no_folder_picked: "Pick a folder first.",
-        storage: "The vault could not be written there. Is the folder writable?",
+            'That folder is not empty. A vault needs an empty folder — pick one, or create a new subfolder for it.',
+        empty_passphrase: 'The passphrase must not be empty.',
+        no_folder_picked: 'Pick a folder first.',
+        storage: 'The vault could not be written there. Is the folder writable?',
     };
 
     async function pick() {
-        error = "";
-        const picked = await api.vaultPickFolder("create");
+        error = '';
+        const picked = await api.vaultPickFolder('create');
         if (picked) {
             folderName = picked.name;
-            warning = picked.warning ? FS_WARNINGS[picked.warning] || "" : "";
+            warning = picked.warning ? FS_WARNINGS[picked.warning] || '' : '';
             step = 2;
         }
     }
 
     async function create() {
-        error = "";
+        error = '';
         if (passphrase.length < 8) {
-            error = "Use at least 8 characters — longer is better. This passphrase is the only protection the diary has.";
+            error =
+                'Use at least 8 characters — longer is better. This passphrase is the only protection the diary has.';
             return;
         }
         if (passphrase !== confirm) {
-            error = "The two passphrases do not match.";
+            error = 'The two passphrases do not match.';
             return;
         }
         busy = true;
         try {
             const created = await api.vaultCreate(passphrase);
             recoveryKey = created.recovery_key;
-            passphrase = "";
-            confirm = "";
+            passphrase = '';
+            confirm = '';
             step = 3;
         } catch (e) {
             error = ERRORS[e] || `Something went wrong (${e}).`;
@@ -67,8 +68,6 @@
 </script>
 
 <div class="center-col">
-    <h1>Soirvu</h1>
-
     {#if step === 1}
         <p>Create your diary in a folder you choose. Everything in it is encrypted.</p>
         <button onclick={pick}>Choose an empty folder…</button>
@@ -86,9 +85,8 @@
         <button onclick={create} disabled={busy}>Create the diary</button>
     {:else}
         <p>
-            This is your <strong>recovery key</strong>. If you forget the passphrase,
-            it is the only way back in. The app does not keep a copy — write it down
-            and keep it somewhere safe.
+            This is your <strong>recovery key</strong>. If you forget the passphrase, it is the only way back in. The
+            app does not keep a copy — write it down and keep it somewhere safe.
         </p>
         <p class="recovery-key">{recoveryKey}</p>
         <label class="check">
