@@ -1,5 +1,5 @@
 ---
-source: src/commands/contract.rs
+source: src-tauri/src/commands/contract.rs
 expression: json
 ---
 {
@@ -15,5 +15,6 @@ expression: json
   },
   "backup_location": null,
   "vault_location": null,
-  "platform": ""
+  "platform": "",
+  "sync_location": null
 }

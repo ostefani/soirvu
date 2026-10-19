@@ -1,0 +1,9 @@
+---
+source: src-tauri/src/commands/contract.rs
+expression: json
+---
+{
+  "bundles_removed": 1,
+  "blobs_removed": 0,
+  "covered_through": 40
+}

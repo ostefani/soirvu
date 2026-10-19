@@ -1,6 +1,5 @@
 ---
 source: src-tauri/src/commands/contract.rs
-assertion_line: 22
 expression: json
 ---
 {

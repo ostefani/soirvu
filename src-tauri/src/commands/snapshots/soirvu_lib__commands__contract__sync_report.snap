@@ -1,0 +1,16 @@
+---
+source: src-tauri/src/commands/contract.rs
+expression: json
+---
+{
+  "bundles_seen": 2,
+  "bundles_applied": 2,
+  "entries_applied": 5,
+  "entries_conflicted": 1,
+  "attachments_applied": 1,
+  "problems": [
+    "attachment 0190a1b2: its blob is missing from the sync folder"
+  ],
+  "warnings": [],
+  "ack_ahead": null
+}

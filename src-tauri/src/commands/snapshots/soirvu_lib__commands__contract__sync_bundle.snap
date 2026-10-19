@@ -1,0 +1,11 @@
+---
+source: src-tauri/src/commands/contract.rs
+expression: json
+---
+{
+  "file_name": "01234567-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa-41-42.sync",
+  "from_lseq": 41,
+  "to_lseq": 42,
+  "entries": 2,
+  "attachments": 1
+}
