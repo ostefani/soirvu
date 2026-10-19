@@ -77,6 +77,10 @@ const APPLIED_PREFIX: &str = "sync_applied:";
 const SEEN_PREFIX: &str = "sync_seen:";
 const CLAIMED_PREFIX: &str = "sync_claimed:";
 const ACK_FORMAT: u32 = 1;
+/// An ack is ids and counters — a few hundred bytes in
+/// practice, a few KB with a hundred peers. Anything
+/// larger is not an ack; it is not read into memory.
+const ACK_MAX_BYTES: u64 = 65_536;
 const ACK_DIR: &str = "acks";
 
 /// What one emit produced (or None when nothing changed).
@@ -275,6 +279,7 @@ fn read_acks(sync_dir: &Path, vault_id: &str) -> Vec<SyncAck> {
         for item in items.flatten() {
             let path = item.path();
             if path.extension().is_some_and(|e| e == "json")
+                && fs::metadata(&path).map(|m| m.len() <= ACK_MAX_BYTES).unwrap_or(false)
                 && let Ok(bytes) = fs::read(&path)
                 && let Ok(ack) = serde_json::from_slice::<SyncAck>(&bytes)
                 && ack.format == ACK_FORMAT
@@ -779,39 +784,50 @@ impl Vault {
         // folder that cannot be written cannot be
         // corrected either, so the failure warning below
         // is the whole signal for that case.
+        // Read before the publish: nothing that happens
+        // after the ack file is corrected may take the
+        // detection down with it. A failed read degrades
+        // to an empty set (no claims persisted) — the
+        // detection itself is unaffected.
+        let known = self.known_peers().unwrap_or_default();
         match self.publish_ack(sync_dir) {
             Ok(Some((warning, ahead_peers))) => {
-                // Durable: the publish just corrected the
-                // file, so without a flag the signal would
-                // vanish with the apply that found it. It
-                // rides in sync_overview until restamp or
-                // an explicit dismiss clears it.
-                // The claims are evidence too: a copy of
-                // this vault consumed those bundles, so
-                // their authors emitted at least that far —
-                // even though THIS vault never saw them.
-                // Only known peers' claims are persisted
-                // (see publish_ack): the rest raised the
-                // flag and go no further. The known set is
-                // read before the transaction opens.
-                let known = if ahead_peers.is_empty() {
-                    std::collections::BTreeSet::new()
+                // The report carries the detection first;
+                // persisting it durably is best-effort on
+                // top (see persist_ack_ahead).
+                // The warning names the claimed peers
+                // (short ids, at most five, known peers
+                // first): a claim about a peer this vault
+                // has never seen persists no row, so this
+                // message is the only place that says who
+                // must re-emit.
+                report.ack_ahead = Some(if ahead_peers.is_empty() {
+                    warning
                 } else {
-                    self.known_peers()?
-                };
-                let tx = self.db.conn_mut().transaction()?;
-                tx.execute(
-                    "INSERT INTO meta (key, value) VALUES (?1, '1')
-                     ON CONFLICT(key) DO UPDATE SET value = '1'",
-                    params![ACK_AHEAD_KEY],
-                )?;
-                for (peer, to) in &ahead_peers {
-                    if known.contains(peer.as_str()) {
-                        Self::note_claimed(&tx, peer, *to)?;
+                    let mut named: Vec<&str> = Vec::new();
+                    for (peer, _) in ahead_peers
+                        .iter()
+                        .filter(|(p, _)| known.contains(p.as_str()))
+                        .chain(
+                            ahead_peers
+                                .iter()
+                                .filter(|(p, _)| !known.contains(p.as_str())),
+                        )
+                    {
+                        if named.len() == 5 {
+                            break;
+                        }
+                        named.push(&peer[..8]);
                     }
+                    let suffix = if ahead_peers.len() > 5 { ", …" } else { "" };
+                    format!("{warning} (claimed for: {}{suffix})", named.join(", "))
+                });
+                if let Err(e) = self.persist_ack_ahead(&known, &ahead_peers) {
+                    report.warnings.push(format!(
+                        "the ahead note could not be saved ({e}); \
+                         it is in this report, but will not be shown again"
+                    ));
                 }
-                tx.commit()?;
-                report.ack_ahead = Some(warning);
             }
             Ok(None) => {}
             Err(e) => report.warnings.push(format!(
@@ -990,6 +1006,32 @@ impl Vault {
     /// the apply path a detector the bundle index can't
     /// be: an apply-only copy leaves no bundle behind,
     /// but it moves the ack, and the move shows here.
+    /// Makes an ack-ahead detection durable: the flag,
+    /// plus the claims as evidence for known peers (a
+    /// copy of this vault consumed those bundles, so
+    /// their authors emitted at least that far — even
+    /// though THIS vault never saw them; claims about
+    /// unknown peers raised the flag and go no further).
+    fn persist_ack_ahead(
+        &mut self,
+        known: &std::collections::BTreeSet<String>,
+        ahead_peers: &[(String, i64)],
+    ) -> Result<()> {
+        let tx = self.db.conn_mut().transaction()?;
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, '1')
+             ON CONFLICT(key) DO UPDATE SET value = '1'",
+            params![ACK_AHEAD_KEY],
+        )?;
+        for (peer, to) in ahead_peers {
+            if known.contains(peer.as_str()) {
+                Self::note_claimed(&tx, peer, *to)?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     fn publish_ack(&self, sync_dir: &Path) -> Result<Option<(String, Vec<(String, i64)>)>> {
         let applied = self.applied_cursors()?;
         let ack = SyncAck {
@@ -1002,7 +1044,21 @@ impl Vault {
         let acks_dir = sync_dir.join(ACK_DIR);
         let dest = acks_dir.join(format!("{}.json", self.device_id));
         let mut warning = None;
-        if let Ok(existing) = fs::read(&dest) {
+        let oversized = fs::metadata(&dest)
+            .map(|m| m.len() > ACK_MAX_BYTES)
+            .unwrap_or(false);
+        if oversized {
+            // Not readable as an ack at all: it is
+            // replaced below like any stale file, and
+            // the replacement is reported — without
+            // claims, since none could be read.
+            warning = Some((
+                "an ack file in the folder is too large to be an ack and \
+                 was replaced with this device's own"
+                    .to_string(),
+                Vec::new(),
+            ));
+        } else if let Ok(existing) = fs::read(&dest) {
             // Write only what changed: republishing an
             // identical ack would make folder mirrors
             // re-copy the file on every sync, and the
@@ -2705,7 +2761,10 @@ mod tests {
         }
         fs::write(&ack_path, serde_json::to_vec(&file_ack).unwrap()).unwrap();
         let report = a.sync_apply(sync.path()).unwrap();
-        assert!(report.ack_ahead.is_some());
+        assert!(report
+            .ack_ahead
+            .as_deref()
+            .is_some_and(|t| t.contains(&b.device_id[..8])));
         let over = a.sync_overview().unwrap();
         assert_eq!(over.peers.len(), 1);
         assert_eq!(over.peers[0].device_id, b.device_id);
@@ -2739,5 +2798,31 @@ mod tests {
             .peers
             .iter()
             .all(|p| p.device_id != a.device_id));
+    }
+
+    #[test]
+    fn an_oversized_ack_is_replaced_and_reported() {
+        let (_da, _db, mut a, _b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        a.sync_apply(sync.path()).unwrap();
+        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
+        // A real ack's shape, padded past the size bound
+        // with a junk field serde would otherwise ignore:
+        // the bound is on bytes, before any parsing.
+        let raw = format!(
+            "{{\"format\":1,\"vault_id\":\"{}\",\"device_id\":\"{}\",\"applied\":{{}},\"pad\":\"{}\"}}",
+            a.header().vault_id,
+            a.device_id,
+            "x".repeat(70_000)
+        );
+        fs::write(&ack_path, raw).unwrap();
+        let report = a.sync_apply(sync.path()).unwrap();
+        let ahead = report.ack_ahead.expect("oversized must be reported");
+        assert!(ahead.contains("too large"), "{ahead}");
+        // The file is corrected: this device's own ack,
+        // parseable and back under the bound.
+        let now = fs::read(&ack_path).unwrap();
+        assert!(now.len() <= ACK_MAX_BYTES as usize);
+        assert!(serde_json::from_slice::<SyncAck>(&now).is_ok());
     }
 }
