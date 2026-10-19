@@ -74,3 +74,29 @@ export const fields = {
     },
 };
 
+
+export const ACTIONS = {
+    'save-timeout': { name: 'save-timeout', label: 'Save lock timeout' },
+    'backup-pick': { name: 'backup-pick', label: 'Choose backup folder…' },
+    'backup-clear': { name: 'backup-clear', label: 'Clear', kind: 'quiet' },
+    'backup-now': { name: 'backup-now', label: 'Back up now' },
+    'change-passphrase': { name: 'change-passphrase', label: 'Change passphrase' },
+    'regenerate-recovery': { name: 'regenerate-recovery', label: 'Regenerate recovery key', kind: 'quiet' },
+    'rotate': { name: 'rotate', label: 'Change master key…', kind: 'quiet' },
+    'rotate-done': { name: 'rotate-done', label: 'Done — go to the lock screen' },
+    'export-markdown': { name: 'export-markdown', label: 'Export as Markdown…' },
+    'export-json': { name: 'export-json', label: 'Export as JSON…' },
+    'import-markdown': { name: 'import-markdown', label: 'Import Markdown folder…' },
+    'import-json': { name: 'import-json', label: 'Import JSON file…' },
+    'sync-pick': { name: 'sync-pick', label: 'Choose sync folder…' },
+    'sync-clear': { name: 'sync-clear', label: 'Clear', kind: 'quiet' },
+    'sync-emit': { name: 'sync-emit', label: 'Emit changes' },
+    'sync-reemit': { name: 'sync-reemit', label: 'Re-emit everything', kind: 'quiet' },
+    'sync-apply': { name: 'sync-apply', label: 'Apply' },
+    'sync-prune': { name: 'sync-prune', label: 'Yes — prune' },
+    'sync-prune-cancel': { name: 'sync-prune-cancel', label: 'Cancel', kind: 'quiet' },
+    'sync-prune-arm': { name: 'sync-prune-arm', label: 'Prune old bundles', kind: 'quiet' },
+    'restamp': { name: 'restamp', label: 'Yes — give this copy a new identity' },
+    'restamp-cancel': { name: 'restamp-cancel', label: 'Cancel', kind: 'quiet' },
+    'restamp-arm': { name: 'restamp-arm', label: 'Restamp device identity…', kind: 'quiet' },
+};

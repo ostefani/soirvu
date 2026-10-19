@@ -11,7 +11,7 @@
         createSyncModel,
         createTouchIdModel,
     } from './settingsModel.js';
-    import { copy, fields } from './SettingsScreenContainer.copy.js';
+    import { ACTIONS, copy, fields } from './constants.js';
 
     let { onBack, onImported = null } = $props();
 
@@ -453,87 +453,64 @@
 
 
     const actions = $derived({
-        security: [
-            {
-                name: 'change-passphrase',
-                label: 'Change passphrase',
-                handler: changePassphrase,
-                disabled: security.busy || !security.curPass || !security.newPass || security.newPass !== security.newPass2,
-            },
-            {
-                name: 'regenerate-recovery',
-                label: 'Regenerate recovery key',
-                kind: 'quiet',
-                handler: regenerateRecovery,
-                disabled: security.busy || !security.curPass,
-            },
-        ],
-        rotate: [
-            {
-                name: 'rotate',
-                label: 'Change master key…',
-                kind: 'quiet',
-                handler: rotateMasterKey,
-                disabled: security.busy || !security.curPass,
-            },
-            ...(security.rotated
-                ? [{ name: 'rotate-done', label: 'Done — go to the lock screen', handler: () => api.vaultLock() }]
-                : []),
-        ],
-        export: [
-            {
-                name: 'export-markdown',
-                label: 'Export as Markdown…',
-                handler: () => runExport('markdown'),
-                disabled: exp.busy || !exp.pass,
-            },
-            {
-                name: 'export-json',
-                label: 'Export as JSON…',
-                handler: () => runExport('json'),
-                disabled: exp.busy || !exp.pass,
-            },
-        ],
-        import: [
-            { name: 'import-markdown', label: 'Import Markdown folder…', handler: () => runImport('markdown'), disabled: imp.busy },
-            { name: 'import-json', label: 'Import JSON file…', handler: () => runImport('json'), disabled: imp.busy },
-        ],
-        syncFolder: [
-            { name: 'sync-pick', label: 'Choose sync folder…', handler: pickSync },
-            ...(general.settings?.sync_location
-                ? [{ name: 'sync-clear', label: 'Clear', kind: 'quiet', handler: clearSync }]
-                : []),
-        ],
+        security: ['change-passphrase', 'regenerate-recovery'],
+        rotate: ['rotate', ...(security.rotated ? ['rotate-done'] : [])],
+        export: ['export-markdown', 'export-json'],
+        import: ['import-markdown', 'import-json'],
+        syncFolder: ['sync-pick', ...(general.settings?.sync_location ? ['sync-clear'] : [])],
         syncOps: [
-            { name: 'sync-emit', label: 'Emit changes', handler: runSyncEmit, disabled: sync.busy },
-            { name: 'sync-reemit', label: 'Re-emit everything', kind: 'quiet', handler: runSyncReemit, disabled: sync.busy },
-            { name: 'sync-apply', label: 'Apply', handler: runSyncApply, disabled: sync.busy },
-            ...(sync.pruneArm
-                ? [
-                      { name: 'sync-prune', label: 'Yes — prune', handler: runSyncPrune, disabled: sync.busy },
-                      { name: 'sync-prune-cancel', label: 'Cancel', kind: 'quiet', handler: () => (sync.pruneArm = false) },
-                  ]
-                : [{ name: 'sync-prune-arm', label: 'Prune old bundles', kind: 'quiet', handler: () => (sync.pruneArm = true) }]),
+            'sync-emit',
+            'sync-reemit',
+            'sync-apply',
+            ...(sync.pruneArm ? ['sync-prune', 'sync-prune-cancel'] : ['sync-prune-arm']),
         ],
-        restamp: sync.restampArm
-            ? [
-                  { name: 'restamp', label: 'Yes — give this copy a new identity', handler: doRestamp, disabled: sync.busy },
-                  { name: 'restamp-cancel', label: 'Cancel', kind: 'quiet', handler: () => (sync.restampArm = false) },
-              ]
-            : [{ name: 'restamp-arm', label: 'Restamp device identity…', kind: 'quiet', handler: () => (sync.restampArm = true) }],
-        backupFolder: [
-            { name: 'backup-pick', label: 'Choose backup folder…', handler: pickBackup },
-            ...(general.settings?.backup_location
-                ? [{ name: 'backup-clear', label: 'Clear', kind: 'quiet', handler: clearBackup }]
-                : []),
-        ],
-        backupNow: [
-            { name: 'backup-now', label: 'Back up now', handler: backUpNow, disabled: !general.settings?.backup_location },
-        ],
-        timeout: [{ name: 'save-timeout', label: 'Save lock timeout', handler: saveTimeout }],
+        restamp: sync.restampArm ? ['restamp', 'restamp-cancel'] : ['restamp-arm'],
+        backupFolder: ['backup-pick', ...(general.settings?.backup_location ? ['backup-clear'] : [])],
+        backupNow: ['backup-now'],
+        timeout: ['save-timeout'],
+    });
+
+    const disabled = $derived({
+        'change-passphrase':
+            security.busy || !security.curPass || !security.newPass || security.newPass !== security.newPass2,
+        'regenerate-recovery': security.busy || !security.curPass,
+        'rotate': security.busy || !security.curPass,
+        'export-markdown': exp.busy || !exp.pass,
+        'export-json': exp.busy || !exp.pass,
+        'import-markdown': imp.busy,
+        'import-json': imp.busy,
+        'sync-emit': sync.busy,
+        'sync-reemit': sync.busy,
+        'sync-apply': sync.busy,
+        'sync-prune': sync.busy,
+        'restamp': sync.busy,
+        'backup-now': !general.settings?.backup_location,
     });
 
     const handlers = {
+        'save-timeout': saveTimeout,
+        'change-passphrase': changePassphrase,
+        'regenerate-recovery': regenerateRecovery,
+        'rotate': rotateMasterKey,
+        'rotate-done': () => api.vaultLock(),
+        'export-markdown': () => runExport('markdown'),
+        'export-json': () => runExport('json'),
+        'import-markdown': () => runImport('markdown'),
+        'import-json': () => runImport('json'),
+        'sync-pick': pickSync,
+        'sync-clear': clearSync,
+        'sync-emit': runSyncEmit,
+        'sync-reemit': runSyncReemit,
+        'sync-apply': runSyncApply,
+        'sync-prune': runSyncPrune,
+        'sync-prune-cancel': () => (sync.pruneArm = false),
+        'sync-prune-arm': () => (sync.pruneArm = true),
+        'restamp': doRestamp,
+        'restamp-cancel': () => (sync.restampArm = false),
+        'restamp-arm': () => (sync.restampArm = true),
+        'backup-pick': pickBackup,
+        'backup-clear': clearBackup,
+        'backup-now': backUpNow,
         saveStrip,
         saveClipboard,
         saveSchedule,
@@ -545,5 +522,5 @@
 <style src="./SettingsScreenContainer.css"></style>
 
 <div class="settings-screen">
-    <Settings bind:general bind:security bind:exp bind:timeoutMin {touchId} {imp} {sync} {copy} {fields} {actions} {handlers} {onBack} />
+    <Settings bind:general bind:security bind:exp bind:timeoutMin {touchId} {imp} {sync} {copy} {fields} {ACTIONS} {actions} {disabled} {handlers} {onBack} />
 </div>

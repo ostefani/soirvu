@@ -16,7 +16,9 @@
         sync,
         copy,
         fields,
+        ACTIONS,
         actions,
+        disabled,
         handlers,
         onBack,
     } = $props();
@@ -33,8 +35,8 @@
         </p>
 
         <Input field={fields.timeout} bind:value={timeoutMin} />
-        {#each actions.timeout as action (action.name)}
-            <Button {...action} />
+        {#each actions.timeout as action (action)}
+            <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
         {/each}
 
         <label>
@@ -58,16 +60,16 @@
             {/if}
         </p>
         <div class="row">
-            {#each actions.backupFolder as action (action.name)}
-                <Button {...action} />
+            {#each actions.backupFolder as action (action)}
+                <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
             {/each}
         </div>
 
         <Select field={fields.schedule} bind:value={general.settings.backup_schedule} onchange={handlers.saveSchedule} />
 
         <div class="row">
-            {#each actions.backupNow as action (action.name)}
-                <Button {...action} />
+            {#each actions.backupNow as action (action)}
+                <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
             {/each}
         </div>
         {#each copy.backupNotes as text}
@@ -81,14 +83,14 @@
         {/each}
 
         <div class="row">
-            {#each actions.security as action (action.name)}
-                <Button {...action} />
+            {#each actions.security as action (action)}
+                <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
             {/each}
         </div>
 
         <div class="row">
-            {#each actions.rotate as action (action.name)}
-                <Button {...action} />
+            {#each actions.rotate as action (action)}
+                <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
             {/each}
         </div>
 
@@ -135,8 +137,8 @@
         <NoteComponent text={copy.exportIntro} />
         <Input field={fields.exportPass} bind:value={exp.pass} />
         <div class="row">
-            {#each actions.export as action (action.name)}
-                <Button {...action} />
+            {#each actions.export as action (action)}
+                <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
             {/each}
         </div>
         {#each copy.exportNotes as text}
@@ -147,8 +149,8 @@
         <h3>{copy.importTitle}</h3>
         <NoteComponent text={copy.importIntro} />
         <div class="row">
-            {#each actions.import as action (action.name)}
-                <Button {...action} />
+            {#each actions.import as action (action)}
+                <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
             {/each}
         </div>
         <NoteComponent text={imp.note} />
@@ -164,8 +166,8 @@
             {/if}
         </p>
         <div class="row">
-            {#each actions.syncFolder as action (action.name)}
-                <Button {...action} />
+            {#each actions.syncFolder as action (action)}
+                <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
             {/each}
         </div>
         {#if general.settings.sync_location && sync.info}
@@ -191,8 +193,8 @@
                 </p>
             {/each}
             <div class="row">
-                {#each actions.syncOps as action (action.name)}
-                    <Button {...action} />
+                {#each actions.syncOps as action (action)}
+                    <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
                 {/each}
             </div>
             {#if sync.pruneArm}
@@ -213,8 +215,8 @@
         {/if}
         <NoteComponent text={copy.restampIntro} />
         <div class="row">
-            {#each actions.restamp as action (action.name)}
-                <Button {...action} />
+            {#each actions.restamp as action (action)}
+                <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
             {/each}
         </div>
         <NoteComponent text={sync.restampNote} />
