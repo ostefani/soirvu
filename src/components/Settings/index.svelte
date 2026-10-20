@@ -6,6 +6,9 @@
     import NoteComponent from '@/components/NoteComponent/index.svelte';
     import WarningComponent from '@/components/WarningComponent/index.svelte';
     import Tabs from '@/components/Tabs/index.svelte';
+    import Checkbox from '@/components/Checkbox/index.svelte';
+    import Description from '@/components/Description/index.svelte';
+    import Notification from '@/components/Notification/index.svelte';
 
     let {
         general = $bindable(),
@@ -46,7 +49,7 @@
                 <div class="settings-card">
                     <div class="card-header">
                         <h3 class="card-title">Diary Storage & Inactivity Lock</h3>
-                        <p class="card-description">View storage location and configure automatic locking.</p>
+                        <Description text="View storage location and configure automatic locking." />
                     </div>
 
                     <div class="setting-item">
@@ -71,48 +74,42 @@
                 <div class="settings-card">
                     <div class="card-header">
                         <h3 class="card-title">Privacy & Clipboard</h3>
-                        <p class="card-description">Control location metadata handling and clipboard auto-clearing.</p>
+                        <Description text="Control location metadata handling and clipboard auto-clearing." />
                     </div>
 
                     <div class="checkbox-group">
-                        <label class="checkbox-label">
-                            <input
-                                type="checkbox"
-                                bind:checked={general.settings.strip_exif}
-                                onchange={handlers.saveStrip} />
-                            <span>{settingsText.stripExif}</span>
-                        </label>
+                        <Checkbox
+                            bind:checked={general.settings.strip_exif}
+                            onchange={handlers.saveStrip}
+                            label={settingsText.stripExif} />
 
                         {#if general.settings?.platform === 'macos'}
-                            <label class="checkbox-label">
-                                <input
-                                    type="checkbox"
-                                    bind:checked={general.settings.clipboard_clear}
-                                    onchange={handlers.saveClipboard} />
-                                <span>{settingsText.clipboardClear}</span>
-                            </label>
+                            <Checkbox
+                                bind:checked={general.settings.clipboard_clear}
+                                onchange={handlers.saveClipboard}
+                                label={settingsText.clipboardClear} />
                         {/if}
                     </div>
                 </div>
 
                 {#if general.note}
-                    <NoteComponent text={general.note} />
+                    <Notification event="saved" text={general.note} />
                 {/if}
                 {#if general.error}
                     <ErrorComponent text={general.error} />
                 {/if}
             </div>
 
-        <!-- ================================================================= -->
-        <!-- TAB 2: SECURITY                                                   -->
-        <!-- ================================================================= -->
+            <!-- ================================================================= -->
+            <!-- TAB 2: SECURITY                                                   -->
+            <!-- ================================================================= -->
         {:else if activeTab === 'security'}
             <div class="tab-panel" role="tabpanel" id="panel-security" aria-labelledby="tab-security">
                 <div class="settings-card">
                     <div class="card-header">
                         <h3 class="card-title">{settingsText.securityTitle}</h3>
                         {#each settingsText.securityNotes as note}
-                            <p class="card-description">{note}</p>
+                            <Description text={note} />
                         {/each}
                     </div>
 
@@ -143,7 +140,7 @@
                     {/if}
 
                     {#if security.note}
-                        <NoteComponent text={security.note} />
+                        <Notification event="updated" text={security.note} />
                     {/if}
                 </div>
 
@@ -165,9 +162,9 @@
                                     disabled={touchId.busy} />
                             </div>
                         {:else if touchId.status && !touchId.status.capable && touchId.status.built_in}
-                            <p class="card-description">{settingsText.touchIdNotSigned}</p>
+                            <Description text={settingsText.touchIdNotSigned} />
                         {:else if touchId.status?.enrolled}
-                            <p class="card-description">{settingsText.touchIdEnrolled}</p>
+                            <Description text={settingsText.touchIdEnrolled} />
                             <div class="setting-row">
                                 <Button
                                     label={settingsText.touchIdTurnOff}
@@ -176,7 +173,7 @@
                                     disabled={touchId.busy} />
                             </div>
                         {:else if touchId.status?.capable}
-                            <p class="card-description">{settingsText.touchIdCapable}</p>
+                            <Description text={settingsText.touchIdCapable} />
                             <div class="setting-row">
                                 <Button
                                     label={settingsText.touchIdTurnOn}
@@ -186,22 +183,22 @@
                         {/if}
 
                         {#if touchId.note}
-                            <NoteComponent text={touchId.note} />
+                            <Notification event="info" text={touchId.note} />
                         {/if}
                     </div>
                 {/if}
             </div>
 
-        <!-- ================================================================= -->
-        <!-- TAB 3: BACKUPS                                                    -->
-        <!-- ================================================================= -->
+            <!-- ================================================================= -->
+            <!-- TAB 3: BACKUPS                                                    -->
+            <!-- ================================================================= -->
         {:else if activeTab === 'backup'}
             <div class="tab-panel" role="tabpanel" id="panel-backup" aria-labelledby="tab-backup">
                 <div class="settings-card">
                     <div class="card-header">
                         <h3 class="card-title">Automated & Manual Backups</h3>
                         {#each settingsText.backupNotes as note}
-                            <p class="card-description">{note}</p>
+                            <Description text={note} />
                         {/each}
                     </div>
 
@@ -237,15 +234,15 @@
                 </div>
             </div>
 
-        <!-- ================================================================= -->
-        <!-- TAB 4: SYNC                                                       -->
-        <!-- ================================================================= -->
+            <!-- ================================================================= -->
+            <!-- TAB 4: SYNC                                                       -->
+            <!-- ================================================================= -->
         {:else if activeTab === 'sync'}
             <div class="tab-panel" role="tabpanel" id="panel-sync" aria-labelledby="tab-sync">
                 <div class="settings-card">
                     <div class="card-header">
                         <h3 class="card-title">{settingsText.syncTitle}</h3>
-                        <p class="card-description">{settingsText.syncIntro}</p>
+                        <Description text={settingsText.syncIntro} />
                     </div>
 
                     <div class="setting-item">
@@ -308,7 +305,7 @@
                     {/if}
 
                     {#if sync.note}
-                        <NoteComponent text={sync.note} />
+                        <Notification event="info" text={sync.note} />
                     {/if}
                     {#each sync.problems as problem}
                         <ErrorComponent text={problem} />
@@ -324,7 +321,7 @@
                 <div class="settings-card">
                     <div class="card-header">
                         <h3 class="card-title">Device Identity</h3>
-                        <p class="card-description">{settingsText.restampIntro}</p>
+                        <Description text={settingsText.restampIntro} />
                     </div>
                     <div class="setting-row">
                         {#each actions.restamp as action (action)}
@@ -332,22 +329,22 @@
                         {/each}
                     </div>
                     {#if sync.restampNote}
-                        <NoteComponent text={sync.restampNote} />
+                        <Notification event="updated" text={sync.restampNote} />
                     {/if}
                 </div>
             </div>
 
-        <!-- ================================================================= -->
-        <!-- TAB 5: IMPORT & EXPORT                                            -->
-        <!-- ================================================================= -->
+            <!-- ================================================================= -->
+            <!-- TAB 5: IMPORT & EXPORT                                            -->
+            <!-- ================================================================= -->
         {:else if activeTab === 'transfer'}
             <div class="tab-panel" role="tabpanel" id="panel-transfer" aria-labelledby="tab-transfer">
                 <div class="settings-card">
                     <div class="card-header">
                         <h3 class="card-title">{settingsText.exportTitle}</h3>
-                        <p class="card-description">{settingsText.exportIntro}</p>
+                        <Description text={settingsText.exportIntro} />
                         {#each settingsText.exportNotes as note}
-                            <p class="helper-text-block">{note}</p>
+                            <Description size="small" subtle text={note} />
                         {/each}
                     </div>
 
@@ -360,14 +357,14 @@
                     </div>
 
                     {#if exp.note}
-                        <NoteComponent text={exp.note} />
+                        <Notification event="saved" text={exp.note} />
                     {/if}
                 </div>
 
                 <div class="settings-card">
                     <div class="card-header">
                         <h3 class="card-title">{settingsText.importTitle}</h3>
-                        <p class="card-description">{settingsText.importIntro}</p>
+                        <Description text={settingsText.importIntro} />
                     </div>
 
                     <div class="setting-row">
@@ -377,12 +374,11 @@
                     </div>
 
                     {#if imp.note}
-                        <NoteComponent text={imp.note} />
+                        <Notification event="saved" text={imp.note} />
                     {/if}
                 </div>
             </div>
         {/if}
-
     {:else if !general.error}
         <NoteComponent text={settingsText.loading} />
     {/if}

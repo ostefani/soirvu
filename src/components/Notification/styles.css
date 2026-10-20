@@ -1,0 +1,191 @@
+/*
+ * Notification Component Styles
+ * Event-driven dynamic alerts and feedback badges (created, deleted, saved, etc.)
+ */
+
+.notification-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    box-sizing: border-box;
+    transition: all 0.2s ease;
+    animation: notification-slide-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes notification-slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Toast floating mode */
+.notification-banner.mode-toast {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    z-index: 100;
+    max-width: 24rem;
+    box-shadow: 0 4px 14px var(--elevation-shadow);
+}
+
+/* --- Semantic Variants --- */
+
+/* Success (created, saved, updated) */
+.type-success {
+    background-color: rgba(46, 125, 50, 0.09);
+    border: 1px solid rgba(46, 125, 50, 0.25);
+    border-left: 3px solid #2e7d32;
+    color: var(--text-primary);
+}
+
+.type-success .notification-icon {
+    color: #2e7d32;
+}
+
+@media (prefers-color-scheme: dark) {
+    .type-success {
+        background-color: rgba(76, 175, 80, 0.12);
+        border: 1px solid rgba(129, 199, 132, 0.25);
+        border-left: 3px solid #81c784;
+    }
+    .type-success .notification-icon {
+        color: #81c784;
+    }
+}
+
+/* Info (copied, in progress, notices) */
+.type-info {
+    background-color: var(--interactive-accent-soft);
+    border: 1px solid rgba(51, 98, 214, 0.20);
+    border-left: 3px solid var(--interactive-accent);
+    color: var(--text-primary);
+}
+
+.type-info .notification-icon {
+    color: var(--interactive-accent);
+}
+
+/* Warning (caution, prune alerts) */
+.type-warning {
+    background-color: rgba(255, 224, 138, 0.22);
+    border: 1px solid rgba(184, 124, 0, 0.32);
+    border-left: 3px solid #b87c00;
+    color: var(--text-primary);
+}
+
+.type-warning .notification-icon {
+    color: #b87c00;
+}
+
+@media (prefers-color-scheme: dark) {
+    .type-warning {
+        background-color: rgba(122, 92, 14, 0.24);
+        border: 1px solid rgba(255, 224, 138, 0.25);
+        border-left: 3px solid #e0aa28;
+    }
+    .type-warning .notification-icon {
+        color: #e0aa28;
+    }
+}
+
+/* Danger / Error (deleted, failed) */
+.type-danger {
+    background-color: var(--feedback-danger-soft);
+    border: 1px solid rgba(197, 40, 28, 0.22);
+    border-left: 3px solid var(--feedback-danger);
+    color: var(--text-primary);
+}
+
+.type-danger .notification-icon {
+    color: var(--feedback-danger);
+}
+
+/* Neutral */
+.type-neutral {
+    background-color: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--border-strong);
+    color: var(--text-secondary);
+}
+
+.type-neutral .notification-icon {
+    color: var(--text-secondary);
+}
+
+/* --- Inner Structure --- */
+
+.notification-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 0.15rem;
+}
+
+.notification-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.notification-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.notification-title {
+    font-weight: 600;
+    font-size: 0.95em;
+    color: var(--text-primary);
+}
+
+.notification-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    background-color: var(--border-subtle);
+    color: var(--text-secondary);
+}
+
+.notification-message {
+    margin: 0;
+    font-size: 0.88rem;
+    color: var(--text-primary);
+}
+
+/* Dismiss action button */
+.notification-close-button {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: var(--text-secondary);
+    font-size: 1.25rem;
+    line-height: 1;
+    padding: 0 0.25rem;
+    cursor: pointer;
+    border-radius: 4px;
+    opacity: 0.6;
+    transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.notification-close-button:hover {
+    opacity: 1;
+    color: var(--text-primary);
+    background-color: transparent;
+    border-color: transparent;
+}

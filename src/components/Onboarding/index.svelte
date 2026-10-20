@@ -3,6 +3,7 @@
     import Input from '@/components/Input/index.svelte';
     import ErrorComponent from '@/components/ErrorComponent/index.svelte';
     import NoteComponent from '@/components/NoteComponent/index.svelte';
+    import Checkbox from '@/components/Checkbox/index.svelte';
     import { ONBOARDING_STEP } from '@/containers/OnboardingContainer/constants.js';
 
     let { model = $bindable(), fields, actions, onboardingText } = $props();
@@ -35,10 +36,7 @@
         <div class="recovery-container">
             <p class="recovery-key">{model.recoveryKey}</p>
         </div>
-        <label class="check">
-            <input type="checkbox" bind:checked={model.saved} />
-            <span>{onboardingText.confirmSavedCheckbox}</span>
-        </label>
+        <Checkbox bind:checked={model.saved} label={onboardingText.confirmSavedCheckbox} />
         {#each actions.done as action (action.name)}
             <Button {...action} />
         {/each}
