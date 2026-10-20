@@ -1,0 +1,49 @@
+/*
+ * Button Component Styles
+ */
+button {
+    cursor: pointer;
+}
+
+/* Quiet (ghost / secondary action) button */
+.quiet {
+    box-shadow: none;
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-secondary);
+}
+
+.quiet:hover {
+    color: var(--text-primary);
+    background-color: var(--interactive-accent-soft);
+    border-color: transparent;
+}
+
+.quiet:active {
+    background-color: var(--surface-card-active);
+}
+
+/* Default / standard button */
+.default,
+.primary {
+    background-color: var(--surface-card);
+    color: var(--text-primary);
+    border-color: transparent;
+}
+
+.default:hover,
+.primary:hover {
+    border-color: var(--interactive-accent);
+}
+
+/* Destructive / danger button */
+.danger {
+    color: var(--feedback-danger);
+    background: transparent;
+    border-color: transparent;
+}
+
+.danger:hover {
+    background-color: var(--feedback-danger-soft);
+    border-color: var(--feedback-danger);
+}

@@ -1,5 +1,5 @@
 <script>
-    import Button from '../Button/Button.svelte';
+    import Button from '../Button/index.svelte';
     import Input from '../Input/Input.svelte';
     import Select from '../Select/Select.svelte';
     import ErrorComponent from '../ErrorComponent/ErrorComponent.svelte';
@@ -22,8 +22,8 @@
         handlers,
         onBack,
     } = $props();
+    // console.log('actions: ', actions);
 </script>
-<style src="./Settings.css"></style>
 
 <div class="settings">
     <h2>{copy.title}</h2>
@@ -47,7 +47,10 @@
         {#if general.settings?.platform === 'macos'}
             <label>
                 {copy.clipboardClear}
-                <input type="checkbox" bind:checked={general.settings.clipboard_clear} onchange={handlers.saveClipboard} />
+                <input
+                    type="checkbox"
+                    bind:checked={general.settings.clipboard_clear}
+                    onchange={handlers.saveClipboard} />
             </label>
         {/if}
 
@@ -65,7 +68,10 @@
             {/each}
         </div>
 
-        <Select field={fields.schedule} bind:value={general.settings.backup_schedule} onchange={handlers.saveSchedule} />
+        <Select
+            field={fields.schedule}
+            bind:value={general.settings.backup_schedule}
+            onchange={handlers.saveSchedule} />
 
         <div class="row">
             {#each actions.backupNow as action (action)}
@@ -116,14 +122,22 @@
             <NoteComponent
                 text={`${copy.touchIdEnrolledNotCapableLead} ${touchId.status.built_in ? copy.touchIdNotSignedProfile : copy.touchIdNotBuilt}${copy.touchIdEnrolledNotCapableTail}`} />
             <div class="row">
-                <Button label={copy.touchIdRemoveEnrollment} kind="quiet" handler={handlers.touchIdDisable} disabled={touchId.busy} />
+                <Button
+                    label={copy.touchIdRemoveEnrollment}
+                    kind="quiet"
+                    handler={handlers.touchIdDisable}
+                    disabled={touchId.busy} />
             </div>
         {:else if touchId.status && !touchId.status.capable && touchId.status.built_in}
             <NoteComponent text={copy.touchIdNotSigned} />
         {:else if touchId.status?.enrolled}
             <NoteComponent text={copy.touchIdEnrolled} />
             <div class="row">
-                <Button label={copy.touchIdTurnOff} kind="quiet" handler={handlers.touchIdDisable} disabled={touchId.busy} />
+                <Button
+                    label={copy.touchIdTurnOff}
+                    kind="quiet"
+                    handler={handlers.touchIdDisable}
+                    disabled={touchId.busy} />
             </div>
         {:else if touchId.status?.capable}
             <NoteComponent text={copy.touchIdCapable} />
@@ -229,3 +243,5 @@
 
     <Button label={copy.back} kind="quiet" handler={() => onBack()} />
 </div>
+
+<style src="./Settings.css"></style>

@@ -18,3 +18,5 @@
         {label}
     {/if}
 </button>
+
+<style src="./styles.css"></style>

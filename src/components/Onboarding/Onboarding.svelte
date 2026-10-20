@@ -1,12 +1,11 @@
 <script>
-    import Button from '../Button/Button.svelte';
+    import Button from '../Button/index.svelte';
     import Input from '../Input/Input.svelte';
     import ErrorComponent from '../ErrorComponent/ErrorComponent.svelte';
     import NoteComponent from '../NoteComponent/NoteComponent.svelte';
 
     let { model = $bindable(), fields, actions } = $props();
 </script>
-<style src="./Onboarding.css"></style>
 
 <div class="center-col">
     {#if model.step === 1}
@@ -46,3 +45,5 @@
 
     <ErrorComponent text={model.error} />
 </div>
+
+<style src="./Onboarding.css"></style>

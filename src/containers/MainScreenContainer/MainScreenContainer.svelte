@@ -1,6 +1,6 @@
 <script>
     import * as api from '../../api.js';
-    import Button from '../../components/Button/Button.svelte';
+    import Button from '../../components/Button/index.svelte';
     import NoteComponent from '../../components/NoteComponent/NoteComponent.svelte';
     import OnboardingContainer from '../OnboardingContainer/OnboardingContainer.svelte';
     import LockScreenContainer from '../LockScreenContainer/LockScreenContainer.svelte';
@@ -32,10 +32,9 @@
 
     const welcomeActions = [
         { name: 'create', label: 'Create a new diary', handler: () => (view = 'create') },
-        { name: 'open', label: 'Open an existing diary folder…', kind: 'quiet', handler: openExisting },
+        { name: 'open', label: 'Open an existing diary folder…', kind: 'default', handler: openExisting },
     ];
 </script>
-<style src="./MainScreenContainer.css"></style>
 
 {#if view === 'welcome'}
     <div class="center-col">
@@ -48,9 +47,7 @@
 {:else if view === 'create'}
     <OnboardingContainer onDone={onVaultsChanged} onCancel={vaults.length > 0 ? onVaultsChanged : undefined} />
 {:else}
-    <LockScreenContainer
-        {vaults}
-        onUnlocked={onVaultsChanged}
-        onVaultsChanged={onVaultsChanged}
-        onCreate={() => (view = 'create')} />
+    <LockScreenContainer {vaults} onUnlocked={onVaultsChanged} {onVaultsChanged} onCreate={() => (view = 'create')} />
 {/if}
+
+<style src="./MainScreenContainer.css"></style>

@@ -2,7 +2,7 @@
     position: fixed;
     inset: 0;
     overflow-y: auto;
-    background: var(--bg);
+    background: var(--surface-bg);
     z-index: 50;
     box-sizing: border-box;
     padding: 1rem 1.5rem;

@@ -3,7 +3,7 @@
     import EntryList from '../../components/EntryList/EntryList.svelte';
     import Calendar from '../../components/Calendar/Calendar.svelte';
     import EntryEditor from '../../components/EntryEditor/EntryEditor.svelte';
-    import Button from '../../components/Button/Button.svelte';
+    import Button from '../../components/Button/index.svelte';
     import NoteComponent from '../../components/NoteComponent/NoteComponent.svelte';
 
     let { vault, onLock, onSettings } = $props();
@@ -35,7 +35,6 @@
         loadOnThisDay();
     });
 </script>
-<style src="./DiaryScreenContainer.css"></style>
 
 <div class="diary-screen">
     <header class="diary-head">
@@ -69,7 +68,8 @@
             {:else}
                 <div class="calendar-home">
                     <Calendar large selectedDate={listDate} onSelect={(d) => (listDate = d)} version={calVersion} />
-                    <NoteComponent text="Pick a day to see its entries in the list — or pick a recent entry on the left." />
+                    <NoteComponent
+                        text="Pick a day to see its entries in the list — or pick a recent entry on the left." />
                     {#if onThisDay.length}
                         <div class="on-this-day">
                             <h3>On this day</h3>
@@ -86,3 +86,5 @@
         </main>
     </div>
 </div>
+
+<style src="./DiaryScreenContainer.css"></style>

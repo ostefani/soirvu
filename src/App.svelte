@@ -5,47 +5,61 @@
     import DiaryScreenContainer from './containers/DiaryScreenContainer/DiaryScreenContainer.svelte';
     import SettingsScreenContainer from './containers/SettingsScreenContainer/SettingsScreenContainer.svelte';
 
-    let screen = $state('boot'); // boot | main | diary | settings
-    let mainView = $state('welcome'); // welcome | locked
+    import {
+        APPLICATION_SCREEN,
+        MAIN_VIEW,
+        VAULT_STATUS,
+        KEYBOARD_SHORTCUT,
+    } from './constants.js';
+    import { applicationText } from './data.js';
+
+    let screen = $state(APPLICATION_SCREEN.BOOT);
+    let mainView = $state(MAIN_VIEW.WELCOME);
     let vaults = $state([]);
     let currentVault = $state(null);
-    let diaryEl = $state(null);
+    let diaryElement = $state(null);
 
     async function refresh() {
         vaults = await api.vaultList();
-        const open = vaults.find((v) => v.state === 'unlocked');
-        if (open) {
-            currentVault = open;
-            screen = 'diary';
+        const openVault = vaults.find((vault) => vault.state === VAULT_STATUS.UNLOCKED);
+        if (openVault) {
+            currentVault = openVault;
+            screen = APPLICATION_SCREEN.DIARY;
         } else if (vaults.length === 0) {
-            mainView = 'welcome';
+            mainView = MAIN_VIEW.WELCOME;
             currentVault = null;
-            screen = 'main';
+            screen = APPLICATION_SCREEN.MAIN;
         } else {
-            mainView = 'locked';
+            mainView = MAIN_VIEW.LOCKED;
             currentVault = null;
-            screen = 'main';
+            screen = APPLICATION_SCREEN.MAIN;
         }
     }
 
     onMount(async () => {
         await api.onVaultStatus(async ({ status }) => {
-            if (status !== 'unlocked') {
+            if (status !== VAULT_STATUS.UNLOCKED) {
                 await refresh();
             }
         });
-        // clipboard clearing: report copies;
+
+        // Clipboard clearing: report copies
         document.addEventListener('copy', () => {
             api.clipboardNoteCopy().catch(() => {});
         });
-        // Manual lock: Cmd/Ctrl+Shift+L from anywhere in
-        // the diary.
-        window.addEventListener('keydown', (e) => {
-            if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'l' && screen === 'diary') {
-                e.preventDefault();
+
+        // Manual lock: Cmd/Ctrl+Shift+L from anywhere in the diary
+        window.addEventListener('keydown', (event) => {
+            const hasModifier = event.metaKey || event.ctrlKey;
+            const matchesKey = event.key.toLowerCase() === KEYBOARD_SHORTCUT.LOCK_KEY;
+            const isInDiary = screen === APPLICATION_SCREEN.DIARY;
+
+            if (hasModifier && event.shiftKey && matchesKey && isInDiary) {
+                event.preventDefault();
                 lock();
             }
         });
+
         await refresh();
     });
 
@@ -53,13 +67,8 @@
         await api.vaultLock();
         await refresh();
     }
-    // The drop safety net: a file dropped anywhere no
-    // component claims (the lock screen, the list,
-    // settings) must not navigate the webview to the
-    // file. The editor claims its own drops and
-    // prevents the default itself; this catches the
-    // rest. Dragging over the window gets the same
-    // treatment, or the drop never fires cleanly.
+
+    // Drop safety net: prevent accidental file navigation on unhandled drag & drop
     function swallowDrop(event) {
         event.preventDefault();
     }
@@ -67,13 +76,21 @@
 
 <svelte:window ondragover={swallowDrop} ondrop={swallowDrop} />
 
-{#if screen === 'boot'}
-    <p class="note">Starting…</p>
-{:else if screen === 'main'}
+{#if screen === APPLICATION_SCREEN.BOOT}
+    <p class="note">{applicationText.bootMessage}</p>
+{:else if screen === APPLICATION_SCREEN.MAIN}
     <MainScreenContainer {vaults} initialView={mainView} onVaultsChanged={refresh} />
-{:else if screen === 'diary' || screen === 'settings'}
-    <DiaryScreenContainer bind:this={diaryEl} vault={currentVault} onLock={lock} onSettings={() => (screen = 'settings')} />
-    {#if screen === 'settings'}
-        <SettingsScreenContainer onBack={() => (screen = 'diary')} onImported={() => diaryEl?.refreshNavigation()} />
+{:else if screen === APPLICATION_SCREEN.DIARY || screen === APPLICATION_SCREEN.SETTINGS}
+    <DiaryScreenContainer
+        bind:this={diaryElement}
+        vault={currentVault}
+        onLock={lock}
+        onSettings={() => (screen = APPLICATION_SCREEN.SETTINGS)}
+    />
+    {#if screen === APPLICATION_SCREEN.SETTINGS}
+        <SettingsScreenContainer
+            onBack={() => (screen = APPLICATION_SCREEN.DIARY)}
+            onImported={() => diaryElement?.refreshNavigation()}
+        />
     {/if}
 {/if}

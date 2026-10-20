@@ -1,0 +1,43 @@
+/*
+ * LockScreen Component Styles
+ */
+
+/* Vault selection list */
+.vault-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.vault-row {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.vault-name {
+    flex: 1;
+    text-align: left;
+}
+
+.missing {
+    opacity: 0.6;
+    font-size: 0.85em;
+}
+
+/* Passphrase / recovery-key toggle */
+.kind-toggle {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.kind-toggle :global(button) {
+    flex: 1;
+}
+
+/* Fork panel */
+.fork-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
