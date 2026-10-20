@@ -4,6 +4,11 @@
  */
 
 .notification-banner {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    z-index: 100;
+    width: min(24rem, calc(100vw - 3rem));
     display: flex;
     align-items: flex-start;
     gap: 0.75rem;
@@ -27,15 +32,7 @@
     }
 }
 
-/* Toast floating mode */
-.notification-banner.mode-toast {
-    position: fixed;
-    bottom: 1.5rem;
-    right: 1.5rem;
-    z-index: 100;
-    max-width: 24rem;
-    box-shadow: 0 4px 14px var(--elevation-shadow);
-}
+.notification-banner.mode-toast { box-shadow: 0 4px 14px var(--elevation-shadow); }
 
 /* --- Semantic Variants --- */
 

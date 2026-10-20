@@ -1,13 +1,14 @@
 <script>
+    import { EVENT_TYPE } from '@/constants.js';
     let {
-        event = null, // 'created' | 'deleted' | 'updated' | 'saved' | 'copied' | 'error' | null
-        type = null, // 'success' | 'info' | 'warning' | 'danger' | 'neutral' | null
+        event = null,
+        type = null,
         title = '',
         message = '',
         text = '',
         duration = 0, // Auto-dismiss time in ms (0 = persistent)
         dismissible = true,
-        mode = 'inline', // 'inline' | 'toast'
+        mode = 'toast',
         onDismiss = null,
         children = null,
     } = $props();
@@ -18,18 +19,19 @@
     const computedType = $derived.by(() => {
         if (type) return type;
         switch (event) {
-            case 'created':
-            case 'saved':
-            case 'updated':
-                return 'success';
-            case 'deleted':
-                return 'danger';
-            case 'copied':
-                return 'info';
-            case 'error':
-                return 'danger';
+            case EVENT_TYPE.CREATED:
+            case EVENT_TYPE.SAVED:
+            case EVENT_TYPE.UPDATED:
+                return EVENT_TYPE.SUCCESS;
+            case EVENT_TYPE.DELETED:
+            case EVENT_TYPE.ERROR:
+                return EVENT_TYPE.DANGER;
+            case EVENT_TYPE.WARNING:
+                return EVENT_TYPE.WARNING;
+            case EVENT_TYPE.NEUTRAL:
+                return EVENT_TYPE.NEUTRAL;
             default:
-                return 'info';
+                return EVENT_TYPE.INFO;
         }
     });
 
@@ -37,17 +39,17 @@
     const computedTitle = $derived.by(() => {
         if (title) return title;
         switch (event) {
-            case 'created':
+            case EVENT_TYPE.CREATED:
                 return 'Created';
-            case 'saved':
+            case EVENT_TYPE.SAVED:
                 return 'Saved';
-            case 'updated':
+            case EVENT_TYPE.UPDATED:
                 return 'Updated';
-            case 'deleted':
+            case EVENT_TYPE.DELETED:
                 return 'Deleted';
-            case 'copied':
+            case EVENT_TYPE.COPIED:
                 return 'Copied';
-            case 'error':
+            case EVENT_TYPE.ERROR:
                 return 'Error';
             default:
                 return '';
@@ -75,23 +77,23 @@
     <div
         class="notification-banner"
         class:mode-toast={mode === 'toast'}
-        class:type-success={computedType === 'success'}
-        class:type-info={computedType === 'info'}
-        class:type-warning={computedType === 'warning'}
-        class:type-danger={computedType === 'danger'}
-        class:type-neutral={computedType === 'neutral'}
+        class:type-success={computedType === EVENT_TYPE.SUCCESS}
+        class:type-info={computedType === EVENT_TYPE.INFO}
+        class:type-warning={computedType === EVENT_TYPE.WARNING}
+        class:type-danger={computedType === EVENT_TYPE.DANGER}
+        class:type-neutral={computedType === EVENT_TYPE.NEUTRAL}
         role="alert">
         <span class="notification-icon" aria-hidden="true">
-            {#if computedType === 'success'}
+            {#if computedType === EVENT_TYPE.SUCCESS}
                 <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
                     <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z"/>
                 </svg>
-            {:else if computedType === 'danger'}
+            {:else if computedType === EVENT_TYPE.DANGER}
                 <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
                     <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
                     <path d="M7.002 11a1 1 0 1 1 2 0 1 1 0 0 1-2 0zM7.1 4.995a.905.905 0 1 1 1.8 0l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 4.995z"/>
                 </svg>
-            {:else if computedType === 'warning'}
+            {:else if computedType === EVENT_TYPE.WARNING}
                 <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
                     <path d="M8.982 1.566a1.13 1.13 0 0 0-1.964 0L.165 13.233c-.457.778.091 1.767.982 1.767h13.706c.89 0 1.438-.99.982-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>
                 </svg>
@@ -109,7 +111,7 @@
                         <strong class="notification-title">{computedTitle}</strong>
                     {/if}
                     {#if event}
-                        <span class="notification-badge">{event}</span>
+                <span class="notification-badge">{event}</span>
                     {/if}
                 </div>
             {/if}

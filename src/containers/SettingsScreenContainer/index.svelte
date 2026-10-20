@@ -13,6 +13,7 @@
         createTouchIdModel,
     } from './settingsModel.js';
     import { ACTIONS, settingsText, fields } from './constants.js';
+    import { EVENT_TYPE } from '@/constants.js';
 
     let { onBack, onImported = null } = $props();
 
@@ -35,6 +36,28 @@
         return e === 'wrong_passphrase' ? 'Wrong current passphrase.' : `Something went wrong (${e}).`;
     }
 
+    function dismissNotification(key) {
+        switch (key) {
+            case 'general': general.note = ''; break;
+            case 'security': security.note = ''; break;
+            case 'touchId': touchId.note = ''; break;
+            case 'sync': sync.note = ''; break;
+            case 'restamp': sync.restampNote = ''; break;
+            case 'export': exp.note = ''; break;
+            case 'import': imp.note = ''; break;
+        }
+    }
+
+    function clearNotificationsForTabChange() {
+        general.note = '';
+        security.note = '';
+        touchId.note = '';
+        sync.note = '';
+        sync.restampNote = '';
+        exp.note = '';
+        imp.note = '';
+    }
+
     async function changePassphrase() {
         security.note = '';
         security.newRecoveryKey = '';
@@ -45,8 +68,10 @@
             security.newPass = '';
             security.newPass2 = '';
             security.note = 'Passphrase changed. The diary stays open — the new passphrase applies at the next unlock.';
+            security.noteEvent = EVENT_TYPE.UPDATED;
         } catch (e) {
             security.note = secError(e);
+            security.noteEvent = EVENT_TYPE.ERROR;
         } finally {
             security.busy = false;
         }
@@ -63,14 +88,17 @@
             const key = await api.vaultRotateMasterKey(security.curPass);
             if (key === null) {
                 security.note = 'Master key unchanged.';
+                security.noteEvent = EVENT_TYPE.INFO;
             } else {
                 security.newRecoveryKey = key;
                 security.rotated = true;
                 security.note =
                     'Master key changed — and the diary is now locked. Save the new recovery key, then unlock with your passphrase (it did not change).';
+                security.noteEvent = EVENT_TYPE.UPDATED;
             }
         } catch (e) {
             security.note = secError(e);
+            security.noteEvent = EVENT_TYPE.ERROR;
         } finally {
             unlisten();
             security.busy = false;
@@ -111,6 +139,7 @@
             }
         } catch (e) {
             exp.note = expError(e);
+            exp.noteEvent = EVENT_TYPE.ERROR;
         } finally {
             exp.busy = false;
         }
@@ -198,6 +227,7 @@
             await loadSync();
         } catch (e) {
             sync.note = syncError(e);
+            sync.noteEvent = EVENT_TYPE.ERROR;
         } finally {
             sync.busy = false;
         }
@@ -223,6 +253,7 @@
             await loadSync();
         } catch (e) {
             sync.note = syncError(e);
+            sync.noteEvent = EVENT_TYPE.ERROR;
         } finally {
             sync.busy = false;
         }
@@ -257,6 +288,7 @@
             await loadSync();
         } catch (e) {
             sync.note = syncError(e);
+            sync.noteEvent = EVENT_TYPE.ERROR;
         } finally {
             sync.busy = false;
         }
@@ -283,6 +315,7 @@
             await loadSync();
         } catch (e) {
             sync.note = syncError(e);
+            sync.noteEvent = EVENT_TYPE.ERROR;
         } finally {
             sync.pruneArm = false;
             sync.busy = false;
@@ -302,6 +335,7 @@
             await loadSync();
         } catch (e) {
             sync.restampNote = syncError(e);
+            sync.restampNoteEvent = EVENT_TYPE.ERROR;
         } finally {
             sync.busy = false;
         }
@@ -328,6 +362,7 @@
             }
         } catch (e) {
             imp.note = String(e) === 'locked' ? 'The diary is locked.' : 'Something went wrong (' + String(e) + ').';
+            imp.noteEvent = EVENT_TYPE.ERROR;
         } finally {
             imp.busy = false;
         }
@@ -353,6 +388,7 @@
                 e === 'touch_id_unavailable'
                     ? 'Touch ID is not available in this build.'
                     : `Something went wrong (${e}).`;
+            touchId.noteEvent = e === 'touch_id_unavailable' ? EVENT_TYPE.INFO : EVENT_TYPE.ERROR;
         } finally {
             touchId.busy = false;
         }
@@ -367,6 +403,7 @@
             touchId.note = 'Touch ID is off for this diary.';
         } catch (e) {
             touchId.note = `Something went wrong (${e}).`;
+            touchId.noteEvent = EVENT_TYPE.ERROR;
         } finally {
             touchId.busy = false;
         }
@@ -380,6 +417,7 @@
             security.curPass = '';
         } catch (e) {
             security.note = secError(e);
+            security.noteEvent = EVENT_TYPE.ERROR;
             security.newRecoveryKey = '';
         } finally {
             security.busy = false;
@@ -542,6 +580,8 @@
             {actions}
             {disabled}
             {handlers}
+            onTabChange={clearNotificationsForTabChange}
+            onDismissNotification={dismissNotification}
             {onBack} />
     </div>
 </div>

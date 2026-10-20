@@ -24,9 +24,16 @@
         actions,
         disabled,
         handlers,
+        onTabChange,
+        onDismissNotification,
     } = $props();
 
     let activeTab = $state('general');
+
+    function changeTab(id) {
+        onTabChange?.(id);
+        activeTab = id;
+    }
 
     const tabs = [
         { id: 'general', label: 'General' },
@@ -38,7 +45,7 @@
 </script>
 
 <div class="settings-wrapper">
-    <Tabs {tabs} {activeTab} onChange={(id) => (activeTab = id)} />
+    <Tabs {tabs} {activeTab} onChange={changeTab} />
 
     {#if general.settings}
         <!-- ================================================================= -->
@@ -93,7 +100,7 @@
                 </div>
 
                 {#if general.note}
-                    <Notification event="saved" text={general.note} />
+                    <Notification event={general.noteEvent} text={general.note} onDismiss={() => onDismissNotification?.('general')} />
                 {/if}
                 {#if general.error}
                     <ErrorComponent text={general.error} />
@@ -140,7 +147,7 @@
                     {/if}
 
                     {#if security.note}
-                        <Notification event="updated" text={security.note} />
+                        <Notification event={security.noteEvent} text={security.note} onDismiss={() => onDismissNotification?.('security')} />
                     {/if}
                 </div>
 
@@ -183,7 +190,7 @@
                         {/if}
 
                         {#if touchId.note}
-                            <Notification event="info" text={touchId.note} />
+                            <Notification event={touchId.noteEvent} text={touchId.note} onDismiss={() => onDismissNotification?.('touchId')} />
                         {/if}
                     </div>
                 {/if}
@@ -305,7 +312,7 @@
                     {/if}
 
                     {#if sync.note}
-                        <Notification event="info" text={sync.note} />
+                        <Notification event={sync.noteEvent} text={sync.note} onDismiss={() => onDismissNotification?.('sync')} />
                     {/if}
                     {#each sync.problems as problem}
                         <ErrorComponent text={problem} />
@@ -329,7 +336,7 @@
                         {/each}
                     </div>
                     {#if sync.restampNote}
-                        <Notification event="updated" text={sync.restampNote} />
+                        <Notification event={sync.restampNoteEvent} text={sync.restampNote} onDismiss={() => onDismissNotification?.('restamp')} />
                     {/if}
                 </div>
             </div>
@@ -357,7 +364,7 @@
                     </div>
 
                     {#if exp.note}
-                        <Notification event="saved" text={exp.note} />
+                        <Notification event={exp.noteEvent} text={exp.note} onDismiss={() => onDismissNotification?.('export')} />
                     {/if}
                 </div>
 
@@ -374,7 +381,7 @@
                     </div>
 
                     {#if imp.note}
-                        <Notification event="saved" text={imp.note} />
+                        <Notification event={imp.noteEvent} text={imp.note} onDismiss={() => onDismissNotification?.('import')} />
                     {/if}
                 </div>
             </div>

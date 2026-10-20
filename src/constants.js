@@ -23,3 +23,17 @@ export const VAULT_STATUS = {
 export const KEYBOARD_SHORTCUT = {
     LOCK_KEY: 'l',
 };
+
+export const EVENT_TYPE = {
+    CREATED: 'created',
+    DELETED: 'deleted',
+    UPDATED: 'updated',
+    SAVED: 'saved',
+    COPIED: 'copied',
+    ERROR: 'error',
+    INFO: 'info',
+    WARNING: 'warning',
+    NEUTRAL: 'neutral',
+    SUCCESS: 'success',
+    DANGER: 'danger',
+};
