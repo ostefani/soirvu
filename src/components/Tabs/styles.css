@@ -1,0 +1,68 @@
+/*
+ * Tabs Component Styles
+ * A modern segmented tab bar designed for desktop applications.
+ */
+
+.tabs-container {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem;
+    background-color: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    box-shadow: 0 1px 2px var(--elevation-shadow);
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.tab-item {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.55rem 0.85rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    cursor: pointer;
+    box-shadow: none;
+    transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    white-space: nowrap;
+}
+
+.tab-item:hover {
+    color: var(--text-primary);
+    background-color: var(--interactive-accent-soft);
+    border-color: transparent;
+}
+
+.tab-item.active {
+    background-color: var(--interactive-accent);
+    color: #ffffff;
+    font-weight: 600;
+    box-shadow: 0 1px 3px var(--elevation-shadow);
+    border-color: transparent;
+}
+
+.tab-label {
+    line-height: 1.2;
+}
+
+.tab-badge {
+    font-size: 0.75em;
+    padding: 0.1em 0.45em;
+    border-radius: 999px;
+    background-color: var(--interactive-accent-soft);
+    color: var(--interactive-accent);
+    font-weight: 600;
+}
+
+.tab-item.active .tab-badge {
+    background-color: rgba(255, 255, 255, 0.25);
+    color: #ffffff;
+}

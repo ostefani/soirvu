@@ -5,5 +5,49 @@
     background: var(--surface-bg);
     z-index: 50;
     box-sizing: border-box;
-    padding: 1rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Native-feeling sticky top header bar */
+.settings-head {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.65rem 1.5rem;
+    background-color: var(--surface-bg);
+    border-bottom: 1px solid var(--border-subtle);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+}
+
+.head-left {
+    display: flex;
+    align-items: center;
+    min-width: 6rem;
+}
+
+.head-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-align: center;
+    letter-spacing: -0.01em;
+}
+
+.head-right {
+    min-width: 6rem;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.settings-scroll-content {
+    flex: 1;
+    padding: 1.5rem 1.5rem 3rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }

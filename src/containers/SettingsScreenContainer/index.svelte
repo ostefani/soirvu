@@ -2,6 +2,7 @@
     import { onMount } from 'svelte';
     import { listen } from '@tauri-apps/api/event';
     import * as api from '@/api.js';
+    import Button from '@/components/Button/index.svelte';
     import Settings from '@/components/Settings/index.svelte';
     import {
         createExportModel,
@@ -516,21 +517,33 @@
 </script>
 
 <div class="settings-screen">
-    <Settings
-        bind:general
-        bind:security
-        bind:exp
-        bind:timeoutMin
-        {touchId}
-        {imp}
-        {sync}
-        {settingsText}
-        {fields}
-        {ACTIONS}
-        {actions}
-        {disabled}
-        {handlers}
-        {onBack} />
+    <header class="settings-head">
+        <div class="head-left">
+            <Button label={`‹ ${settingsText.back}`} kind="quiet" handler={onBack} />
+        </div>
+        <div class="head-title">
+            <span>{settingsText.title}</span>
+        </div>
+        <div class="head-right"></div>
+    </header>
+
+    <div class="settings-scroll-content">
+        <Settings
+            bind:general
+            bind:security
+            bind:exp
+            bind:timeoutMin
+            {touchId}
+            {imp}
+            {sync}
+            {settingsText}
+            {fields}
+            {ACTIONS}
+            {actions}
+            {disabled}
+            {handlers}
+            {onBack} />
+    </div>
 </div>
 
 <style src="./styles.css"></style>
