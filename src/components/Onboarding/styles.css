@@ -1,11 +1,42 @@
-    /* The recovery key is shown once, here, so its style lives here. */
-    .recovery-key {
-        font-family: ui-monospace, Menlo, monospace;
-        font-size: 1.25em;
-        letter-spacing: 0.08em;
-        text-align: center;
-        padding: 1rem;
-        border: 1px dashed currentColor;
-        border-radius: 8px;
-        word-break: break-all;
-    }
+/*
+ * Onboarding Component Styles
+ */
+
+/* Step 2: Folder selection row */
+.folder-selection {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0;
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+}
+
+.folder-name {
+    color: var(--text-primary);
+    font-weight: 600;
+    word-break: break-all;
+}
+
+/* Step 3: Recovery Key Display Box */
+.recovery-container {
+    margin: 0.25rem 0;
+}
+
+.recovery-key {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 1.2em;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-align: center;
+    padding: 1.1rem;
+    background-color: var(--surface-card);
+    border: 1px dashed var(--border-strong);
+    border-radius: 8px;
+    word-break: break-all;
+    user-select: all;
+    box-shadow: 0 1px 2px var(--elevation-shadow);
+    color: var(--text-primary);
+    margin: 0;
+}

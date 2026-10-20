@@ -1,0 +1,132 @@
+/*
+ * NoteComponent Styles
+ * Clean, accessible callout box for advisories, warnings, and informational hints.
+ */
+
+.note-callout {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    line-height: 1.45;
+    box-sizing: border-box;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+/* --- Variants --- */
+
+/* Neutral / Default */
+.variant-neutral {
+    background-color: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--border-strong);
+    color: var(--text-secondary);
+}
+
+.variant-neutral .note-icon {
+    color: var(--text-secondary);
+}
+
+/* Informational */
+.variant-info {
+    background-color: var(--interactive-accent-soft);
+    border: 1px solid rgba(51, 98, 214, 0.20);
+    border-left: 3px solid var(--interactive-accent);
+    color: var(--text-primary);
+}
+
+.variant-info .note-icon {
+    color: var(--interactive-accent);
+}
+
+/* Warning */
+.variant-warning {
+    background-color: rgba(255, 224, 138, 0.22);
+    border: 1px solid rgba(184, 124, 0, 0.32);
+    border-left: 3px solid #b87c00;
+    color: var(--text-primary);
+}
+
+.variant-warning .note-icon {
+    color: #b87c00;
+}
+
+@media (prefers-color-scheme: dark) {
+    .variant-warning {
+        background-color: rgba(122, 92, 14, 0.24);
+        border: 1px solid rgba(255, 224, 138, 0.25);
+        border-left: 3px solid #e0aa28;
+    }
+
+    .variant-warning .note-icon {
+        color: #e0aa28;
+    }
+}
+
+/* Danger / Destructive */
+.variant-danger {
+    background-color: var(--feedback-danger-soft);
+    border: 1px solid rgba(197, 40, 28, 0.22);
+    border-left: 3px solid var(--feedback-danger);
+    color: var(--text-primary);
+}
+
+.variant-danger .note-icon {
+    color: var(--feedback-danger);
+}
+
+/* --- Sub-elements --- */
+
+.note-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 0.15rem;
+}
+
+.note-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.note-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 0.95em;
+}
+
+.note-content p {
+    margin: 0 0 0.35rem 0;
+}
+
+.note-content p:last-child {
+    margin: 0;
+}
+
+/* Dismiss action button */
+.note-dismiss-button {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: var(--text-secondary);
+    font-size: 1.25rem;
+    line-height: 1;
+    padding: 0 0.25rem;
+    cursor: pointer;
+    border-radius: 4px;
+    opacity: 0.6;
+    transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.note-dismiss-button:hover {
+    opacity: 1;
+    color: var(--text-primary);
+    background-color: transparent;
+    border-color: transparent;
+}

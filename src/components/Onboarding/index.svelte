@@ -3,20 +3,23 @@
     import Input from '@/components/Input/index.svelte';
     import ErrorComponent from '@/components/ErrorComponent/index.svelte';
     import NoteComponent from '@/components/NoteComponent/index.svelte';
+    import { ONBOARDING_STEP } from '@/containers/OnboardingContainer/constants.js';
 
-    let { model = $bindable(), fields, actions } = $props();
-    console.log('model: ', model);
+    let { model = $bindable(), fields, actions, onboardingText } = $props();
 </script>
 
 <div class="center-col">
-    {#if model.step === 1}
-        <p>Create your diary in a folder you choose. Everything in it is encrypted.</p>
+    {#if model.step === ONBOARDING_STEP.CHOOSE_FOLDER}
+        <NoteComponent text={onboardingText.step1Description} />
         {#each actions.pick as action (action.name)}
             <Button {...action} />
         {/each}
-    {:else if model.step === 2}
-        <p>Diary folder: <strong>{model.folderName}</strong></p>
-        <NoteComponent text={model.warning} />
+    {:else if model.step === ONBOARDING_STEP.SET_PASSPHRASE}
+        <p class="folder-selection">
+            <span class="folder-label">{onboardingText.folderLabel}</span>
+            <strong class="folder-name">{model.folderName}</strong>
+        </p>
+        <NoteComponent variant="warning" text={model.warning} />
         {#each fields as field (field.name)}
             <Input {field} bind:value={model[field.name]} />
         {/each}
@@ -24,21 +27,24 @@
             <Button {...action} />
         {/each}
     {:else}
-        <p>
-            This is your <strong>recovery key</strong>. If you forget the passphrase, it is the only way back in. The
-            app does not keep a copy — write it down and keep it somewhere safe.
-        </p>
-        <p class="recovery-key">{model.recoveryKey}</p>
+        <NoteComponent
+            variant="warning"
+            title={onboardingText.recoveryKeyNoticeTitle}
+            text={onboardingText.recoveryKeyNotice}
+        />
+        <div class="recovery-container">
+            <p class="recovery-key">{model.recoveryKey}</p>
+        </div>
         <label class="check">
             <input type="checkbox" bind:checked={model.saved} />
-            I have saved the recovery key
+            <span>{onboardingText.confirmSavedCheckbox}</span>
         </label>
         {#each actions.done as action (action.name)}
             <Button {...action} />
         {/each}
     {/if}
 
-    {#if model.step < 3}
+    {#if model.step < ONBOARDING_STEP.SAVE_RECOVERY_KEY}
         {#each actions.cancel as action (action.name)}
             <Button {...action} />
         {/each}
