@@ -1,10 +1,10 @@
 <script>
-    import Button from '../Button/index.svelte';
-    import Input from '../Input/Input.svelte';
-    import Select from '../Select/Select.svelte';
-    import ErrorComponent from '../ErrorComponent/ErrorComponent.svelte';
-    import NoteComponent from '../NoteComponent/NoteComponent.svelte';
-    import WarningComponent from '../WarningComponent/WarningComponent.svelte';
+    import Button from '@/components/Button/index.svelte';
+    import Input from '@/components/Input/index.svelte';
+    import Select from '@/components/Select/index.svelte';
+    import ErrorComponent from '@/components/ErrorComponent/index.svelte';
+    import NoteComponent from '@/components/NoteComponent/index.svelte';
+    import WarningComponent from '@/components/WarningComponent/index.svelte';
 
     let {
         general = $bindable(),
@@ -14,7 +14,7 @@
         touchId,
         imp,
         sync,
-        copy,
+        settingsText,
         fields,
         ACTIONS,
         actions,
@@ -26,11 +26,11 @@
 </script>
 
 <div class="settings">
-    <h2>{copy.title}</h2>
+    <h2>{settingsText.title}</h2>
 
     {#if general.settings}
         <p>
-            {copy.vaultLocation}
+            {settingsText.vaultLocation}
             <strong>{general.settings.vault_location ?? '—'}</strong>
         </p>
 
@@ -40,13 +40,13 @@
         {/each}
 
         <label>
-            {copy.stripExif}
+            {settingsText.stripExif}
             <input type="checkbox" bind:checked={general.settings.strip_exif} onchange={handlers.saveStrip} />
         </label>
 
         {#if general.settings?.platform === 'macos'}
             <label>
-                {copy.clipboardClear}
+                {settingsText.clipboardClear}
                 <input
                     type="checkbox"
                     bind:checked={general.settings.clipboard_clear}
@@ -55,11 +55,11 @@
         {/if}
 
         <p>
-            {copy.backupLocation}
+            {settingsText.backupLocation}
             {#if general.settings.backup_location}
                 <strong>{general.settings.backup_location}</strong>
             {:else}
-                <span class="note">{copy.notSet}</span>
+                <span class="note">{settingsText.notSet}</span>
             {/if}
         </p>
         <div class="row">
@@ -78,12 +78,12 @@
                 <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
             {/each}
         </div>
-        {#each copy.backupNotes as text}
+        {#each settingsText.backupNotes as text}
             <NoteComponent {text} />
         {/each}
 
-        <h3>{copy.securityTitle}</h3>
-
+        <h3>{settingsText.securityTitle}</h3>
+        settingsText
         {#each fields.security as field (field.name)}
             <Input {field} bind:value={security[field.name]} />
         {/each}
@@ -103,65 +103,65 @@
         {#if security.rotating}
             <p class="note progress">
                 <span class="spinner"></span>
-                <span>{copy.rotating}</span>
+                <span>{settingsText.rotating}</span>
             </p>
         {/if}
 
         {#if security.newRecoveryKey}
-            <p>{copy.newKeyLead} <code>{security.newRecoveryKey}</code></p>
-            <NoteComponent text={copy.newKeyNote} />
+            <p>{settingsText.newKeyLead} <code>{security.newRecoveryKey}</code></p>
+            <NoteComponent text={settingsText.newKeyNote} />
         {/if}
         <NoteComponent text={security.note} />
 
-        {#each copy.securityNotes as text}
+        {#each settingsText.securityNotes as text}
             <NoteComponent {text} />
         {/each}
 
-        {#if touchId.status?.capable || touchId.status?.enrolled}<h3>{copy.touchIdTitle}</h3>{/if}
+        {#if touchId.status?.capable || touchId.status?.enrolled}<h3>{settingsText.touchIdTitle}</h3>{/if}
         {#if touchId.status?.enrolled && !touchId.status.capable}
             <NoteComponent
-                text={`${copy.touchIdEnrolledNotCapableLead} ${touchId.status.built_in ? copy.touchIdNotSignedProfile : copy.touchIdNotBuilt}${copy.touchIdEnrolledNotCapableTail}`} />
+                text={`${settingsText.touchIdEnrolledNotCapableLead} ${touchId.status.built_in ? settingsText.touchIdNotSignedProfile : settingsText.touchIdNotBuilt}${settingsText.touchIdEnrolledNotCapableTail}`} />
             <div class="row">
                 <Button
-                    label={copy.touchIdRemoveEnrollment}
+                    label={settingsText.touchIdRemoveEnrollment}
                     kind="quiet"
                     handler={handlers.touchIdDisable}
                     disabled={touchId.busy} />
             </div>
         {:else if touchId.status && !touchId.status.capable && touchId.status.built_in}
-            <NoteComponent text={copy.touchIdNotSigned} />
+            <NoteComponent text={settingsText.touchIdNotSigned} />
         {:else if touchId.status?.enrolled}
-            <NoteComponent text={copy.touchIdEnrolled} />
+            <NoteComponent text={settingsText.touchIdEnrolled} />
             <div class="row">
                 <Button
-                    label={copy.touchIdTurnOff}
+                    label={settingsText.touchIdTurnOff}
                     kind="quiet"
                     handler={handlers.touchIdDisable}
                     disabled={touchId.busy} />
             </div>
         {:else if touchId.status?.capable}
-            <NoteComponent text={copy.touchIdCapable} />
+            <NoteComponent text={settingsText.touchIdCapable} />
             <div class="row">
-                <Button label={copy.touchIdTurnOn} handler={handlers.touchIdEnable} disabled={touchId.busy} />
+                <Button label={settingsText.touchIdTurnOn} handler={handlers.touchIdEnable} disabled={touchId.busy} />
             </div>
         {/if}
         <NoteComponent text={touchId.note} />
 
-        <h3>{copy.exportTitle}</h3>
-        <NoteComponent text={copy.exportIntro} />
+        <h3>{settingsText.exportTitle}</h3>
+        <NoteComponent text={settingsText.exportIntro} />
         <Input field={fields.exportPass} bind:value={exp.pass} />
         <div class="row">
             {#each actions.export as action (action)}
                 <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
             {/each}
         </div>
-        {#each copy.exportNotes as text}
+        {#each settingsText.exportNotes as text}
             <NoteComponent {text} />
         {/each}
         <NoteComponent text={exp.note} />
 
-        <h3>{copy.importTitle}</h3>
-        <NoteComponent text={copy.importIntro} />
+        <h3>{settingsText.importTitle}</h3>
+        <NoteComponent text={settingsText.importIntro} />
         <div class="row">
             {#each actions.import as action (action)}
                 <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
@@ -169,14 +169,14 @@
         </div>
         <NoteComponent text={imp.note} />
 
-        <h3>{copy.syncTitle}</h3>
-        <NoteComponent text={copy.syncIntro} />
+        <h3>{settingsText.syncTitle}</h3>
+        <NoteComponent text={settingsText.syncIntro} />
         <p>
-            {copy.syncFolder}
+            {settingsText.syncFolder}
             {#if general.settings.sync_location}
                 <strong>{general.settings.sync_location}</strong>
             {:else}
-                <span class="note">{copy.notSet}</span>
+                <span class="note">{settingsText.notSet}</span>
             {/if}
         </p>
         <div class="row">
@@ -186,8 +186,12 @@
         </div>
         {#if general.settings.sync_location && sync.info}
             {#if sync.info.ack_ahead_seen}
-                <ErrorComponent text={copy.ackAhead}>
-                    <Button label={copy.dismiss} kind="quiet" handler={handlers.dismissAckAhead} disabled={sync.busy} />
+                <ErrorComponent text={settingsText.ackAhead}>
+                    <Button
+                        label={settingsText.dismiss}
+                        kind="quiet"
+                        handler={handlers.dismissAckAhead}
+                        disabled={sync.busy} />
                 </ErrorComponent>
             {/if}
             {#each sync.info.peers as peer}
@@ -212,7 +216,7 @@
                 {/each}
             </div>
             {#if sync.pruneArm}
-                {#each copy.pruneNotes as text}
+                {#each settingsText.pruneNotes as text}
                     <NoteComponent {text} />
                 {/each}
             {/if}
@@ -227,7 +231,7 @@
         {#if sync.ackAhead && !sync.info?.ack_ahead_seen}
             <ErrorComponent text={sync.ackAhead} />
         {/if}
-        <NoteComponent text={copy.restampIntro} />
+        <NoteComponent text={settingsText.restampIntro} />
         <div class="row">
             {#each actions.restamp as action (action)}
                 <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
@@ -235,13 +239,13 @@
         </div>
         <NoteComponent text={sync.restampNote} />
     {:else if !general.error}
-        <NoteComponent text={copy.loading} />
+        <NoteComponent text={settingsText.loading} />
     {/if}
 
     <NoteComponent text={general.note} />
     <ErrorComponent text={general.error} />
 
-    <Button label={copy.back} kind="quiet" handler={() => onBack()} />
+    <Button label={settingsText.back} kind="quiet" handler={() => onBack()} />
 </div>
 
-<style src="./Settings.css"></style>
+<style src="./styles.css"></style>

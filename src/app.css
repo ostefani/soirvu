@@ -199,20 +199,3 @@ button {
     padding: 0.5rem;
     color: var(--text-secondary);
 }
-
-button.quiet {
-    box-shadow: none;
-    background: transparent;
-    border-color: transparent;
-    color: var(--text-secondary);
-}
-
-button.quiet:hover {
-    color: var(--text-primary);
-    background-color: var(--interactive-accent-soft);
-    border-color: transparent;
-}
-
-button.active {
-    border-color: var(--interactive-accent);
-}

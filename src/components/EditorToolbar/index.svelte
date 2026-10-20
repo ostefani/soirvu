@@ -9,7 +9,6 @@
         event.preventDefault();
     }
 </script>
-<style src="./EditorToolbar.css"></style>
 
 <div class="editor-toolbar" role="toolbar" aria-label="Formatting">
     <button
@@ -115,3 +114,5 @@
             >−Col</button>
     {/if}
 </div>
+
+<style src="./styles.css"></style>

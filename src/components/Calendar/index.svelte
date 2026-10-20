@@ -1,5 +1,5 @@
 <script>
-    import * as api from '../../api.js';
+    import * as api from '@/api.js';
 
     let { selectedDate = null, onSelect, version = 0, large = false } = $props();
 
@@ -68,7 +68,6 @@
         onSelect(date === selectedDate ? null : date);
     }
 </script>
-<style src="./Calendar.css"></style>
 
 <div class="calendar" class:large>
     <div class="cal-head">
@@ -98,3 +97,5 @@
         {/each}
     </div>
 </div>
+
+<style src="./styles.css"></style>

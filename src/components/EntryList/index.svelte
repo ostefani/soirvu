@@ -1,5 +1,5 @@
 <script>
-    import * as api from '../../api.js';
+    import * as api from '@/api.js';
 
     let { selectedId, onSelect, date = null, onClearDate } = $props();
 
@@ -128,7 +128,7 @@
     // The × on a tag (shown on hover) removes it from every
     // entry at once; removing a tag from one entry is done in
     // that entry's own tag field. Two-step, like entry deletion.
-    let tagsOpen = $state(true);
+    let tagsOpen = $state(false);
     let confirmRemove = $state(null); // tag name awaiting confirmation
     let tagNote = $state('');
 
@@ -144,7 +144,6 @@
         }
     }
 </script>
-<style src="./EntryList.css"></style>
 
 <div class="entry-list">
     <div class="list-top">
@@ -163,35 +162,43 @@
 
     {#if tags.length}
         <div class="tags-block">
-            <button class="quiet tags-toggle" onclick={() => (tagsOpen = !tagsOpen)}>
-                {tagsOpen ? '▾' : '▸'} Tags
+            <button class="tags-toggle" onclick={() => (tagsOpen = !tagsOpen)} aria-expanded={tagsOpen}>
+                <span class="tags-toggle-chevron">{tagsOpen ? '▾' : '▸'}</span>
+                <span class="tags-toggle-label">Tags</span>
+                <span class="tags-toggle-count">{tags.length}</span>
             </button>
             {#if tagsOpen}
                 <div class="tag-flow">
                     {#each tags as t (t.name)}
-                        <span class="tag-wrap">
-                            {#if confirmRemove === t.name}
-                                <span class="confirm-row">
-                                    <span>Remove “{t.name}” from all {t.entries} entries?</span>
-                                    <button class="quiet mini" onclick={() => removeTag(t.name)}>Remove</button>
-                                    <button class="quiet mini" onclick={() => (confirmRemove = null)}>Cancel</button>
-                                </span>
-                            {:else}
+                        {#if confirmRemove === t.name}
+                            <div class="tag-confirm">
+                                <span class="confirm-message">Remove “{t.name}” from all {t.entries} entries?</span>
+                                <div class="confirm-actions">
+                                    <button class="confirm-action remove" onclick={() => removeTag(t.name)}
+                                        >Remove</button>
+                                    <button class="confirm-action cancel" onclick={() => (confirmRemove = null)}
+                                        >Cancel</button>
+                                </div>
+                            </div>
+                        {:else}
+                            <div class="tag-pill" class:active={tagFilter === t.name}>
                                 <button
-                                    class="chip"
+                                    class="tag-button"
                                     class:active={tagFilter === t.name}
+                                    title={tagFilter === t.name ? `Clear filter: ${t.name}` : `Filter by: ${t.name}`}
                                     onclick={() => pickTag(t.name)}>
-                                    {t.name}
+                                    <span class="tag-name">{t.name}</span>
+                                    <span class="tag-count">{t.entries}</span>
                                 </button>
-                                <span class="tag-count">{t.entries}</span>
                                 <button
-                                    class="tag-x"
+                                    class="tag-remove"
                                     title="Remove this tag from all entries"
+                                    aria-label="Remove tag {t.name}"
                                     onclick={() => (confirmRemove = t.name)}>
                                     ×
                                 </button>
-                            {/if}
-                        </span>
+                            </div>
+                        {/if}
                     {/each}
                 </div>
                 {#if tagNote}<p class="note">{tagNote}</p>{/if}
@@ -229,3 +236,5 @@
         </div>
     {/if}
 </div>
+
+<style src="./styles.css"></style>

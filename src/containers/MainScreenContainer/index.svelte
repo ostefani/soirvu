@@ -1,9 +1,9 @@
 <script>
-    import * as api from '../../api.js';
-    import Button from '../../components/Button/index.svelte';
-    import NoteComponent from '../../components/NoteComponent/NoteComponent.svelte';
-    import OnboardingContainer from '../OnboardingContainer/OnboardingContainer.svelte';
-    import LockScreenContainer from '../LockScreenContainer/LockScreenContainer.svelte';
+    import * as api from '@/api.js';
+    import Button from '@/components/Button/index.svelte';
+    import NoteComponent from '@/components/NoteComponent/index.svelte';
+    import OnboardingContainer from '@/containers/OnboardingContainer/index.svelte';
+    import LockScreenContainer from '@/containers/LockScreenContainer/index.svelte';
 
     let { vaults, initialView, onVaultsChanged } = $props();
 
@@ -50,4 +50,4 @@
     <LockScreenContainer {vaults} onUnlocked={onVaultsChanged} {onVaultsChanged} onCreate={() => (view = 'create')} />
 {/if}
 
-<style src="./MainScreenContainer.css"></style>
+<style src="./styles.css"></style>

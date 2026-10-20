@@ -1,8 +1,8 @@
 <script>
     import { onMount } from 'svelte';
     import { listen } from '@tauri-apps/api/event';
-    import * as api from '../../api.js';
-    import Settings from '../../components/Settings/Settings.svelte';
+    import * as api from '@/api.js';
+    import Settings from '@/components/Settings/index.svelte';
     import {
         createExportModel,
         createGeneralModel,
@@ -11,7 +11,7 @@
         createSyncModel,
         createTouchIdModel,
     } from './settingsModel.js';
-    import { ACTIONS, copy, fields } from './constants.js';
+    import { ACTIONS, settingsText, fields } from './constants.js';
 
     let { onBack, onImported = null } = $props();
 
@@ -30,7 +30,6 @@
         }
     });
 
-                                                                    
     function secError(e) {
         return e === 'wrong_passphrase' ? 'Wrong current passphrase.' : `Something went wrong (${e}).`;
     }
@@ -78,7 +77,6 @@
         }
     }
 
-            
     function expError(e) {
         switch (String(e)) {
             case 'wrong_passphrase':
@@ -117,8 +115,6 @@
         }
     }
 
-        
-                                    
     function syncError(e) {
         switch (String(e)) {
             case 'sync_shared_identity':
@@ -388,7 +384,7 @@
             security.busy = false;
         }
     }
-    
+
     onMount(async () => {
         try {
             general.settings = await api.settingsGet();
@@ -413,8 +409,7 @@
         }
     }
 
-    const saveTimeout = () =>
-        saveSetting({ lock_timeout_secs: Math.max(1, Math.round(timeoutMin)) * 60 });
+    const saveTimeout = () => saveSetting({ lock_timeout_secs: Math.max(1, Math.round(timeoutMin)) * 60 });
     const saveStrip = () => saveSetting({ strip_exif: general.settings.strip_exif });
     const saveClipboard = () => saveSetting({ clipboard_clear: general.settings.clipboard_clear });
     const saveSchedule = () => saveSetting({ backup_schedule: general.settings.backup_schedule });
@@ -426,7 +421,8 @@
             const name = await api.backupNow();
             general.note = `Backed up to ${name}.`;
         } catch (e) {
-            general.error = e === 'backup_unavailable' ? 'The backup folder is not available.' : `Something went wrong (${e}).`;
+            general.error =
+                e === 'backup_unavailable' ? 'The backup folder is not available.' : `Something went wrong (${e}).`;
         }
     }
 
@@ -451,7 +447,6 @@
         }
     }
 
-
     const actions = $derived({
         security: ['change-passphrase', 'regenerate-recovery'],
         rotate: ['rotate', ...(security.rotated ? ['rotate-done'] : [])],
@@ -474,7 +469,7 @@
         'change-passphrase':
             security.busy || !security.curPass || !security.newPass || security.newPass !== security.newPass2,
         'regenerate-recovery': security.busy || !security.curPass,
-        'rotate': security.busy || !security.curPass,
+        rotate: security.busy || !security.curPass,
         'export-markdown': exp.busy || !exp.pass,
         'export-json': exp.busy || !exp.pass,
         'import-markdown': imp.busy,
@@ -483,7 +478,7 @@
         'sync-reemit': sync.busy,
         'sync-apply': sync.busy,
         'sync-prune': sync.busy,
-        'restamp': sync.busy,
+        restamp: sync.busy,
         'backup-now': !general.settings?.backup_location,
     });
 
@@ -491,7 +486,7 @@
         'save-timeout': saveTimeout,
         'change-passphrase': changePassphrase,
         'regenerate-recovery': regenerateRecovery,
-        'rotate': rotateMasterKey,
+        rotate: rotateMasterKey,
         'rotate-done': () => api.vaultLock(),
         'export-markdown': () => runExport('markdown'),
         'export-json': () => runExport('json'),
@@ -505,7 +500,7 @@
         'sync-prune': runSyncPrune,
         'sync-prune-cancel': () => (sync.pruneArm = false),
         'sync-prune-arm': () => (sync.pruneArm = true),
-        'restamp': doRestamp,
+        restamp: doRestamp,
         'restamp-cancel': () => (sync.restampArm = false),
         'restamp-arm': () => (sync.restampArm = true),
         'backup-pick': pickBackup,
@@ -519,8 +514,23 @@
         touchIdDisable: disableTouchId,
     };
 </script>
-<style src="./SettingsScreenContainer.css"></style>
 
 <div class="settings-screen">
-    <Settings bind:general bind:security bind:exp bind:timeoutMin {touchId} {imp} {sync} {copy} {fields} {ACTIONS} {actions} {disabled} {handlers} {onBack} />
+    <Settings
+        bind:general
+        bind:security
+        bind:exp
+        bind:timeoutMin
+        {touchId}
+        {imp}
+        {sync}
+        {settingsText}
+        {fields}
+        {ACTIONS}
+        {actions}
+        {disabled}
+        {handlers}
+        {onBack} />
 </div>
+
+<style src="./styles.css"></style>

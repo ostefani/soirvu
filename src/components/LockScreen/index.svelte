@@ -1,9 +1,9 @@
 <script>
-    import Button from '../Button/index.svelte';
-    import Input from '../Input/Input.svelte';
-    import ErrorComponent from '../ErrorComponent/ErrorComponent.svelte';
-    import NoteComponent from '../NoteComponent/NoteComponent.svelte';
-    import { VAULT_STATE } from '../../containers/LockScreenContainer/constants.js';
+    import Button from '@/components/Button/index.svelte';
+    import Input from '@/components/Input/index.svelte';
+    import ErrorComponent from '@/components/ErrorComponent/index.svelte';
+    import NoteComponent from '@/components/NoteComponent/index.svelte';
+    import { VAULT_STATE } from '@/containers/LockScreenContainer/constants.js';
 
     let {
         vaults,

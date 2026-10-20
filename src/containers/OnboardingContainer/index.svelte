@@ -1,6 +1,6 @@
 <script>
-    import * as api from '../../api.js';
-    import Onboarding from '../../components/Onboarding/Onboarding.svelte';
+    import * as api from '@/api.js';
+    import Onboarding from '@/components/Onboarding/index.svelte';
 
     let { onDone, onCancel = null } = $props();
 

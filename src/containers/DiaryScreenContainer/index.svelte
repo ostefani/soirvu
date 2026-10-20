@@ -1,10 +1,10 @@
 <script>
-    import * as api from '../../api.js';
-    import EntryList from '../../components/EntryList/EntryList.svelte';
-    import Calendar from '../../components/Calendar/Calendar.svelte';
-    import EntryEditor from '../../components/EntryEditor/EntryEditor.svelte';
-    import Button from '../../components/Button/index.svelte';
-    import NoteComponent from '../../components/NoteComponent/NoteComponent.svelte';
+    import * as api from '@/api.js';
+    import EntryList from '@/components/EntryList/index.svelte';
+    import Calendar from '@/components/Calendar/index.svelte';
+    import EntryEditor from '@/components/EntryEditor/index.svelte';
+    import Button from '@/components/Button/index.svelte';
+    import NoteComponent from '@/components/NoteComponent/index.svelte';
 
     let { vault, onLock, onSettings } = $props();
 
@@ -87,4 +87,4 @@
     </div>
 </div>
 
-<style src="./DiaryScreenContainer.css"></style>
+<style src="./styles.css"></style>

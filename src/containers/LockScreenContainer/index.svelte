@@ -1,6 +1,6 @@
 <script>
-    import * as api from '../../api.js';
-    import LockScreen from '../../components/LockScreen/index.svelte';
+    import * as api from '@/api.js';
+    import LockScreen from '@/components/LockScreen/index.svelte';
 
     import {
         createModel,

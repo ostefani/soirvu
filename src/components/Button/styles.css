@@ -5,7 +5,14 @@ button {
     cursor: pointer;
 }
 
+/* Active / selected state */
+button.active,
+.active {
+    border-color: var(--interactive-accent);
+}
+
 /* Quiet (ghost / secondary action) button */
+button.quiet,
 .quiet {
     box-shadow: none;
     background: transparent;
@@ -13,17 +20,21 @@ button {
     color: var(--text-secondary);
 }
 
+button.quiet:hover,
 .quiet:hover {
     color: var(--text-primary);
     background-color: var(--interactive-accent-soft);
     border-color: transparent;
 }
 
+button.quiet:active,
 .quiet:active {
     background-color: var(--surface-card-active);
 }
 
 /* Default / standard button */
+button.default,
+button.primary,
 .default,
 .primary {
     background-color: var(--surface-card);
@@ -31,18 +42,22 @@ button {
     border-color: transparent;
 }
 
+button.default:hover,
+button.primary:hover,
 .default:hover,
 .primary:hover {
     border-color: var(--interactive-accent);
 }
 
 /* Destructive / danger button */
+button.danger,
 .danger {
     color: var(--feedback-danger);
     background: transparent;
     border-color: transparent;
 }
 
+button.danger:hover,
 .danger:hover {
     background-color: var(--feedback-danger-soft);
     border-color: var(--feedback-danger);

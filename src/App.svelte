@@ -1,17 +1,12 @@
 <script>
     import { onMount } from 'svelte';
-    import * as api from './api.js';
-    import MainScreenContainer from './containers/MainScreenContainer/MainScreenContainer.svelte';
-    import DiaryScreenContainer from './containers/DiaryScreenContainer/DiaryScreenContainer.svelte';
-    import SettingsScreenContainer from './containers/SettingsScreenContainer/SettingsScreenContainer.svelte';
+    import * as api from '@/api.js';
+    import MainScreenContainer from '@/containers/MainScreenContainer/index.svelte';
+    import DiaryScreenContainer from '@/containers/DiaryScreenContainer/index.svelte';
+    import SettingsScreenContainer from '@/containers/SettingsScreenContainer/index.svelte';
 
-    import {
-        APPLICATION_SCREEN,
-        MAIN_VIEW,
-        VAULT_STATUS,
-        KEYBOARD_SHORTCUT,
-    } from './constants.js';
-    import { applicationText } from './data.js';
+    import { APPLICATION_SCREEN, MAIN_VIEW, VAULT_STATUS, KEYBOARD_SHORTCUT } from '@/constants.js';
+    import { applicationText } from '@/data.js';
 
     let screen = $state(APPLICATION_SCREEN.BOOT);
     let mainView = $state(MAIN_VIEW.WELCOME);
@@ -85,12 +80,10 @@
         bind:this={diaryElement}
         vault={currentVault}
         onLock={lock}
-        onSettings={() => (screen = APPLICATION_SCREEN.SETTINGS)}
-    />
+        onSettings={() => (screen = APPLICATION_SCREEN.SETTINGS)} />
     {#if screen === APPLICATION_SCREEN.SETTINGS}
         <SettingsScreenContainer
             onBack={() => (screen = APPLICATION_SCREEN.DIARY)}
-            onImported={() => diaryElement?.refreshNavigation()}
-        />
+            onImported={() => diaryElement?.refreshNavigation()} />
     {/if}
 {/if}

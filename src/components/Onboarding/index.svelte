@@ -1,10 +1,11 @@
 <script>
-    import Button from '../Button/index.svelte';
-    import Input from '../Input/Input.svelte';
-    import ErrorComponent from '../ErrorComponent/ErrorComponent.svelte';
-    import NoteComponent from '../NoteComponent/NoteComponent.svelte';
+    import Button from '@/components/Button/index.svelte';
+    import Input from '@/components/Input/index.svelte';
+    import ErrorComponent from '@/components/ErrorComponent/index.svelte';
+    import NoteComponent from '@/components/NoteComponent/index.svelte';
 
     let { model = $bindable(), fields, actions } = $props();
+    console.log('model: ', model);
 </script>
 
 <div class="center-col">
@@ -46,4 +47,4 @@
     <ErrorComponent text={model.error} />
 </div>
 
-<style src="./Onboarding.css"></style>
+<style src="./styles.css"></style>

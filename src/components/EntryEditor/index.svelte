@@ -1,8 +1,8 @@
 <script>
     import { onDestroy, onMount } from 'svelte';
-    import * as api from '../../api.js';
-    import { createEditor } from '../../editor/index.js';
-    import EditorToolbar from '../EditorToolbar/EditorToolbar.svelte';
+    import * as api from '@/api.js';
+    import { createEditor } from '@/editor/index.js';
+    import EditorToolbar from '@/components/EditorToolbar/index.svelte';
 
     let { entryId, onDeleted, onSaved, onBack } = $props();
 
@@ -235,4 +235,4 @@
     <p class="note">Opening…</p>
 {/if}
 
-<style src="./EntryEditor.css"></style>
+<style src="./styles.css"></style>

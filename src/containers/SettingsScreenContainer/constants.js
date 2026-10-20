@@ -1,4 +1,4 @@
-export const copy = {
+export const settingsText = {
     title: 'Settings',
     loading: 'Loading…',
     back: 'Back to the diary',
