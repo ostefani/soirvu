@@ -14,6 +14,7 @@
     } from './settingsModel.js';
     import { ACTIONS, settingsText, fields } from './constants.js';
     import { EVENT_TYPE } from '@/constants.js';
+    import { clearNotifications } from '@/components/Notification/store.svelte.js';
 
     let { onBack, onImported = null } = $props();
 
@@ -36,19 +37,20 @@
         return e === 'wrong_passphrase' ? 'Wrong current passphrase.' : `Something went wrong (${e}).`;
     }
 
-    function dismissNotification(key) {
+    function dismissNotification(key, text) {
         switch (key) {
-            case 'general': general.note = ''; break;
-            case 'security': security.note = ''; break;
-            case 'touchId': touchId.note = ''; break;
-            case 'sync': sync.note = ''; break;
-            case 'restamp': sync.restampNote = ''; break;
-            case 'export': exp.note = ''; break;
-            case 'import': imp.note = ''; break;
+            case 'general': if (general.note === text) general.note = ''; break;
+            case 'security': if (security.note === text) security.note = ''; break;
+            case 'touchId': if (touchId.note === text) touchId.note = ''; break;
+            case 'sync': if (sync.note === text) sync.note = ''; break;
+            case 'restamp': if (sync.restampNote === text) sync.restampNote = ''; break;
+            case 'export': if (exp.note === text) exp.note = ''; break;
+            case 'import': if (imp.note === text) imp.note = ''; break;
         }
     }
 
     function clearNotificationsForTabChange() {
+        clearNotifications();
         general.note = '';
         security.note = '';
         touchId.note = '';

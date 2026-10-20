@@ -100,7 +100,7 @@
                 </div>
 
                 {#if general.note}
-                    <Notification event={general.noteEvent} text={general.note} onDismiss={() => onDismissNotification?.('general')} />
+                    <Notification id="settings.general" event={general.noteEvent} text={general.note} onDismiss={(text) => onDismissNotification?.('general', text)} />
                 {/if}
                 {#if general.error}
                     <ErrorComponent text={general.error} />
@@ -147,7 +147,7 @@
                     {/if}
 
                     {#if security.note}
-                        <Notification event={security.noteEvent} text={security.note} onDismiss={() => onDismissNotification?.('security')} />
+                        <Notification id="settings.security" event={security.noteEvent} text={security.note} onDismiss={(text) => onDismissNotification?.('security', text)} />
                     {/if}
                 </div>
 
@@ -190,7 +190,7 @@
                         {/if}
 
                         {#if touchId.note}
-                            <Notification event={touchId.noteEvent} text={touchId.note} onDismiss={() => onDismissNotification?.('touchId')} />
+                            <Notification id="settings.touchId" event={touchId.noteEvent} text={touchId.note} onDismiss={(text) => onDismissNotification?.('touchId', text)} />
                         {/if}
                     </div>
                 {/if}
@@ -312,7 +312,7 @@
                     {/if}
 
                     {#if sync.note}
-                        <Notification event={sync.noteEvent} text={sync.note} onDismiss={() => onDismissNotification?.('sync')} />
+                        <Notification id="settings.sync" event={sync.noteEvent} text={sync.note} onDismiss={(text) => onDismissNotification?.('sync', text)} />
                     {/if}
                     {#each sync.problems as problem}
                         <ErrorComponent text={problem} />
@@ -336,7 +336,7 @@
                         {/each}
                     </div>
                     {#if sync.restampNote}
-                        <Notification event={sync.restampNoteEvent} text={sync.restampNote} onDismiss={() => onDismissNotification?.('restamp')} />
+                        <Notification id="settings.restamp" event={sync.restampNoteEvent} text={sync.restampNote} onDismiss={(text) => onDismissNotification?.('restamp', text)} />
                     {/if}
                 </div>
             </div>
@@ -364,7 +364,7 @@
                     </div>
 
                     {#if exp.note}
-                        <Notification event={exp.noteEvent} text={exp.note} onDismiss={() => onDismissNotification?.('export')} />
+                        <Notification id="settings.export" event={exp.noteEvent} text={exp.note} onDismiss={(text) => onDismissNotification?.('export', text)} />
                     {/if}
                 </div>
 
@@ -381,7 +381,7 @@
                     </div>
 
                     {#if imp.note}
-                        <Notification event={imp.noteEvent} text={imp.note} onDismiss={() => onDismissNotification?.('import')} />
+                        <Notification id="settings.import" event={imp.noteEvent} text={imp.note} onDismiss={(text) => onDismissNotification?.('import', text)} />
                     {/if}
                 </div>
             </div>
