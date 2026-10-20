@@ -4,7 +4,7 @@
     import MainScreenContainer from '@/containers/MainScreenContainer/index.svelte';
     import DiaryScreenContainer from '@/containers/DiaryScreenContainer/index.svelte';
     import SettingsScreenContainer from '@/containers/SettingsScreenContainer/index.svelte';
-    import NotificationStack from '@/components/Notification/NotificationStack.svelte';
+    import NotificationStack from '@/containers/NotificationStackContainer/index.svelte';
 
     import { APPLICATION_SCREEN, MAIN_VIEW, VAULT_STATUS, KEYBOARD_SHORTCUT } from '@/constants.js';
     import { applicationText } from '@/data.js';

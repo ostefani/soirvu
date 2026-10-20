@@ -8,7 +8,6 @@
     import Tabs from '@/components/Tabs/index.svelte';
     import Checkbox from '@/components/Checkbox/index.svelte';
     import Description from '@/components/Description/index.svelte';
-    import Notification from '@/components/Notification/index.svelte';
 
     let {
         general = $bindable(),
@@ -25,7 +24,6 @@
         disabled,
         handlers,
         onTabChange,
-        onDismissNotification,
     } = $props();
 
     let activeTab = $state('general');
@@ -99,9 +97,6 @@
                     </div>
                 </div>
 
-                {#if general.note}
-                    <Notification id="settings.general" event={general.noteEvent} text={general.note} onDismiss={(text) => onDismissNotification?.('general', text)} />
-                {/if}
                 {#if general.error}
                     <ErrorComponent text={general.error} />
                 {/if}
@@ -145,10 +140,6 @@
                             <p><code>{security.newRecoveryKey}</code></p>
                         </NoteComponent>
                     {/if}
-
-                    {#if security.note}
-                        <Notification id="settings.security" event={security.noteEvent} text={security.note} onDismiss={(text) => onDismissNotification?.('security', text)} />
-                    {/if}
                 </div>
 
                 {#if touchId.status?.capable || touchId.status?.enrolled}
@@ -187,10 +178,6 @@
                                     handler={handlers.touchIdEnable}
                                     disabled={touchId.busy} />
                             </div>
-                        {/if}
-
-                        {#if touchId.note}
-                            <Notification id="settings.touchId" event={touchId.noteEvent} text={touchId.note} onDismiss={(text) => onDismissNotification?.('touchId', text)} />
                         {/if}
                     </div>
                 {/if}
@@ -311,9 +298,13 @@
                         {/if}
                     {/if}
 
-                    {#if sync.note}
-                        <Notification id="settings.sync" event={sync.noteEvent} text={sync.note} onDismiss={(text) => onDismissNotification?.('sync', text)} />
-                    {/if}
+                    <!-- {#if sync.note}
+                        <Notification
+                            id="settings.sync"
+                            event={sync.noteEvent}
+                            text={sync.note}
+                            onDismiss={(text) => onDismissNotification?.('sync', text)} />
+                    {/if} -->
                     {#each sync.problems as problem}
                         <ErrorComponent text={problem} />
                     {/each}
@@ -335,9 +326,13 @@
                             <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
                         {/each}
                     </div>
-                    {#if sync.restampNote}
-                        <Notification id="settings.restamp" event={sync.restampNoteEvent} text={sync.restampNote} onDismiss={(text) => onDismissNotification?.('restamp', text)} />
-                    {/if}
+                    <!-- {#if sync.restampNote}
+                        <Notification
+                            id="settings.restamp"
+                            event={sync.restampNoteEvent}
+                            text={sync.restampNote}
+                            onDismiss={(text) => onDismissNotification?.('restamp', text)} />
+                    {/if} -->
                 </div>
             </div>
 
@@ -363,9 +358,13 @@
                         {/each}
                     </div>
 
-                    {#if exp.note}
-                        <Notification id="settings.export" event={exp.noteEvent} text={exp.note} onDismiss={(text) => onDismissNotification?.('export', text)} />
-                    {/if}
+                    <!-- {#if exp.note}
+                        <Notification
+                            id="settings.export"
+                            event={exp.noteEvent}
+                            text={exp.note}
+                            onDismiss={(text) => onDismissNotification?.('export', text)} />
+                    {/if} -->
                 </div>
 
                 <div class="settings-card">
@@ -379,10 +378,6 @@
                             <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
                         {/each}
                     </div>
-
-                    {#if imp.note}
-                        <Notification id="settings.import" event={imp.noteEvent} text={imp.note} onDismiss={(text) => onDismissNotification?.('import', text)} />
-                    {/if}
                 </div>
             </div>
         {/if}

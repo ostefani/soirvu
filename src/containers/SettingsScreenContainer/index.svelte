@@ -14,7 +14,7 @@
     } from './settingsModel.js';
     import { ACTIONS, settingsText, fields } from './constants.js';
     import { EVENT_TYPE } from '@/constants.js';
-    import { clearNotifications } from '@/components/Notification/store.svelte.js';
+    import { notify, clearNotifications } from '@/components/Notification/store.svelte.js';
 
     let { onBack, onImported = null } = $props();
 
@@ -24,88 +24,16 @@
     let exp = $state(createExportModel());
     let imp = $state(createImportModel());
     let sync = $state(createSyncModel());
-
     let timeoutMin = $state(null);
 
-    $effect(() => {
-        if (timeoutMin === null && general.settings) {
-            timeoutMin = Math.max(1, Math.round(general.settings.lock_timeout_secs / 60));
-        }
-    });
+    // One notification slot per section: a new notify replaces the previous one in place.
+    const toMinutes = (secs) => Math.max(1, Math.round(secs / 60));
+    const somethingWrong = (e) => `Something went wrong (${e}).`;
+
+    // ---------- errors ----------
 
     function secError(e) {
-        return e === 'wrong_passphrase' ? 'Wrong current passphrase.' : `Something went wrong (${e}).`;
-    }
-
-    function dismissNotification(key, text) {
-        switch (key) {
-            case 'general': if (general.note === text) general.note = ''; break;
-            case 'security': if (security.note === text) security.note = ''; break;
-            case 'touchId': if (touchId.note === text) touchId.note = ''; break;
-            case 'sync': if (sync.note === text) sync.note = ''; break;
-            case 'restamp': if (sync.restampNote === text) sync.restampNote = ''; break;
-            case 'export': if (exp.note === text) exp.note = ''; break;
-            case 'import': if (imp.note === text) imp.note = ''; break;
-        }
-    }
-
-    function clearNotificationsForTabChange() {
-        clearNotifications();
-        general.note = '';
-        security.note = '';
-        touchId.note = '';
-        sync.note = '';
-        sync.restampNote = '';
-        exp.note = '';
-        imp.note = '';
-    }
-
-    async function changePassphrase() {
-        security.note = '';
-        security.newRecoveryKey = '';
-        security.busy = true;
-        try {
-            await api.vaultChangePassphrase(security.curPass, security.newPass);
-            security.curPass = security.newPass;
-            security.newPass = '';
-            security.newPass2 = '';
-            security.note = 'Passphrase changed. The diary stays open — the new passphrase applies at the next unlock.';
-            security.noteEvent = EVENT_TYPE.UPDATED;
-        } catch (e) {
-            security.note = secError(e);
-            security.noteEvent = EVENT_TYPE.ERROR;
-        } finally {
-            security.busy = false;
-        }
-    }
-
-    async function rotateMasterKey() {
-        security.note = '';
-        security.busy = true;
-
-        const unlisten = await listen('rotation-started', () => {
-            security.rotating = true;
-        });
-        try {
-            const key = await api.vaultRotateMasterKey(security.curPass);
-            if (key === null) {
-                security.note = 'Master key unchanged.';
-                security.noteEvent = EVENT_TYPE.INFO;
-            } else {
-                security.newRecoveryKey = key;
-                security.rotated = true;
-                security.note =
-                    'Master key changed — and the diary is now locked. Save the new recovery key, then unlock with your passphrase (it did not change).';
-                security.noteEvent = EVENT_TYPE.UPDATED;
-            }
-        } catch (e) {
-            security.note = secError(e);
-            security.noteEvent = EVENT_TYPE.ERROR;
-        } finally {
-            unlisten();
-            security.busy = false;
-            security.rotating = false;
-        }
+        return e === 'wrong_passphrase' ? 'Wrong current passphrase.' : somethingWrong(e);
     }
 
     function expError(e) {
@@ -119,31 +47,7 @@
             case 'locked':
                 return 'The diary is locked.';
             default:
-                return 'Something went wrong (' + String(e) + ').';
-        }
-    }
-
-    async function runExport(which) {
-        exp.note = '';
-        exp.busy = true;
-        try {
-            const outcome = which === 'json' ? await api.exportJson(exp.pass) : await api.exportMarkdown(exp.pass);
-            if (outcome) {
-                exp.pass = '';
-                exp.note =
-                    'Exported ' +
-                    outcome.entries +
-                    ' entries and ' +
-                    outcome.attachments +
-                    ' attachments to ' +
-                    outcome.target +
-                    '. These files are NOT encrypted.';
-            }
-        } catch (e) {
-            exp.note = expError(e);
-            exp.noteEvent = EVENT_TYPE.ERROR;
-        } finally {
-            exp.busy = false;
+                return somethingWrong(e);
         }
     }
 
@@ -162,19 +66,116 @@
             case 'sync':
                 return 'Sync failed.';
             default:
-                return 'Something went wrong (' + String(e) + ').';
+                return somethingWrong(e);
         }
     }
 
-    async function dismissAckAhead() {
-        sync.busy = true;
+    // ---------- security ----------
+
+    async function changePassphrase() {
+        security.newRecoveryKey = '';
+        security.busy = true;
         try {
-            sync.info = await api.syncDismissAckAhead();
+            await api.vaultChangePassphrase(security.curPass, security.newPass);
+            security.curPass = security.newPass;
+            security.newPass = '';
+            security.newPass2 = '';
+            notify(
+                EVENT_TYPE.UPDATED,
+                'Passphrase changed. The diary stays open — the new passphrase applies at the next unlock.',
+            );
         } catch (e) {
-            sync.problems = [syncError(e)];
+            notify(EVENT_TYPE.ERROR, secError(e));
         } finally {
-            sync.busy = false;
+            security.busy = false;
         }
+    }
+
+    async function rotateMasterKey() {
+        security.busy = true;
+        let unlisten = () => {};
+        try {
+            unlisten = await listen('rotation-started', () => (security.rotating = true));
+            const key = await api.vaultRotateMasterKey(security.curPass);
+            if (key === null) {
+                notify(EVENT_TYPE.INFO, 'Master key unchanged.');
+            } else {
+                security.newRecoveryKey = key;
+                security.rotated = true;
+                notify(
+                    EVENT_TYPE.UPDATED,
+                    'Master key changed — and the diary is now locked. Save the new recovery key, then unlock with your passphrase (it did not change).',
+                    { duration: 0 },
+                );
+            }
+        } catch (e) {
+            notify(EVENT_TYPE.ERROR, secError(e));
+        } finally {
+            unlisten();
+            security.busy = false;
+            security.rotating = false;
+        }
+    }
+
+    async function regenerateRecovery() {
+        security.busy = true;
+        try {
+            security.newRecoveryKey = await api.vaultRegenerateRecovery(security.curPass);
+            security.curPass = '';
+        } catch (e) {
+            security.newRecoveryKey = '';
+            notify(EVENT_TYPE.ERROR, secError(e));
+        } finally {
+            security.busy = false;
+        }
+    }
+
+    // ---------- export / import ----------
+
+    async function runExport(which) {
+        exp.busy = true;
+        try {
+            const outcome = which === 'json' ? await api.exportJson(exp.pass) : await api.exportMarkdown(exp.pass);
+            if (outcome) {
+                exp.pass = '';
+                notify(
+                    EVENT_TYPE.SAVED,
+                    `Exported ${outcome.entries} entries and ${outcome.attachments} attachments to ${outcome.target}. These files are NOT encrypted.`,
+                    { duration: 0 },
+                );
+            }
+        } catch (e) {
+            notify(EVENT_TYPE.ERROR, expError(e));
+        } finally {
+            exp.busy = false;
+        }
+    }
+
+    async function runImport(which) {
+        imp.busy = true;
+        try {
+            const outcome = which === 'json' ? await api.importJson() : await api.importMarkdown();
+            if (outcome) {
+                let message = `Imported ${outcome.entries} entries and ${outcome.attachments} attachments.`;
+                if (outcome.skippedEntries > 0 || outcome.skippedAttachments > 0) {
+                    message += ` Skipped ${outcome.skippedEntries} entries and ${outcome.skippedAttachments} attachments (already present or unreadable).`;
+                }
+                notify(EVENT_TYPE.SAVED, message);
+                if (outcome.entries > 0) onImported?.();
+            }
+        } catch (e) {
+            notify(EVENT_TYPE.ERROR, String(e) === 'locked' ? 'The diary is locked.' : somethingWrong(e));
+        } finally {
+            imp.busy = false;
+        }
+    }
+
+    // ---------- sync ----------
+
+    function resetSyncReport() {
+        sync.problems = [];
+        sync.warnings = [];
+        sync.ackAhead = null;
     }
 
     async function loadSync() {
@@ -194,7 +195,7 @@
                 await loadSync();
             }
         } catch (e) {
-            general.error = `Something went wrong (${e}).`;
+            general.error = somethingWrong(e);
         }
     }
 
@@ -204,171 +205,104 @@
             general.settings = await api.syncClearFolder();
             sync.pruneArm = false;
             sync.info = null;
-            sync.note = '';
-            sync.problems = [];
-            sync.warnings = [];
-            sync.ackAhead = null;
+            resetSyncReport();
         } catch (e) {
-            general.error = `Something went wrong (${e}).`;
+            general.error = somethingWrong(e);
         }
     }
 
-    async function runSyncReemit() {
-        sync.note = '';
-        sync.problems = [];
-        sync.warnings = [];
-        sync.ackAhead = null;
+    async function dismissAckAhead() {
         sync.busy = true;
         try {
-            const bundle = await api.syncReemit();
-            sync.note = bundle
-                ? 'Everything is emitted as ' +
-                  bundle.file_name +
-                  ' — peers that lost bundles to a prune recover them on their next apply.'
-                : 'Nothing to re-emit.';
-            await loadSync();
+            sync.info = await api.syncDismissAckAhead();
         } catch (e) {
-            sync.note = syncError(e);
-            sync.noteEvent = EVENT_TYPE.ERROR;
+            sync.problems = [syncError(e)];
         } finally {
             sync.busy = false;
         }
     }
 
-    async function runSyncEmit() {
-        sync.note = '';
-        sync.problems = [];
-        sync.warnings = [];
-        sync.ackAhead = null;
+    async function runSync(task) {
+        resetSyncReport();
         sync.busy = true;
         try {
+            await task();
+            await loadSync();
+        } catch (e) {
+            notify(EVENT_TYPE.ERROR, syncError(e));
+        } finally {
+            sync.busy = false;
+        }
+    }
+
+    const runSyncEmit = () =>
+        runSync(async () => {
             const bundle = await api.syncEmit();
-            sync.note = bundle
-                ? 'Wrote ' +
-                  bundle.file_name +
-                  ' — ' +
-                  bundle.entries +
-                  ' entries, ' +
-                  bundle.attachments +
-                  ' attachments.'
-                : 'Nothing new to emit.';
-            await loadSync();
-        } catch (e) {
-            sync.note = syncError(e);
-            sync.noteEvent = EVENT_TYPE.ERROR;
-        } finally {
-            sync.busy = false;
-        }
-    }
+            notify(
+                EVENT_TYPE.INFO,
+                bundle
+                    ? `Wrote ${bundle.file_name} — ${bundle.entries} entries, ${bundle.attachments} attachments.`
+                    : 'Nothing new to emit.',
+            );
+        });
 
-    async function runSyncApply() {
-        sync.note = '';
-        sync.problems = [];
-        sync.warnings = [];
-        sync.ackAhead = null;
-        sync.busy = true;
-        try {
+    const runSyncReemit = () =>
+        runSync(async () => {
+            const bundle = await api.syncReemit();
+            notify(
+                EVENT_TYPE.INFO,
+                bundle
+                    ? `Everything is emitted as ${bundle.file_name} — peers that lost bundles to a prune recover them on their next apply.`
+                    : 'Nothing to re-emit.',
+            );
+        });
+
+    const runSyncApply = () =>
+        runSync(async () => {
             const report = await api.syncApply();
-            sync.note =
-                'Applied ' +
-                report.bundles_applied +
-                ' of ' +
-                report.bundles_seen +
-                ' bundles: ' +
-                report.entries_applied +
-                ' entries, ' +
-                report.entries_conflicted +
-                ' conflict copies, ' +
-                report.attachments_applied +
-                ' attachments.';
+            notify(
+                EVENT_TYPE.INFO,
+                `Applied ${report.bundles_applied} of ${report.bundles_seen} bundles: ${report.entries_applied} entries, ${report.entries_conflicted} conflict copies, ${report.attachments_applied} attachments.`,
+            );
             sync.problems = report.problems;
             sync.warnings = report.warnings;
             sync.ackAhead = report.ack_ahead;
-            if (report.entries_applied > 0) {
-                onImported?.();
-            }
-            await loadSync();
-        } catch (e) {
-            sync.note = syncError(e);
-            sync.noteEvent = EVENT_TYPE.ERROR;
-        } finally {
-            sync.busy = false;
-        }
-    }
+            if (report.entries_applied > 0) onImported?.();
+        });
 
-    async function runSyncPrune() {
-        sync.note = '';
-        sync.problems = [];
-        sync.warnings = [];
-        sync.ackAhead = null;
-        sync.busy = true;
-        try {
-            const report = await api.syncPrune();
-            sync.note =
-                report.covered_through > 0
-                    ? 'Removed ' +
-                      report.bundles_removed +
-                      ' bundles and ' +
-                      report.blobs_removed +
-                      ' blobs — every peer has consumed this device through ' +
-                      report.covered_through +
-                      '.'
-                    : 'Nothing pruned — no peer has acknowledged this device yet.';
-            await loadSync();
-        } catch (e) {
-            sync.note = syncError(e);
-            sync.noteEvent = EVENT_TYPE.ERROR;
-        } finally {
-            sync.pruneArm = false;
-            sync.busy = false;
-        }
-    }
+    const runSyncPrune = () =>
+        runSync(async () => {
+            try {
+                const report = await api.syncPrune();
+                notify(
+                    EVENT_TYPE.INFO,
+                    report.covered_through > 0
+                        ? `Removed ${report.bundles_removed} bundles and ${report.blobs_removed} blobs — every peer has consumed this device through ${report.covered_through}.`
+                        : 'Nothing pruned — no peer has acknowledged this device yet.',
+                );
+            } finally {
+                sync.pruneArm = false;
+            }
+        });
 
     async function doRestamp() {
-        sync.restampNote = '';
         sync.busy = true;
         try {
             const id = await api.restampDevice();
             sync.restampArm = false;
-            sync.restampNote =
-                'This copy now syncs as a new device (' +
-                id.slice(-8) +
-                '…). Its changes will be emitted again under the new identity.';
+            notify(
+                EVENT_TYPE.UPDATED,
+                `This copy now syncs as a new device (${id.slice(-8)}…). Its changes will be emitted again under the new identity.`,
+            );
             await loadSync();
         } catch (e) {
-            sync.restampNote = syncError(e);
-            sync.restampNoteEvent = EVENT_TYPE.ERROR;
+            notify(EVENT_TYPE.ERROR, syncError(e));
         } finally {
             sync.busy = false;
         }
     }
 
-    async function runImport(which) {
-        imp.note = '';
-        imp.busy = true;
-        try {
-            const outcome = which === 'json' ? await api.importJson() : await api.importMarkdown();
-            if (outcome) {
-                imp.note = 'Imported ' + outcome.entries + ' entries and ' + outcome.attachments + ' attachments.';
-                if (outcome.skippedEntries > 0 || outcome.skippedAttachments > 0) {
-                    imp.note +=
-                        ' Skipped ' +
-                        outcome.skippedEntries +
-                        ' entries and ' +
-                        outcome.skippedAttachments +
-                        ' attachments (already present or unreadable).';
-                }
-                if (outcome.entries > 0) {
-                    onImported?.();
-                }
-            }
-        } catch (e) {
-            imp.note = String(e) === 'locked' ? 'The diary is locked.' : 'Something went wrong (' + String(e) + ').';
-            imp.noteEvent = EVENT_TYPE.ERROR;
-        } finally {
-            imp.busy = false;
-        }
-    }
+    // ---------- Touch ID ----------
 
     async function refreshTouchId() {
         try {
@@ -379,123 +313,105 @@
     }
 
     async function enableTouchId() {
-        touchId.note = '';
         touchId.busy = true;
         try {
             await api.touchIdEnroll();
             await refreshTouchId();
-            touchId.note = 'Touch ID is on for this diary.';
+            notify(EVENT_TYPE.UPDATED, 'Touch ID is on for this diary.');
         } catch (e) {
-            touchId.note =
-                e === 'touch_id_unavailable'
-                    ? 'Touch ID is not available in this build.'
-                    : `Something went wrong (${e}).`;
-            touchId.noteEvent = e === 'touch_id_unavailable' ? EVENT_TYPE.INFO : EVENT_TYPE.ERROR;
+            if (e === 'touch_id_unavailable') {
+                notify(EVENT_TYPE.INFO, 'Touch ID is not available in this build.');
+            } else {
+                notify(EVENT_TYPE.ERROR, somethingWrong(e));
+            }
         } finally {
             touchId.busy = false;
         }
     }
 
     async function disableTouchId() {
-        touchId.note = '';
         touchId.busy = true;
         try {
             await api.touchIdDisable();
             await refreshTouchId();
-            touchId.note = 'Touch ID is off for this diary.';
+            notify(EVENT_TYPE.UPDATED, 'Touch ID is off for this diary.');
         } catch (e) {
-            touchId.note = `Something went wrong (${e}).`;
-            touchId.noteEvent = EVENT_TYPE.ERROR;
+            notify(EVENT_TYPE.ERROR, somethingWrong(e));
         } finally {
             touchId.busy = false;
         }
     }
 
-    async function regenerateRecovery() {
-        security.note = '';
-        security.busy = true;
-        try {
-            security.newRecoveryKey = await api.vaultRegenerateRecovery(security.curPass);
-            security.curPass = '';
-        } catch (e) {
-            security.note = secError(e);
-            security.noteEvent = EVENT_TYPE.ERROR;
-            security.newRecoveryKey = '';
-        } finally {
-            security.busy = false;
-        }
-    }
+    // ---------- general settings & backups ----------
 
     onMount(async () => {
         try {
             general.settings = await api.settingsGet();
+            timeoutMin = toMinutes(general.settings.lock_timeout_secs); // replaces the init $effect
             refreshTouchId();
-            if (general.settings.sync_location) {
-                loadSync();
-            }
+            if (general.settings.sync_location) loadSync();
         } catch (e) {
-            general.error = `Something went wrong (${e}).`;
+            general.error = somethingWrong(e);
         }
     });
 
     async function saveSetting(patch, successMessage = 'Settings saved.') {
         general.error = '';
-        general.note = '';
         try {
             await api.settingsSet({ ...general.settings, ...patch });
             general.settings = await api.settingsGet();
-            general.note = successMessage;
+            notify(EVENT_TYPE.SAVED, successMessage);
         } catch (e) {
-            general.error = `Something went wrong (${e}).`;
+            general.error = somethingWrong(e);
         }
     }
 
     const saveTimeout = () =>
-        saveSetting({ lock_timeout_secs: Math.max(1, Math.round(timeoutMin)) * 60 }, 'Inactivity lock timeout saved.');
+        saveSetting({ lock_timeout_secs: toMinutes(timeoutMin * 60) * 60 }, 'Inactivity lock timeout saved.');
     const saveStrip = () =>
         saveSetting(
             { strip_exif: general.settings.strip_exif },
-            general.settings.strip_exif ? 'Location metadata will be removed from imported photos.' : 'Location metadata will be kept in imported photos.',
+            general.settings.strip_exif
+                ? 'Location metadata will be removed from imported photos.'
+                : 'Location metadata will be kept in imported photos.',
         );
     const saveClipboard = () =>
         saveSetting(
             { clipboard_clear: general.settings.clipboard_clear },
             general.settings.clipboard_clear ? 'Clipboard clearing is enabled.' : 'Clipboard clearing is disabled.',
         );
-    const saveSchedule = () => saveSetting({ backup_schedule: general.settings.backup_schedule }, 'Backup schedule saved.');
+    const saveSchedule = () =>
+        saveSetting({ backup_schedule: general.settings.backup_schedule }, 'Backup schedule saved.');
 
     async function backUpNow() {
         general.error = '';
-        general.note = '';
         try {
-            const name = await api.backupNow();
-            general.note = `Backed up to ${name}.`;
+            notify(EVENT_TYPE.SAVED, `Backed up to ${await api.backupNow()}.`);
         } catch (e) {
-            general.error =
-                e === 'backup_unavailable' ? 'The backup folder is not available.' : `Something went wrong (${e}).`;
+            general.error = e === 'backup_unavailable' ? 'The backup folder is not available.' : somethingWrong(e);
         }
     }
 
     async function pickBackup() {
         general.error = '';
-        general.note = '';
         try {
             const updated = await api.settingsPickBackupDir();
             if (updated) general.settings = updated;
         } catch (e) {
-            general.error = `Something went wrong (${e}).`;
+            general.error = somethingWrong(e);
         }
     }
 
     async function clearBackup() {
         general.error = '';
-        general.note = '';
         try {
             general.settings = await api.settingsClearBackupDir();
         } catch (e) {
-            general.error = `Something went wrong (${e}).`;
+            general.error = somethingWrong(e);
         }
     }
+
+    // ---------- view wiring ----------
 
     const actions = $derived({
         security: ['change-passphrase', 'regenerate-recovery'],
@@ -591,8 +507,7 @@
             {actions}
             {disabled}
             {handlers}
-            onTabChange={clearNotificationsForTabChange}
-            onDismissNotification={dismissNotification}
+            onTabChange={clearNotifications}
             {onBack} />
     </div>
 </div>
