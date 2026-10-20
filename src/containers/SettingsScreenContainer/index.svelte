@@ -438,22 +438,31 @@
         }
     });
 
-    async function saveSetting(patch) {
+    async function saveSetting(patch, successMessage = 'Settings saved.') {
         general.error = '';
         general.note = '';
         try {
             await api.settingsSet({ ...general.settings, ...patch });
             general.settings = await api.settingsGet();
-            general.note = 'Saved.';
+            general.note = successMessage;
         } catch (e) {
             general.error = `Something went wrong (${e}).`;
         }
     }
 
-    const saveTimeout = () => saveSetting({ lock_timeout_secs: Math.max(1, Math.round(timeoutMin)) * 60 });
-    const saveStrip = () => saveSetting({ strip_exif: general.settings.strip_exif });
-    const saveClipboard = () => saveSetting({ clipboard_clear: general.settings.clipboard_clear });
-    const saveSchedule = () => saveSetting({ backup_schedule: general.settings.backup_schedule });
+    const saveTimeout = () =>
+        saveSetting({ lock_timeout_secs: Math.max(1, Math.round(timeoutMin)) * 60 }, 'Inactivity lock timeout saved.');
+    const saveStrip = () =>
+        saveSetting(
+            { strip_exif: general.settings.strip_exif },
+            general.settings.strip_exif ? 'Location metadata will be removed from imported photos.' : 'Location metadata will be kept in imported photos.',
+        );
+    const saveClipboard = () =>
+        saveSetting(
+            { clipboard_clear: general.settings.clipboard_clear },
+            general.settings.clipboard_clear ? 'Clipboard clearing is enabled.' : 'Clipboard clearing is disabled.',
+        );
+    const saveSchedule = () => saveSetting({ backup_schedule: general.settings.backup_schedule }, 'Backup schedule saved.');
 
     async function backUpNow() {
         general.error = '';

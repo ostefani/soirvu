@@ -13,8 +13,6 @@
         children = null,
     } = $props();
 
-    let dismissed = $state(false);
-
     // Compute effective semantic type based on event preset or explicit type
     const computedType = $derived.by(() => {
         if (type) return type;
@@ -59,12 +57,11 @@
     const displayMessage = $derived(message || text);
 
     function handleClose() {
-        dismissed = true;
         onDismiss?.();
     }
 
     $effect(() => {
-        if (duration > 0 && !dismissed) {
+        if (duration > 0) {
             const timer = setTimeout(() => {
                 handleClose();
             }, duration);
@@ -73,7 +70,7 @@
     });
 </script>
 
-{#if !dismissed && (displayMessage || children || computedTitle)}
+{#if displayMessage || children || computedTitle}
     <div
         class="notification-banner"
         class:mode-toast={mode === 'toast'}

@@ -15,17 +15,20 @@
 
     let active = false;
     let activeNotificationId = '';
+    let previousContent = '';
 
     $effect(() => {
         const content = message || text;
         if (!content && !title) {
             active = false;
+            previousContent = '';
             return;
         }
         if (!id) return;
 
-        if (!active) {
+        if (!active || content !== previousContent) {
             active = true;
+            previousContent = content;
             activeNotificationId = nextNotificationId(id);
         }
 
