@@ -3,6 +3,7 @@
     import * as api from '@/api.js';
     import { createEditor } from '@/editor/index.js';
     import EditorToolbar from '@/components/EditorToolbar/index.svelte';
+    import Button from '@/components/Button/index.svelte';
 
     let { entryId, onDeleted, onSaved, onBack } = $props();
 
@@ -207,7 +208,8 @@
 {#if entry}
     <div class="editor-pane">
         <div class="back-row">
-            <button class="quiet" onclick={() => onBack?.()}>‹ Back</button>
+            <!-- <button class="quiet" onclick={() => onBack?.()}>‹ Back</button> -->
+            <Button kind="quiet" type onclick={() => onBack?.()} label="Back" />
         </div>
         <div class="meta-row">
             <input class="title-input" placeholder="Title" bind:value={title} oninput={markDirty} />

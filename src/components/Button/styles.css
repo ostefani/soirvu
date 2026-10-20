@@ -1,5 +1,9 @@
 /*
  * Button Component Styles
+ * Already fully tokenized — kept as-is. The restyle is carried
+ * by app.css (focus ring, hover) and the component files; the
+ * variant language here (quiet / default / danger) is exactly
+ * what the clean design needs.
  */
 button {
     cursor: pointer;
