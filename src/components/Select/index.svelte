@@ -3,7 +3,7 @@
 </script>
 
 {#snippet control()}
-    <select name={field.name} {disabled} bind:value onchange={() => onchange?.()}>
+    <select name={field.name} {disabled} bind:value onchange={(e) => onchange?.(e)}>
         {#each field.options as option (option.value)}
             <option value={option.value}>{option.label}</option>
         {/each}

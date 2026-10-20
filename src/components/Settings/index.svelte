@@ -10,10 +10,9 @@
     import Description from '@/components/Description/index.svelte';
 
     let {
-        general = $bindable(),
-        security = $bindable(),
-        timeoutMin = $bindable(),
-        exp = $bindable(),
+        general,
+        security,
+        exp,
         touchId,
         imp,
         sync,
@@ -23,6 +22,9 @@
         actions,
         disabled,
         handlers,
+        setSecurityField,
+        setExportPass,
+        setTimeoutMin,
         onTabChange,
     } = $props();
 
@@ -67,7 +69,7 @@
                     <hr class="settings-divider" />
 
                     <div class="setting-item">
-                        <Input field={fields.timeout} bind:value={timeoutMin} />
+                        <Input field={fields.timeout} value={general.timeoutMin} oninput={(e) => setTimeoutMin(e.currentTarget.value)} />
                         <div class="setting-row">
                             {#each actions.timeout as action (action)}
                                 <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
@@ -84,14 +86,14 @@
 
                     <div class="checkbox-group">
                         <Checkbox
-                            bind:checked={general.settings.strip_exif}
-                            onchange={handlers.saveStrip}
+                            checked={general.settings.strip_exif}
+                            onchange={(e) => handlers.saveStrip(e.currentTarget.checked)}
                             label={settingsText.stripExif} />
 
                         {#if general.settings?.platform === 'macos'}
                             <Checkbox
-                                bind:checked={general.settings.clipboard_clear}
-                                onchange={handlers.saveClipboard}
+                                checked={general.settings.clipboard_clear}
+                                onchange={(e) => handlers.saveClipboard(e.currentTarget.checked)}
                                 label={settingsText.clipboardClear} />
                         {/if}
                     </div>
@@ -116,7 +118,7 @@
                     </div>
 
                     {#each fields.security as field (field.name)}
-                        <Input {field} bind:value={security[field.name]} />
+                        <Input {field} value={security[field.name]} oninput={(e) => setSecurityField(field.name, e.currentTarget.value)} />
                     {/each}
 
                     <div class="setting-row">
@@ -217,8 +219,8 @@
                     <div class="setting-item">
                         <Select
                             field={fields.schedule}
-                            bind:value={general.settings.backup_schedule}
-                            onchange={handlers.saveSchedule} />
+                            value={general.settings.backup_schedule}
+                            onchange={(e) => handlers.saveSchedule(e.currentTarget.value)} />
                         <div class="setting-row">
                             {#each actions.backupNow as action (action)}
                                 <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
@@ -350,7 +352,7 @@
                         {/each}
                     </div>
 
-                    <Input field={fields.exportPass} bind:value={exp.pass} />
+                    <Input field={fields.exportPass} value={exp.pass} oninput={(e) => setExportPass(e.currentTarget.value)} />
 
                     <div class="setting-row">
                         {#each actions.export as action (action)}

@@ -24,7 +24,6 @@
     let exp = $state(createExportModel());
     let imp = $state(createImportModel());
     let sync = $state(createSyncModel());
-    let timeoutMin = $state(null);
 
     // One notification slot per section: a new notify replaces the previous one in place.
     const toMinutes = (secs) => Math.max(1, Math.round(secs / 60));
@@ -347,7 +346,7 @@
     onMount(async () => {
         try {
             general.settings = await api.settingsGet();
-            timeoutMin = toMinutes(general.settings.lock_timeout_secs); // replaces the init $effect
+            general.timeoutMin = toMinutes(general.settings.lock_timeout_secs);
             refreshTouchId();
             if (general.settings.sync_location) loadSync();
         } catch (e) {
@@ -367,21 +366,30 @@
     }
 
     const saveTimeout = () =>
-        saveSetting({ lock_timeout_secs: toMinutes(timeoutMin * 60) * 60 }, 'Inactivity lock timeout saved.');
-    const saveStrip = () =>
+        saveSetting({ lock_timeout_secs: toMinutes(general.timeoutMin * 60) * 60 }, 'Inactivity lock timeout saved.');
+    const saveStrip = (strip) =>
         saveSetting(
-            { strip_exif: general.settings.strip_exif },
-            general.settings.strip_exif
+            { strip_exif: strip },
+            strip
                 ? 'Location metadata will be removed from imported photos.'
                 : 'Location metadata will be kept in imported photos.',
         );
-    const saveClipboard = () =>
+    const saveClipboard = (clear) =>
         saveSetting(
-            { clipboard_clear: general.settings.clipboard_clear },
-            general.settings.clipboard_clear ? 'Clipboard clearing is enabled.' : 'Clipboard clearing is disabled.',
+            { clipboard_clear: clear },
+            clear ? 'Clipboard clearing is enabled.' : 'Clipboard clearing is disabled.',
         );
-    const saveSchedule = () =>
-        saveSetting({ backup_schedule: general.settings.backup_schedule }, 'Backup schedule saved.');
+    const saveSchedule = (schedule) => saveSetting({ backup_schedule: schedule }, 'Backup schedule saved.');
+
+    const setSecurityField = (name, value) => {
+        security[name] = value;
+    };
+    const setExportPass = (value) => {
+        exp.pass = value;
+    };
+    const setTimeoutMin = (value) => {
+        general.timeoutMin = value === '' ? null : Number(value);
+    };
 
     async function backUpNow() {
         general.error = '';
@@ -479,6 +487,7 @@
         touchIdEnable: enableTouchId,
         touchIdDisable: disableTouchId,
     };
+
 </script>
 
 <div class="settings-screen">
@@ -494,10 +503,9 @@
 
     <div class="settings-scroll-content">
         <Settings
-            bind:general
-            bind:security
-            bind:exp
-            bind:timeoutMin
+            {general}
+            {security}
+            {exp}
             {touchId}
             {imp}
             {sync}
@@ -507,6 +515,9 @@
             {actions}
             {disabled}
             {handlers}
+            {setSecurityField}
+            {setExportPass}
+            {setTimeoutMin}
             onTabChange={clearNotifications}
             {onBack} />
     </div>

@@ -1,5 +1,5 @@
 export function createGeneralModel() {
-    return { settings: null, error: '' };
+    return { settings: null, error: '', timeoutMin: null };
 }
 
 export function createSecurityModel() {

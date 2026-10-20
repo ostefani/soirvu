@@ -16,7 +16,7 @@
         {disabled}
         bind:value
         onkeydown={keydown}
-        oninput={() => oninput?.()} />
+        oninput={(e) => oninput?.(e)} />
 {/snippet}
 
 {#if field.label}

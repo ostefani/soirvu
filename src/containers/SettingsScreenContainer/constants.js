@@ -74,7 +74,6 @@ export const fields = {
     },
 };
 
-
 export const ACTIONS = {
     'save-timeout': { name: 'save-timeout', label: 'Save lock timeout' },
     'backup-pick': { name: 'backup-pick', label: 'Choose backup folder…' },
