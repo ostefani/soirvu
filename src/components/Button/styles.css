@@ -9,30 +9,30 @@ button {
     column-gap: 8px;
 
     border: 1px solid transparent;
-    padding: 0.6em 1.2em;
-    font-size: 1em;
+    padding: 0.6rem 1.2rem;
+    font-size: 1rem;
     font-weight: 500;
     font-family: inherit;
-    color: var(--text-primary);
-    background-color: var(--color-surface-light);
+    color: var(--color-ink-primary);
+    background-color: var(--color-surface);
     transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
     box-shadow: 0 1px 3px var(--elevation-shadow);
     cursor: pointer;
 }
 
 button:hover {
-    border-color: var(--interactive-accent);
+    border-color: var(--color-accent);
 }
 
 button:active {
-    border-color: var(--interactive-accent);
-    background-color: var(--color-surface-pressed-light);
+    border-color: var(--color-accent);
+    background-color: var(--color-surface-pressed);
 }
 
 /* Active / selected state */
 button.active,
 .active {
-    border-color: var(--interactive-accent);
+    border-color: var(--color-accent);
 }
 
 /* Quiet (ghost / secondary action) button */
@@ -41,13 +41,13 @@ button.quiet,
     box-shadow: none;
     background: transparent;
     border-color: transparent;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
 }
 
 .service-button {
     /* background: var(--surface-button); */
     background: transparent;
-    border: 2px solid var(--color-border-subtle-light);
+    border: 2px solid var(--color-border-subtle);
     outline: none;
     display: flex;
     justify-content: center;
@@ -57,57 +57,57 @@ button.quiet,
     min-width: min-content;
     width: 50px;
     height: 50px;
-    color: var(--color-ink-muted-light);
+    color: var(--color-ink-muted);
 }
 
 .service-button:hover {
-    color: var(--color-ink-primary-light);
-    border: 2px solid var(--color-ink-muted-light);
+    color: var(--color-ink-primary);
+    border: 2px solid var(--color-ink-muted);
 }
 
 .texture-button {
     box-shadow: none;
     background: transparent;
     border: 2px solid transparent;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     border-radius: 8px;
 }
 
 .texture-button:hover {
-    /* background-color: var(--color-surface-light); */
-    border-color: var(--color-ink-muted-light);
+    /* background-color: var(--color-surface); */
+    border-color: var(--color-ink-muted);
 }
 
 .primary-button {
-    background-color: var(--interactive-accent);
+    background-color: var(--color-accent);
     /* border: 2px solid transparent; */
     border: none;
-    color: var(--color-canvas-light);
+    color: var(--color-canvas);
     border-radius: 8px;
 }
 
 .primary-button:hover {
-    background-color: var(--color-accent-texture-light);
-    color: var(--color-canvas-light);
+    background-color: var(--color-accent-texture);
+    color: var(--color-canvas);
     /* box-shadow: 1px 2px 5px #32190ab7; */
 }
 
 button.quiet:hover,
 .quiet:hover {
-    color: var(--text-primary);
-    background-color: var(--color-accent-soft-light);
+    color: var(--color-ink-primary);
+    background-color: var(--color-accent-soft);
     border-color: transparent;
 }
 
 button.service {
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
     background-color: var(--surface-button);
     border-color: transparent;
 }
 
 button.quiet:active,
 .quiet:active {
-    background-color: var(--color-surface-pressed-light);
+    background-color: var(--color-surface-pressed);
 }
 
 /* Default / standard button */
@@ -115,8 +115,8 @@ button.default,
 button.primary,
 .default,
 .primary {
-    background-color: var(--color-surface-light);
-    color: var(--text-primary);
+    background-color: var(--color-surface);
+    color: var(--color-ink-primary);
     border-color: transparent;
 }
 
@@ -124,19 +124,19 @@ button.default:hover,
 button.primary:hover,
 .default:hover,
 .primary:hover {
-    border-color: var(--interactive-accent);
+    border-color: var(--color-accent);
 }
 
 /* Destructive / danger button */
 button.danger,
 .danger {
-    color: var(--feedback-danger);
+    color: var(--color-danger);
     background: transparent;
     border-color: transparent;
 }
 
 button.danger:hover,
 .danger:hover {
-    background-color: var(--feedback-danger-soft);
-    border-color: var(--feedback-danger);
+    background-color: var(--color-danger-soft);
+    border-color: var(--color-danger);
 }

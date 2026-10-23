@@ -16,14 +16,13 @@
     --color-accent-soft-light: #e1e9ff;
     --color-danger-light: #c5281c;
     --color-danger-soft-light: #c5281c14;
-    --color-mark-light: #ffe08a;
-    --color-mark: #fcf7e7;
+    --color-mark-light: #fcf7e7;
     --color-shadow-light: #32190a14;
     --color-focus-light: #888b9f;
-    --color-focus-dark: #b1b4c9;
+    --color-focus-bg-light: #eceaea;
     --color-success-light: #2e7d32;
     --color-success-dark: #5c8e5e;
-
+    --color-input-border-light: #00000087;
     /* quiet inset surface for code blocks, table headers,
        language field */
     --surface-inset: #6e554612;
@@ -34,19 +33,8 @@
        scroll underneath it instead of showing through. */
     --bar-veil: #d0c3bcd1;
 
-    --text-primary: var(--color-ink-primary-light);
-    --text-secondary: var(--color-ink-muted-light);
+    --color-entry: #5f84c26e;
 
-    --border-subtle: var(--color-border-subtle-light);
-    --border-strong: var(--color-border-strong-light);
-
-    --interactive-accent: var(--color-accent-light);
-    --interactive-accent-soft: var(--color-accent-soft-light);
-
-    --feedback-danger: var(--color-danger-light);
-    --feedback-danger-soft: var(--color-danger-soft-light);
-
-    --highlight-mark: var(--color-mark-light);
     --elevation-shadow: var(--color-shadow-light);
 
     /* syntax-highlight palette, themed. */
@@ -56,15 +44,27 @@
     --code-num: #b25c09;
     --code-fn: #396cd8;
 
-    --bg: var(--color-canvas-light);
-    --surface: var(--color-surface-light);
-    --surface-pressed: var(--color-surface-pressed-light);
-    --ink: var(--text-primary);
+    --color-canvas: var(--color-canvas-light);
+    --color-surface: var(--color-surface-light);
+    --color-surface-pressed: var(--color-surface-pressed-light);
+    --color-ink-primary: var(--color-ink-primary-light);
+    --color-ink-muted: var(--color-ink-muted-light);
+    --color-border-subtle: var(--color-border-subtle-light);
+    --color-border-strong: var(--color-border-strong-light);
+    --color-accent: var(--color-accent-light);
+    --color-accent-soft: var(--color-accent-soft-light);
+    --color-danger: var(--color-danger-light);
+    --color-danger-soft: var(--color-danger-soft-light);
+    --color-mark: var(--color-mark-light);
+    --color-accent-texture: var(--color-accent-texture-light);
+    --color-focus: var(--color-focus-light);
+    --color-focus-bg: var(--color-focus-bg-light);
+    --color-input-border: var(--color-input-border-light);
+
     --ink-muted: var(--text-secondary);
     --line: var(--border-subtle);
     --line-strong: var(--border-strong);
     --accent: var(--interactive-accent);
-    --accent-soft: var(--color-accent-soft-light);
     --danger: var(--feedback-danger);
     --danger-soft: var(--feedback-danger-soft);
     --mark: var(--highlight-mark);
@@ -72,7 +72,6 @@
 
     --stone-grain: url(/src/assets/sand.svg);
 
-    color: var(--text-primary);
     color-scheme: light;
 
     font-synthesis: none;
@@ -92,11 +91,11 @@ body {
     height: 100%;
     width: 100%;
     background-image: var(--stone-grain);
-    background-color: var(--color-canvas-light);
+    background-color: var(--color-canvas);
 }
 
 #app {
-    background-color: #0000001a;
+    /* background-color: #0000001a; */
     height: 100%;
 }
 
@@ -109,27 +108,35 @@ button svg {
     height: 15px;
 }
 
+button:disabled,
+button[aria-disabled='true'] {
+    cursor: not-allowed;
+    opacity: 0.5;
+    box-shadow: none;
+    filter: saturate(0.6);
+}
+
 input {
     border-radius: 8px;
-    border: 2px solid transparent;
-    padding: 0.6em 1.2em;
-    font-size: 1em;
+    border: 2px solid var(--color-border-subtle);
+    padding: 0.6rem 1.2rem;
+    font-size: 1rem;
     font-weight: 500;
     font-family: inherit;
     color: var(--text-primary);
-    background-color: var(--color-surface-pressed-light);
+    background-color: var(--color-surface-pressed);
     transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
     box-shadow: 0 1px 3px var(--elevation-shadow);
 }
 
 input:active,
 input:focus {
-    border: 2px solid var(--color-focus-light);
-    background-color: var(--color-surface-light);
+    border: 2px solid var(--color-focus);
+    background-color: var(--color-focus-bg);
 }
 
 input:hover {
-    background-color: var(--color-surface-light);
+    background-color: var(--color-focus-bg);
 }
 
 input,
@@ -146,30 +153,32 @@ button {
         --color-ink-muted-dark: #96a2bf;
         --color-border-subtle-dark: rgba(190, 205, 240, 0.16);
         --color-border-strong-dark: rgba(190, 205, 240, 0.36);
-        --color-accent-dark: #7eadfc;
-        --color-accent-soft-dark: rgba(126, 173, 252, 0.15);
-        --color-danger-dark: #f29b8f;
-        --color-danger-soft-dark: rgba(242, 155, 143, 0.14);
+        /* --color-accent-dark: #7eadfc; */
+        --color-accent-dark: #cfb14c;
+        --color-accent-texture-dark: #cead3f;
+        --color-accent-soft-dark: #5f84c26e;
+        /* --color-danger-dark: #f29b8f; */
+        --color-danger-dark: #f78e5a;
+        --color-danger-soft-dark: #f29b8f24;
         --color-mark-dark: #7a5c0e;
-        --color-shadow-dark: rgba(0, 0, 0, 0.45);
+        --color-shadow-dark: #00000073;
+        --color-focus-dark: #b1b4c9;
+        --color-focus-bg-dark: #d1d4ea;
+
+        --color-input-border-dark: #00000087;
 
         --surface-inset: rgba(190, 205, 240, 0.09);
         --bar-veil: rgba(8, 16, 46, 0.78);
 
-        --text-primary: var(--color-ink-primary-dark);
-        --text-secondary: var(--color-ink-muted-dark);
-
-        --border-subtle: var(--color-border-subtle-dark);
-        --border-strong: var(--color-border-strong-dark);
-
         --interactive-accent: var(--color-accent-dark);
-        --interactive-accent-soft: var(--color-accent-soft-dark);
 
-        --feedback-danger: var(--color-danger-dark);
-        --feedback-danger-soft: var(--color-danger-soft-dark);
-
-        --highlight-mark: var(--color-mark-dark);
         --elevation-shadow: var(--color-shadow-dark);
+
+        /* quiet inset surface for code blocks, table headers,
+       language field */
+        --surface-inset: #6e554612;
+        --surface-button: #f2e0cfa8;
+        --separator-shadow: #bbb7b1;
 
         --code-kw: #c4a6f5;
         --code-str: #7fd08c;
@@ -177,7 +186,28 @@ button {
         --code-num: #e8a35c;
         --code-fn: #8db4f2;
 
+        --stone-grain: url(/src/assets/sand-dark.svg);
+
         color-scheme: dark;
+        /* --separator-shadow: #141f44; */
+        --separator-shadow: #1c2233;
+
+        --color-canvas: var(--color-canvas-dark);
+        --color-surface: var(--color-surface-dark);
+        --color-surface-pressed: var(--color-surface-pressed-dark);
+        --color-ink-primary: var(--color-ink-primary-dark);
+        --color-ink-muted: var(--color-ink-muted-dark);
+        --color-border-subtle: var(--color-border-subtle-dark);
+        --color-border-strong: var(--color-border-strong-dark);
+        --color-accent: var(--color-accent-dark);
+        --color-accent-soft: var(--color-accent-soft-dark);
+        --color-danger: var(--color-danger-dark);
+        --color-danger-soft: var(--color-danger-soft-dark);
+        --color-mark: var(--color-mark-dark);
+        --color-accent-texture: var(--color-accent-texture-dark);
+        --color-focus: var(--color-focus-dark);
+        --color-focus-bg: var(--color-focus-bg-dark);
+        ----color-input-border: var(--color-input-border-dark);
     }
 }
 

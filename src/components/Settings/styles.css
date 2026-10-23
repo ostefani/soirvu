@@ -23,8 +23,8 @@
 
 /* Individual setting section card */
 .settings-card {
-    background-color: var(--color-surface-light);
-    border: 1px solid var(--border-subtle);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
     border-radius: 12px;
     padding: 1.5rem;
     box-shadow: 0 1px 3px var(--elevation-shadow);
@@ -43,13 +43,13 @@
     margin: 0;
     font-size: 1.12rem;
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
     letter-spacing: -0.01em;
 }
 
 .settings-divider {
     height: 1px;
-    background-color: var(--border-subtle);
+    background-color: var(--color-border-subtle);
     margin: 0.25rem 0;
     border: none;
 }
@@ -64,17 +64,17 @@
 .setting-label {
     font-size: 0.88rem;
     font-weight: 500;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
 }
 
 .setting-value {
     font-size: 0.95rem;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
     word-break: break-all;
 }
 
 .setting-value .muted {
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     opacity: 0.7;
 }
 
@@ -98,21 +98,21 @@
     flex-direction: column;
     gap: 0.5rem;
     padding: 0.75rem 1rem;
-    background-color: var(--color-canvas-light);
+    background-color: var(--color-canvas);
     border-radius: 8px;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--color-border-subtle);
     font-size: 0.85rem;
 }
 
 .sync-device-id {
     margin: 0;
     font-weight: 500;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
 }
 
 .sync-peer-info {
     margin: 0;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
 }
 
 /* Activity and rotation progress */
@@ -121,7 +121,7 @@
     align-items: center;
     gap: 0.6rem;
     font-size: 0.9rem;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
 }
 
 .spinner {
@@ -132,6 +132,90 @@
     border-top-color: transparent;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
+}
+
+/* ---------- Security form ---------- */
+.security-form {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    column-gap: 1.25rem;
+    row-gap: 1.15rem;
+    align-items: start;
+}
+
+.security-form .field {
+    min-width: 0;
+}
+
+/* Row 2: "Confirm new passphrase" spans the full width */
+.security-form .field-second {
+    grid-column: 2 / 3;
+}
+
+/* Label above control, same rhythm as .setting-label / .setting-item */
+.security-form :global(label) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: var(--color-ink-muted);
+}
+
+.security-form .form-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+
+.security-form .form-actions-secondary {
+    padding-top: 1.15rem;
+    border-top: 1px solid var(--color-border-subtle);
+}
+
+.security-form .form-full {
+    grid-column: 1 / -1;
+}
+
+.settings-storage :global(label) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: var(--color-ink-muted);
+}
+
+/* ------------- GENERAL ------------- */
+.settings-storage .location-value {
+    display: block;
+    padding: 0.7rem 0.9rem;
+    background-color: var(--color-canvas);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85rem;
+    color: var(--color-ink-primary);
+    word-break: break-all;
+    user-select: all;
+}
+
+.settings-storage .timeout-item {
+    display: grid;
+    grid-template-columns: auto auto;
+    column-gap: 0.75rem;
+    align-items: end;
+    justify-content: start;
+}
+
+/* Narrow windows: stack everything */
+@media (max-width: 40rem) {
+    .security-form {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 
 @keyframes spin {

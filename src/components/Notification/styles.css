@@ -27,11 +27,11 @@
     /* background-color: #2e7d3217;
     border: 1px solid #2e7d3240;
     border-left: 3px solid #2e7d32;
-    color: var(--text-primary); */
+    color: var(--color-ink-primary); */
 
-    color: var(--text-primary);
-    background-color: color-mix(in srgb, var(--color-success-light) 9%, var(--color-surface-light));
-    border: 1px solid color-mix(in srgb, var(--color-success-light) 25%, var(--color-surface-light));
+    color: var(--color-ink-primary);
+    background-color: color-mix(in srgb, var(--color-success-light) 9%, var(--color-surface));
+    border: 1px solid color-mix(in srgb, var(--color-success-light) 25%, var(--color-surface));
     border-left: 3px solid var(--color-success-dark);
 }
 
@@ -53,14 +53,14 @@
 
 /* Info (copied, in progress, notices) */
 .type-info {
-    background-color: var(--color-accent-soft-light);
+    background-color: var(--color-accent-soft);
     border: 1px solid #3362d633;
-    border-left: 3px solid var(--interactive-accent);
-    color: var(--text-primary);
+    border-left: 3px solid var(--color-accent);
+    color: var(--color-ink-primary);
 }
 
 .type-info .notification-icon {
-    color: var(--interactive-accent);
+    color: var(--color-accent);
 }
 
 /* Warning (caution, prune alerts) */
@@ -68,7 +68,7 @@
     background-color: #ffe08a38;
     border: 1px solid #b87c0052;
     border-left: 3px solid #b87c00;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
 }
 
 .type-warning .notification-icon {
@@ -89,30 +89,30 @@
 
 /* Danger / Error (deleted, failed) */
 .type-danger {
-    /* background-color: var(--feedback-danger-soft);
+    /* background-color: var(--color-danger-soft);
     border: 1px solid rgba(197, 40, 28, 0.22);
-    border-left: 3px solid var(--feedback-danger); */
-    color: var(--text-primary);
+    border-left: 3px solid var(--color-danger); */
+    color: var(--color-ink-primary);
 
-    background-color: color-mix(in srgb, var(--feedback-danger-soft) 9%, var(--color-surface-light));
-    border: 1px solid color-mix(in srgb, var(--feedback-danger-soft) 25%, var(--color-surface-light));
-    border-left: 3px solid var(--feedback-danger);
+    background-color: color-mix(in srgb, var(--color-danger-soft) 9%, var(--color-surface));
+    border: 1px solid color-mix(in srgb, var(--color-danger-soft) 25%, var(--color-surface));
+    border-left: 3px solid var(--color-danger);
 }
 
 .type-danger .notification-icon {
-    color: var(--feedback-danger);
+    color: var(--color-danger);
 }
 
 /* Neutral */
 .type-neutral {
-    background-color: var(--color-surface-light);
-    border: 1px solid var(--border-subtle);
-    border-left: 3px solid var(--border-strong);
-    color: var(--text-secondary);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-left: 3px solid var(--color-border-strong);
+    color: var(--color-ink-muted);
 }
 
 .type-neutral .notification-icon {
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
 }
 
 /* --- Inner Structure --- */
@@ -142,7 +142,7 @@
 .notification-title {
     font-weight: 600;
     font-size: 0.95em;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
 }
 
 .notification-badge {
@@ -152,14 +152,14 @@
     letter-spacing: 0.04em;
     padding: 0.1rem 0.4rem;
     border-radius: 4px;
-    background-color: var(--border-subtle);
-    color: var(--text-secondary);
+    background-color: var(--color-border-subtle);
+    color: var(--color-ink-muted);
 }
 
 .notification-message {
     margin: 0;
     font-size: 0.88rem;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
 }
 
 /* Dismiss action button */
@@ -167,7 +167,7 @@
     background: transparent;
     border: none;
     box-shadow: none;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     font-size: 1.25rem;
     line-height: 1;
     padding: 0 0.25rem;
@@ -179,7 +179,7 @@
 
 .notification-close-button:hover {
     opacity: 1;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
     background-color: transparent;
     border-color: transparent;
 }

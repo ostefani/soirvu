@@ -19,28 +19,28 @@
 
 /* Neutral / Default */
 .variant-neutral {
-    background-color: var(--color-surface-light);
+    background-color: var(--color-surface);
     backdrop-filter: blur(5px);
-    border: 1px solid var(--border-subtle);
-    border-left: 3px solid var(--border-strong);
-    color: var(--text-secondary);
+    border: 1px solid var(--color-border-subtle);
+    border-left: 3px solid var(--color-border-strong);
+    color: var(--color-ink-muted);
     backdrop-filter: blur(5px);
 }
 
 .variant-neutral .note-icon {
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
 }
 
 /* Informational */
 .variant-info {
-    background-color: var(--color-surface-light);
+    background-color: var(--color-surface);
     border: 1px solid rgba(51, 98, 214, 0.20);
-    border-left: 3px solid var(--interactive-accent);
-    color: var(--text-primary);
+    border-left: 3px solid var(--color-accent);
+    color: var(--color-ink-primary);
 }
 
 .variant-info .note-icon {
-    color: var(--interactive-accent);
+    color: var(--color-accent);
 }
 
 /* Warning */
@@ -48,7 +48,7 @@
     background-color: rgba(255, 224, 138, 0.22);
     border: 1px solid rgba(184, 124, 0, 0.32);
     border-left: 3px solid #b87c00;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
 }
 
 .variant-warning .note-icon {
@@ -69,14 +69,14 @@
 
 /* Danger / Destructive */
 .variant-danger {
-    background-color: var(--feedback-danger-soft);
+    background-color: var(--color-danger-soft);
     border: 1px solid rgba(197, 40, 28, 0.22);
-    border-left: 3px solid var(--feedback-danger);
-    color: var(--text-primary);
+    border-left: 3px solid var(--color-danger);
+    color: var(--color-ink-primary);
 }
 
 .variant-danger .note-icon {
-    color: var(--feedback-danger);
+    color: var(--color-danger);
 }
 
 /* --- Sub-elements --- */
@@ -99,7 +99,7 @@
 
 .note-title {
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
     font-size: 0.95em;
 }
 
@@ -116,7 +116,7 @@
     background: transparent;
     border: none;
     box-shadow: none;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     font-size: 1.25rem;
     line-height: 1;
     padding: 0 0.25rem;
@@ -128,7 +128,7 @@
 
 .note-dismiss-button:hover {
     opacity: 1;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
     background-color: transparent;
     border-color: transparent;
 }

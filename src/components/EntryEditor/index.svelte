@@ -5,6 +5,7 @@
     import EditorToolbar from '@/components/EditorToolbar/index.svelte';
     import Button from '@/components/Button/index.svelte';
     import IconLeft from '@/icons/arrow-left.svelte';
+    import Input from '@/components/Input/index.svelte';
 
     let { entryId, onDeleted, onSaved, onBack } = $props();
 
@@ -18,6 +19,7 @@
     let mountEl = $state(null);
     let fileInput = $state(null);
     let info = $state(null);
+    const titleField = { name: 'title', placeholder: 'Title' };
     // let editor = null;
 
     let editor = $state(null);
@@ -71,6 +73,16 @@
         const dt = new Date(`${d}T00:00:00`);
         if (Number.isNaN(dt.getTime())) return d;
         return dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    }
+
+    function onTitleInput(e) {
+        title = e.currentTarget.value;
+        markDirty();
+    }
+
+    function onDateChange(e) {
+        entryDate = e.currentTarget.value;
+        markDirty();
     }
 
     function refreshToolbar() {
@@ -285,7 +297,7 @@
                     {#if openPop === 'date'}
                         <div class="popover">
                             <h4>Date</h4>
-                            <input type="date" value={entryDate} onchange={markDirty} />
+                            <input type="date" value={entryDate} onchange={onDateChange} />
                         </div>
                     {/if}
                 </div>
@@ -359,7 +371,7 @@
             </div>
         </div>
 
-        <input class="title-input" placeholder="Title" value={title} oninput={markDirty} />
+        <Input field={titleField} class="title-input" value={title} oninput={onTitleInput} />
         <EditorToolbar {editor} {info} onAttach={() => fileInput?.click()} />
         <input type="file" multiple hidden bind:this={fileInput} onchange={onFilesPicked} />
         <div class="editor-mount" bind:this={mountEl}></div>

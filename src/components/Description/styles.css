@@ -6,7 +6,7 @@
 .description {
     margin: 0;
     font-size: 0.88rem;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     line-height: 1.45;
 }
 

@@ -2,8 +2,6 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
-    /* background-image: var(--stone-grain);
-    background-color: var(--color-canvas-light); */
 }
 
 .calendar-home {
@@ -72,7 +70,7 @@
     margin: 0 0 0.4rem;
     font-size: 0.95rem;
     font-weight: 600;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
@@ -87,18 +85,18 @@
     box-shadow: none;
     padding: 0.35rem 0.5rem;
     border-radius: 6px;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
     cursor: pointer;
     transition: background-color 0.15s ease;
 }
 
 .otd-row:hover {
-    background: var(--color-accent-soft-light);
+    background: var(--color-accent-soft);
     border-color: transparent;
 }
 
 .otd-year {
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     font-variant-numeric: tabular-nums;
     min-width: 3.2em;
 }

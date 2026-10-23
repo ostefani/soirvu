@@ -1,5 +1,5 @@
 <script>
-    let { field, value = '', disabled = false, onenter = null, oninput = null } = $props();
+    let { field, value = '', disabled = false, class: className = '', onenter = null, oninput = null, onupdate = null } = $props();
 
     function keydown(e) {
         if (e.key === 'Enter') onenter?.();
@@ -14,9 +14,11 @@
         placeholder={field.placeholder ?? ''}
         autocomplete={field.autocomplete}
         {disabled}
-        bind:value
+        class={className}
+        {value}
         onkeydown={keydown}
-        oninput={(e) => oninput?.(e)} />
+        oninput={(e) => oninput?.(e)}
+        onchange={(e) => onupdate?.(e)} />
 {/snippet}
 
 {#if field.label}

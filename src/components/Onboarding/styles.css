@@ -10,11 +10,11 @@
     padding: 0.5rem 0;
     margin: 0;
     font-size: 0.95rem;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
 }
 
 .folder-name {
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
     font-weight: 600;
     word-break: break-all;
 }
@@ -31,12 +31,12 @@
     letter-spacing: 0.08em;
     text-align: center;
     padding: 1.1rem;
-    background-color: var(--color-surface-light);
-    border: 1px dashed var(--border-strong);
+    background-color: var(--color-surface);
+    border: 1px dashed var(--color-border-strong);
     border-radius: 8px;
     word-break: break-all;
     user-select: all;
     box-shadow: 0 1px 2px var(--elevation-shadow);
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
     margin: 0;
 }

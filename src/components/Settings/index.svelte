@@ -27,6 +27,7 @@
         setTimeoutMin,
         onTabChange,
     } = $props();
+    console.log('actions: ', actions);
 
     let activeTab = $state('general');
 
@@ -53,7 +54,7 @@
         <!-- ================================================================= -->
         {#if activeTab === 'general'}
             <div class="tab-panel" role="tabpanel" id="panel-general" aria-labelledby="tab-general">
-                <div class="settings-card">
+                <div class="settings-card settings-storage">
                     <div class="card-header">
                         <h3 class="card-title">Diary Storage & Inactivity Lock</h3>
                         <Description text="View storage location and configure automatic locking." />
@@ -61,24 +62,27 @@
 
                     <div class="setting-item">
                         <span class="setting-label">{settingsText.vaultLocation}</span>
-                        <span class="setting-value">
-                            <strong>{general.settings.vault_location ?? '—'}</strong>
-                        </span>
+                        <code class="location-value">{general.settings.vault_location ?? '—'}</code>
                     </div>
 
                     <hr class="settings-divider" />
 
-                    <div class="setting-item">
-                        <Input field={fields.timeout} value={general.timeoutMin} oninput={(e) => setTimeoutMin(e.currentTarget.value)} />
-                        <div class="setting-row">
-                            {#each actions.timeout as action (action)}
-                                <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
-                            {/each}
-                        </div>
+                    <div class="setting-item timeout-item">
+                        {#each actions.timeout as action (action)}
+                            <Input
+                                field={fields.timeout}
+                                value={general.timeoutMin}
+                                oninput={(e) => setTimeoutMin(e.currentTarget.value)} />
+                            <Button
+                                {...ACTIONS[action]}
+                                kind="texture-button"
+                                handler={handlers[action]}
+                                disabled={disabled[action]} />
+                        {/each}
                     </div>
                 </div>
 
-                <div class="settings-card">
+                <div class="settings-card settings-clipboard">
                     <div class="card-header">
                         <h3 class="card-title">Privacy & Clipboard</h3>
                         <Description text="Control location metadata handling and clipboard auto-clearing." />
@@ -116,32 +120,54 @@
                             <Description text={note} />
                         {/each}
                     </div>
-
-                    {#each fields.security as field (field.name)}
-                        <Input {field} value={security[field.name]} oninput={(e) => setSecurityField(field.name, e.currentTarget.value)} />
-                    {/each}
-
-                    <div class="setting-row">
-                        {#each actions.security as action (action)}
-                            <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
+                    <form class="security-form">
+                        {#each fields.security as field, i (field.name)}
+                            <div class="field" class:field-second={i === 2}>
+                                <Input
+                                    {field}
+                                    value={security[field.name]}
+                                    oninput={(e) => setSecurityField(field.name, e.currentTarget.value)} />
+                            </div>
                         {/each}
-                        {#each actions.rotate as action (action)}
-                            <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
-                        {/each}
-                    </div>
 
-                    {#if security.rotating}
-                        <div class="progress">
-                            <span class="spinner"></span>
-                            <span>{settingsText.rotating}</span>
+                        <div class="form-actions">
+                            {#each actions.security as action (action)}
+                                <Button
+                                    {...ACTIONS[action]}
+                                    kind={action === 'change-passphrase' ? 'primary-button' : 'texture-button'}
+                                    handler={handlers[action]}
+                                    disabled={disabled[action]} />
+                            {/each}
                         </div>
-                    {/if}
 
-                    {#if security.newRecoveryKey}
-                        <NoteComponent variant="warning" title={settingsText.newKeyLead} text={settingsText.newKeyNote}>
-                            <p><code>{security.newRecoveryKey}</code></p>
-                        </NoteComponent>
-                    {/if}
+                        <div class="form-actions form-actions-secondary">
+                            {#each actions.rotate as action (action)}
+                                <Button
+                                    {...ACTIONS[action]}
+                                    kind="texture-button"
+                                    handler={handlers[action]}
+                                    disabled={disabled[action]} />
+                            {/each}
+                        </div>
+
+                        {#if security.rotating}
+                            <div class="progress form-full">
+                                <span class="spinner"></span>
+                                <span>{settingsText.rotating}</span>
+                            </div>
+                        {/if}
+
+                        {#if security.newRecoveryKey}
+                            <div class="form-full">
+                                <NoteComponent
+                                    variant="warning"
+                                    title={settingsText.newKeyLead}
+                                    text={settingsText.newKeyNote}>
+                                    <p><code>{security.newRecoveryKey}</code></p>
+                                </NoteComponent>
+                            </div>
+                        {/if}
+                    </form>
                 </div>
 
                 {#if touchId.status?.capable || touchId.status?.enrolled}
@@ -352,7 +378,10 @@
                         {/each}
                     </div>
 
-                    <Input field={fields.exportPass} value={exp.pass} oninput={(e) => setExportPass(e.currentTarget.value)} />
+                    <Input
+                        field={fields.exportPass}
+                        value={exp.pass}
+                        oninput={(e) => setExportPass(e.currentTarget.value)} />
 
                     <div class="setting-row">
                         {#each actions.export as action (action)}

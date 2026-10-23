@@ -367,6 +367,7 @@
 
     const saveTimeout = () =>
         saveSetting({ lock_timeout_secs: toMinutes(general.timeoutMin * 60) * 60 }, 'Inactivity lock timeout saved.');
+
     const saveStrip = (strip) =>
         saveSetting(
             { strip_exif: strip },
@@ -487,7 +488,6 @@
         touchIdEnable: enableTouchId,
         touchIdDisable: disableTouchId,
     };
-
 </script>
 
 <div class="settings-screen">

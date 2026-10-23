@@ -8,8 +8,8 @@
     align-items: center;
     gap: 0.35rem;
     padding: 0.3rem;
-    background-color: var(--color-surface-light);
-    border: 1px solid var(--border-subtle);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
     border-radius: 10px;
     box-shadow: 0 1px 2px var(--elevation-shadow);
     width: 100%;
@@ -25,7 +25,7 @@
     padding: 0.55rem 0.85rem;
     font-size: 0.9rem;
     font-weight: 500;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     background: transparent;
     border: 1px solid transparent;
     border-radius: 7px;
@@ -36,13 +36,13 @@
 }
 
 .tab-item:hover {
-    color: var(--text-primary);
-    background-color: var(--color-accent-soft-light);
+    color: var(--color-ink-primary);
+    background-color: var(--color-accent-soft);
     border-color: transparent;
 }
 
 .tab-item.active {
-    background-color: var(--interactive-accent);
+    background-color: var(--color-accent);
     color: #ffffff;
     font-weight: 600;
     box-shadow: 0 1px 3px var(--elevation-shadow);
@@ -57,8 +57,8 @@
     font-size: 0.75em;
     padding: 0.1em 0.45em;
     border-radius: 999px;
-    background-color: var(--color-accent-soft-light);
-    color: var(--interactive-accent);
+    background-color: var(--color-accent-soft);
+    color: var(--color-accent);
     font-weight: 600;
 }
 

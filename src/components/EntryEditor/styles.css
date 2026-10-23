@@ -18,7 +18,7 @@
     gap: 1.4rem;
     align-items: center;
     flex-wrap: wrap;
-    background: var(--color-surface-light)
+    background: var(--color-surface)
 }
 
 .meta-chips {
@@ -37,9 +37,9 @@
     font-size: 0.8rem;
     font-weight: 500;
     line-height: 1.45;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     background: transparent;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--color-border-subtle);
     border-radius: 999px;
     box-shadow: none;
     cursor: pointer;
@@ -47,14 +47,14 @@
 }
 
 .meta-chip:hover {
-    border-color: var(--interactive-accent);
-    color: var(--text-primary);
+    border-color: var(--color-accent);
+    color: var(--color-ink-primary);
 }
 
 .meta-chip[aria-expanded="true"] {
-    border-color: var(--interactive-accent);
-    color: var(--text-primary);
-    background: var(--color-accent-soft-light);
+    border-color: var(--color-accent);
+    color: var(--color-ink-primary);
+    background: var(--color-accent-soft);
 }
 
 /* Empty metadata is an invitation, not clutter. */
@@ -92,8 +92,8 @@
     min-width: 250px;
     max-width: 320px;
     padding: 0.75rem;
-    background: var(--color-surface-light);
-    border: 1px solid var(--border-subtle);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
     border-radius: 10px;
     box-shadow: 0 6px 20px var(--elevation-shadow), 0 1px 3px var(--elevation-shadow);
 }
@@ -110,7 +110,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
 }
 
 /* Date popover */
@@ -118,11 +118,11 @@
     width: 100%;
     box-sizing: border-box;
     background: transparent;
-    border-color: var(--border-subtle);
+    border-color: var(--color-border-subtle);
     box-shadow: none;
     padding: 0.3em 0.6em;
     font-size: 0.85rem;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
 }
 
 /* Mood popover: the 1–5 scale as round buttons. */
@@ -142,19 +142,19 @@
     font-size: 0.9rem;
     font-weight: 600;
     border-radius: 8px;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .mood-grid button:hover {
-    background: var(--color-accent-soft-light);
+    background: var(--color-accent-soft);
     border-color: transparent;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
 }
 
 .mood-grid button.selected {
-    background: var(--interactive-accent);
-    border-color: var(--interactive-accent);
+    background: var(--color-accent);
+    border-color: var(--color-accent);
     color: #ffffff;
 }
 
@@ -166,15 +166,15 @@
     background: transparent;
     border-color: transparent;
     box-shadow: none;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     cursor: pointer;
     border-radius: 6px;
 }
 
 .mood-clear:hover {
-    background: var(--color-surface-pressed-light);
+    background: var(--color-surface-pressed);
     border-color: transparent;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
 }
 
 /* Tags popover: reuses the entry list's capsule language. */
@@ -189,21 +189,21 @@
     display: inline-flex;
     align-items: center;
     background-color: var(--surface-inset);
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--color-border-subtle);
     border-radius: 999px;
     transition: border-color 0.15s ease;
     overflow: hidden;
 }
 
 .tag-pill:hover {
-    border-color: var(--interactive-accent);
+    border-color: var(--color-accent);
 }
 
 .tag-name {
     padding: 0.18rem 0.3rem 0.18rem 0.6rem;
     font-size: 0.78rem;
     font-weight: 500;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
     white-space: nowrap;
     max-width: 180px;
     overflow: hidden;
@@ -220,7 +220,7 @@
     padding: 0 0.45rem 0 0.1rem;
     font-size: 0.95rem;
     line-height: 1;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     cursor: pointer;
     border-radius: 0;
     opacity: 0.45;
@@ -232,7 +232,7 @@
 }
 
 .tag-remove:hover {
-    color: var(--feedback-danger);
+    color: var(--color-danger);
     border-color: transparent;
     background-color: transparent;
 }
@@ -241,11 +241,11 @@
     width: 100%;
     box-sizing: border-box;
     background: transparent;
-    border-color: var(--border-subtle);
+    border-color: var(--color-border-subtle);
     box-shadow: none;
     padding: 0.3em 0.6em;
     font-size: 0.85rem;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
 }
 
 /* Document-style title: big, bold, borderless — the first
@@ -257,16 +257,16 @@
     font-size: 1.45rem;
     line-height: 1.25;
     letter-spacing: -0.015em;
-    background: var(--color-surface-pressed-light);
+    background: var(--color-surface-pressed);
     border-color: transparent;
     box-shadow: none;
     padding: 1rem 1.5rem;
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
     border-radius: 0;
 }
 
 .title-input:hover {
-    background: var(--color-accent-soft-light);
+    background: var(--color-accent-soft);
 
 }
 
@@ -284,8 +284,8 @@
     padding: 1.0rem 1.5rem;
     min-height: 40vh;
 
-    background-color: var(--color-surface-light);
-    border: 1px solid var(--border-subtle);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
     /* border-radius: 12px; */
     border-bottom-left-radius: 12px;
     border-bottom-right-radius: 12px;
@@ -301,7 +301,7 @@
 
 .status {
     font-size: 0.8em;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
 }
 
 /* Spaces render as typed: with the default white-space a
@@ -358,17 +358,17 @@
 .editor-mount :global(blockquote) {
     margin: 0.7em 0;
     padding: 0.1em 0 0.1em 0.9em;
-    border-left: 3px solid var(--interactive-accent);
-    color: var(--text-secondary);
+    border-left: 3px solid var(--color-accent);
+    color: var(--color-ink-muted);
 }
 
 .editor-mount :global(a) {
-    color: var(--interactive-accent);
+    color: var(--color-accent);
 }
 
 .editor-mount :global(hr) {
     border: none;
-    border-top: 1px solid var(--border-subtle);
+    border-top: 1px solid var(--color-border-subtle);
     margin: 1.4em 0;
 }
 
@@ -398,7 +398,7 @@
 }
 
 .editor-mount :global(li[data-checked="true"]) {
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
 }
 
 /* Inline code and code blocks sit on the inset surface
@@ -415,7 +415,7 @@
     font-family: ui-monospace, Menlo, monospace;
     font-size: 0.88em;
     background: var(--surface-inset);
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--color-border-subtle);
     border-radius: 8px;
     padding: 0.75rem 1rem;
     overflow-x: auto;
@@ -460,7 +460,7 @@
 
 .editor-mount :global(th),
 .editor-mount :global(td) {
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--color-border-subtle);
     padding: 0.35em 0.7em;
     min-width: 3em;
     text-align: left;
@@ -487,22 +487,22 @@
 .list-top input {
     flex: 1;
     min-width: 0;
-    background: var(--color-surface-light);
+    background: var(--color-surface);
     border-color: transparent;
     box-shadow: none;
     padding: 0.45em 0.9em;
     font-size: 0.92em;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
 }
 
 .list-top input:hover {
-    border-color: var(--border-subtle);
+    border-color: var(--color-border-subtle);
 }
 
 .list-top input:focus {
-    border-color: var(--interactive-accent);
-    color: var(--text-primary);
-    background: var(--color-surface-light);
+    border-color: var(--color-accent);
+    color: var(--color-ink-primary);
+    background: var(--color-surface);
 }
 
 :global(.editor-mount div.attachment) {
@@ -540,9 +540,9 @@
     min-width: 12rem;
     min-height: 4rem;
     padding: 0.5em;
-    border: 1px dashed var(--border-strong);
+    border: 1px dashed var(--color-border-strong);
     background: var(--surface-inset);
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     font-size: 0.85em;
     border-radius: 8px;
 }
@@ -557,7 +557,7 @@
     line-height: 22px;
     text-align: center;
     font-size: 13px;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
     cursor: grab;
     user-select: none;
     z-index: 40;
@@ -570,7 +570,7 @@
 :global(.block-drop-line) {
     position: fixed;
     height: 2px;
-    background: var(--interactive-accent);
+    background: var(--color-accent);
     z-index: 40;
     pointer-events: none;
 }

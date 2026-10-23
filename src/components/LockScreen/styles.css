@@ -37,13 +37,13 @@
 }
 
 .vault-pick:hover {
-    background-color: var(--accent-soft);
+    background-color: var(--color-accent-soft);
 }
 
 /* The chosen folder gets a quiet accent wash + bolder name,
    in addition to the filled disc — selection is never color-only. */
 .vault-pick:has(.vault-radio:checked) {
-    background-color: var(--accent-soft);
+    background-color: var(--color-accent-soft);
 }
 
 .vault-pick:has(.vault-radio:checked) .vault-name {
@@ -51,7 +51,7 @@
 }
 
 .vault-pick:has(.vault-radio:checked) .vault-icon {
-    color: var(--accent);
+    color: var(--color-accent);
 }
 
 /* Neutralize the global input chrome on the carrier radio. */
@@ -74,23 +74,23 @@
     width: 1.15rem;
     height: 1.15rem;
     border-radius: 50%;
-    box-shadow: inset 0 0 0 0.15rem var(--text-secondary);
+    box-shadow: inset 0 0 0 0.15rem var(--color-ink-muted);
     transition: box-shadow 0.15s ease, background-color 0.15s ease;
 }
 
 .vault-radio:checked+.radio-dot {
-    background-color: var(--accent);
-    box-shadow: inset 0 0 0 0.15rem var(--accent);
+    background-color: var(--color-accent);
+    box-shadow: inset 0 0 0 0.15rem var(--color-accent);
 }
 
 .vault-radio:focus-visible+.radio-dot {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--color-accent);
     outline-offset: 2px;
 }
 
 .vault-icon {
     flex-shrink: 0;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
 }
 
 .vault-name {
@@ -106,7 +106,7 @@
 .missing {
     opacity: 0.8;
     font-size: 0.85em;
-    color: var(--text-secondary);
+    color: var(--color-ink-muted);
 }
 
 .vault-actions {
@@ -122,7 +122,7 @@
 .kind-toggle {
     position: relative;
     display: flex;
-    background-color: var(--color-ink-primary-light);
+    background-color: var(--color-ink-primary);
     border-radius: 8px;
 }
 
@@ -131,7 +131,7 @@
     top: 0;
     bottom: 0;
     left: 0;
-    background-color: var(--color-surface-light);
+    background-color: var(--color-surface);
     transition: transform 0.15s ease;
     border-radius: 8px;
 }
@@ -147,13 +147,13 @@
     justify-content: center;
     padding: 0.45em 0.6em;
     cursor: pointer;
-    color: var(--color-surface-light);
+    color: var(--color-surface);
     transition: color 0.15s ease;
 }
 
 
 .kind-option.active {
-    color: var(--text-primary);
+    color: var(--color-ink-primary);
 }
 
 .kind-radio {
@@ -169,7 +169,7 @@
 }
 
 .kind-option:has(.kind-radio:focus-visible) {
-    box-shadow: inset 0 0 0 2px var(--accent);
+    box-shadow: inset 0 0 0 2px var(--color-accent);
 }
 
 /* Keeps the labels above the sliding thumb. */
