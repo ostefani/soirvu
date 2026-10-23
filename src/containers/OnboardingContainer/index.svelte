@@ -1,4 +1,5 @@
 <script>
+    import { onDestroy } from 'svelte';
     import * as api from '@/api.js';
     import Onboarding from '@/components/Onboarding/index.svelte';
 
@@ -14,21 +15,30 @@
 
     let model = $state(createModel());
 
+    const fields = PASSPHRASE_FIELD_CONFIGURATIONS.map((field) => ({
+        ...field,
+        label: field.name === 'passphrase' ? onboardingText.passphraseLabel : onboardingText.confirmPassphraseLabel,
+    }));
+
     function describeError(error) {
         return onboardingText.errors[error] ?? onboardingText.unknownError(error);
     }
 
     async function pick() {
         model.error = '';
-        const picked = await api.vaultPickFolder('create');
-        if (picked) {
+        try {
+            const picked = await api.vaultPickFolder('create');
+            if (!picked) return;
             model.folderName = picked.name;
             model.warning = picked.warning ? (onboardingText.warnings[picked.warning] ?? '') : '';
             model.step = ONBOARDING_STEP.SET_PASSPHRASE;
+        } catch (error) {
+            model.error = describeError(error);
         }
     }
 
     async function create() {
+        if (model.busy) return;
         model.error = '';
         if (model.passphrase.length < MINIMUM_PASSPHRASE_LENGTH) {
             model.error = onboardingText.passphraseTooShortError;
@@ -52,48 +62,38 @@
         }
     }
 
-    const fields = PASSPHRASE_FIELD_CONFIGURATIONS.map((field) => ({
-        ...field,
-        label: field.name === 'passphrase'
-            ? onboardingText.passphraseLabel
-            : onboardingText.confirmPassphraseLabel,
-    }));
-
-    const actions = $derived({
-        pick: [
-            {
-                name: 'pick',
-                label: onboardingText.chooseFolderButton,
-                handler: pick,
-            },
-        ],
-        create: [
-            {
-                name: 'create',
-                label: onboardingText.createDiaryButton,
-                handler: create,
-                disabled: model.busy,
-            },
-        ],
-        done: [
-            {
-                name: 'done',
-                label: onboardingText.openDiaryButton,
-                handler: () => onDone(),
-                disabled: !model.saved,
-            },
-        ],
-        cancel: onCancel
-            ? [
-                {
-                    name: 'cancel',
-                    label: onboardingText.backButton,
-                    kind: 'quiet',
-                    handler: () => onCancel(),
-                },
-            ]
-            : [],
+    // Don't leave secrets sitting in memory once the screen is gone.
+    onDestroy(() => {
+        model.recoveryKey = '';
+        model.passphrase = '';
+        model.confirm = '';
     });
+
+    const values = $derived({ passphrase: model.passphrase, confirm: model.confirm });
+
+    function setField(name, value) {
+        model[name] = value;
+    }
+
+    function setSaved(checked) {
+        model.saved = checked;
+    }
 </script>
 
-<Onboarding bind:model {fields} {actions} {onboardingText} />
+<Onboarding
+    step={model.step}
+    folderName={model.folderName}
+    warning={model.warning}
+    recoveryKey={model.recoveryKey}
+    saved={model.saved}
+    busy={model.busy}
+    error={model.error}
+    {fields}
+    {values}
+    {onboardingText}
+    onFieldInput={setField}
+    onSavedChange={setSaved}
+    onPick={pick}
+    onCreate={create}
+    {onDone}
+    {onCancel} />

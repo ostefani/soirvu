@@ -1,4 +1,7 @@
 <script>
+    import Button from '@/components/Button/index.svelte';
+    import IconLeft from '@/icons/arrow-left.svelte';
+    import IconRight from '@/icons/arrow-right.svelte';
     import * as api from '@/api.js';
 
     let { selectedDate = null, onSelect, version = 0, large = false } = $props();
@@ -69,11 +72,11 @@
     }
 </script>
 
-<div class="calendar" class:large>
+<div class="calendar">
     <div class="cal-head">
-        <button class="quiet" onclick={() => step(-1)} aria-label="Previous month">‹</button>
+        <Button kind="service-button" handler={() => step(-1)} aria-label="Previous month"><IconLeft /></Button>
         <span class="cal-title">{MONTH_NAMES[month]} {year}</span>
-        <button class="quiet" onclick={() => step(1)} aria-label="Next month">›</button>
+        <Button kind="service-button" handler={() => step(1)} aria-label="Next month"><IconRight /></Button>
     </div>
     <div class="cal-grid">
         {#each WEEKDAYS as name}

@@ -2,38 +2,9 @@
        List rows are quiet: separation comes from spacing and
        an accent-soft hover tint, not boxed button chrome. */
 .entry-list {
-    padding: 0.5rem;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-}
-
-.list-top {
-    display: flex;
-    gap: 0.4rem;
-}
-
-/* Search field: a quiet white field — no drop shadow, a
-       hairline on hover, the accent border on focus. */
-.list-top input {
-    flex: 1;
-    min-width: 0;
-    background: var(--surface-card);
-    border-color: transparent;
-    box-shadow: none;
-    padding: 0.45em 0.9em;
-    font-size: 0.92em;
-    color: var(--text-secondary);
-}
-
-.list-top input:hover {
-    border-color: var(--border-subtle);
-}
-
-.list-top input:focus {
-    border-color: var(--interactive-accent);
-    color: var(--text-primary);
-    background: var(--surface-card);
 }
 
 /* Tags block */
@@ -63,7 +34,7 @@
 
 .tags-toggle:hover {
     color: var(--text-primary);
-    background-color: var(--interactive-accent-soft);
+    background-color: var(--color-accent-soft-light);
     border-color: transparent;
 }
 
@@ -98,7 +69,7 @@
 .tag-pill {
     display: inline-flex;
     align-items: center;
-    background-color: var(--surface-card);
+    background-color: var(--color-surface-light);
     border: 1px solid var(--border-subtle);
     border-radius: 999px;
     box-shadow: 0 1px 2px var(--elevation-shadow);
@@ -113,6 +84,7 @@
 .tag-pill.active {
     background-color: var(--interactive-accent);
     border-color: var(--interactive-accent);
+    border: 3px solid red;
 }
 
 .tag-button {
@@ -155,7 +127,7 @@
     font-weight: 600;
     line-height: 1;
     border-radius: 999px;
-    background-color: var(--interactive-accent-soft);
+    background-color: var(--color-accent-soft-light);
     color: var(--interactive-accent);
 }
 
@@ -209,7 +181,7 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    background-color: var(--surface-card);
+    background-color: var(--color-surface-light);
     border: 1px solid var(--feedback-danger-soft);
     border-radius: 8px;
     padding: 0.3rem 0.6rem;
@@ -250,7 +222,7 @@
 }
 
 .confirm-action.cancel:hover {
-    background-color: var(--surface-card-active);
+    background-color: var(--color-surface-pressed-light);
     color: var(--text-primary);
 }
 
@@ -259,6 +231,7 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    padding-left: 8px;
 }
 
 /* Entries and results are buttons, but they must read as
@@ -269,30 +242,34 @@ button.result {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 0.12rem;
+    row-gap: 0.16rem;
     text-align: left;
     width: 100%;
-    background: transparent;
+    background-color: transparent;
     border-color: transparent;
     box-shadow: none;
-    padding: 0.45rem 0.6rem;
-    border-radius: 8px;
+    padding: 0.7rem 0.6rem;
     color: var(--text-primary);
-    transition: background-color 0.15s ease, border-color 0.15s ease;
+    transition: background-color .15s ease, border-color 0.15s ease;
+
+    border: 1px solid transparent;
+    border-left: 3px solid transparent;
+    border-top-left-radius: 8px;
+    border-bottom-left-radius: 8px;
 }
 
 button.entry-row:hover,
 button.result:hover {
-    background: var(--interactive-accent-soft);
-    border-color: transparent;
-    box-shadow: none;
+    background-color: var(--color-accent-soft-light);
+    border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--color-accent-light);
 }
 
-button.entry-row:active,
-button.result:active {
-    background: var(--surface-card-active);
-    border-color: transparent;
-    box-shadow: none;
+button.entry-row.active,
+button.result.active {
+    background-color: var(--color-surface-light);
+    border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--color-accent-light);
 }
 
 .entry-date {

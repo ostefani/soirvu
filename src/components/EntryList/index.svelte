@@ -1,16 +1,21 @@
 <script>
     import * as api from '@/api.js';
 
-    let { selectedId, onSelect, date = null, onClearDate } = $props();
+    let {
+        selectedId,
+        onSelect,
+        date = null,
+        onClearDate,
+        // Search state lives in the screen; the list only renders it.
+        results = null, // null = not searching
+        searchNote = '',
+        onClearSearch,
+    } = $props();
 
     let entries = $state([]);
     let nextCursor = $state(null);
     let tags = $state([]);
     let tagFilter = $state(null);
-    let query = $state('');
-    let results = $state(null); // null = not searching
-    let searchNote = $state('');
-    let searchTimer = null;
     let error = $state('');
 
     // Same short texts as the other screens: codes, never prose
@@ -37,6 +42,7 @@
                 date,
             });
             entries = reset ? page.entries : [...entries, ...page.entries];
+            console.log('entries: ', entries);
             nextCursor = page.next_cursor;
             error = '';
         } catch (e) {
@@ -56,30 +62,6 @@
         refresh();
     });
 
-    function today() {
-        const d = new Date();
-        const pad = (n) => String(n).padStart(2, '0');
-        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-    }
-
-    async function newEntry() {
-        try {
-            const created = await api.entrySave({
-                id: null,
-                entry_date: today(),
-                title: null,
-                body_md: '',
-                mood: null,
-                tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                tags: [],
-            });
-            await refresh();
-            onSelect(created.id);
-        } catch (e) {
-            error = describeError(e);
-        }
-    }
-
     function segments(snippet) {
         const out = [];
         let marked = false;
@@ -97,30 +79,11 @@
         return out;
     }
 
-    function onSearchInput() {
-        clearTimeout(searchTimer);
-        searchTimer = setTimeout(async () => {
-            const q = query.trim();
-            if (!q) {
-                results = null;
-                searchNote = '';
-                return;
-            }
-            try {
-                results = await api.search(q);
-                searchNote = results.length === 0 ? 'Nothing found.' : '';
-            } catch (e) {
-                results = null;
-                searchNote =
-                    e === 'query_too_short' ? 'Type at least 3 characters (2 for Russian).' : `Search failed (${e}).`;
-            }
-        }, 250);
-    }
-
     function pickTag(name) {
         tagFilter = tagFilter === name ? null : name;
-        results = null;
-        query = '';
+        // A fresh filter needs the plain list, not stale search
+        // results — the screen owns that state and resets it.
+        onClearSearch?.();
         load(true);
     }
 
@@ -146,11 +109,6 @@
 </script>
 
 <div class="entry-list">
-    <div class="list-top">
-        <button onclick={newEntry}>New entry</button>
-        <input type="search" placeholder="Search the diary…" bind:value={query} oninput={onSearchInput} />
-    </div>
-
     {#if error}<p class="form-error">{error}</p>{/if}
 
     {#if date}

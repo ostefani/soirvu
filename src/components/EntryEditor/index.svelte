@@ -4,6 +4,7 @@
     import { createEditor } from '@/editor/index.js';
     import EditorToolbar from '@/components/EditorToolbar/index.svelte';
     import Button from '@/components/Button/index.svelte';
+    import IconLeft from '@/icons/arrow-left.svelte';
 
     let { entryId, onDeleted, onSaved, onBack } = $props();
 
@@ -28,6 +29,49 @@
     let activeAttachments = 0;
     let pendingAttachments = 0;
     let attachmentFailures = [];
+
+    /* ---- Compact meta chips: one popover open at a time. ---- */
+    let openPop = $state(null);
+
+    function togglePop(name) {
+        openPop = openPop === name ? null : name;
+    }
+
+    /* Tags still live in tagsText (the comma-separated string the
+       save API expects) — the popover is just a nicer editor
+       on top of it. */
+    const tags = $derived(
+        tagsText
+            .split(',')
+            .map((t) => t.trim())
+            .filter((t) => t !== ''),
+    );
+
+    function setTags(next) {
+        tagsText = next.join(', ');
+        markDirty();
+    }
+
+    function removeTag(name) {
+        setTags(tags.filter((t) => t !== name));
+    }
+
+    function addTag(e) {
+        if (e.key !== 'Enter' && e.key !== ',') return;
+        const value = e.currentTarget.value.split(',')[0].trim();
+        if (value === '') return;
+        e.preventDefault();
+        e.currentTarget.value = '';
+        if (!tags.includes(value)) setTags([...tags, value]);
+    }
+
+    /* Chip label: "Wed, Oct 20" instead of "2026-10-20". */
+    function formatDate(d) {
+        if (!d) return 'Date';
+        const dt = new Date(`${d}T00:00:00`);
+        if (Number.isNaN(dt.getTime())) return d;
+        return dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    }
 
     function refreshToolbar() {
         info = editor ? editor.query() : null;
@@ -71,6 +115,17 @@
         entryDate = entry.entry_date;
         mood = entry.mood == null ? '' : String(entry.mood);
         tagsText = entry.tags.join(', ');
+    });
+
+    /* Clicking outside any chip closes its popover. Popovers live
+       inside .chip-wrap, so clicks on them are "inside" and stay. */
+    onMount(() => {
+        const onDocClick = (e) => {
+            if (e.target.closest('.chip-wrap')) return;
+            openPop = null;
+        };
+        document.addEventListener('click', onDocClick);
+        return () => document.removeEventListener('click', onDocClick);
     });
 
     const ASSET_PREFIXES = ['soirvu-asset://localhost/', 'http://soirvu-asset.localhost/'];
@@ -205,21 +260,106 @@
     }
 </script>
 
+<svelte:window
+    onkeydown={(e) => {
+        if (e.key === 'Escape') openPop = null;
+    }} />
+
 {#if entry}
     <div class="editor-pane">
-        <div class="back-row">
-            <!-- <button class="quiet" onclick={() => onBack?.()}>‹ Back</button> -->
-            <Button kind="quiet" type onclick={() => onBack?.()} label="Back" />
-        </div>
+        <!-- One compact meta row: back + chips. Date, mood and
+             tags each open a popover instead of stacking rows. -->
         <div class="meta-row">
-            <input class="title-input" placeholder="Title" bind:value={title} oninput={markDirty} />
-            <input type="date" bind:value={entryDate} onchange={markDirty} />
-            <select bind:value={mood} onchange={markDirty} aria-label="Mood">
-                <option value="">Mood</option>
-                {#each [1, 2, 3, 4, 5] as m}<option value={String(m)}>{m}</option>{/each}
-            </select>
+            <Button kind="quiet" handler={() => onBack?.()} aria-label="Back"><IconLeft />Back</Button>
+            <div class="meta-chips">
+                <div class="chip-wrap">
+                    <button
+                        class="meta-chip"
+                        class:empty={!entryDate}
+                        aria-expanded={openPop === 'date'}
+                        onclick={() => togglePop('date')}>
+                        <span class="chip-icon">📅</span>
+                        {formatDate(entryDate)}
+                        <span class="chev">▾</span>
+                    </button>
+                    {#if openPop === 'date'}
+                        <div class="popover">
+                            <h4>Date</h4>
+                            <input type="date" value={entryDate} onchange={markDirty} />
+                        </div>
+                    {/if}
+                </div>
+
+                <div class="chip-wrap">
+                    <button
+                        class="meta-chip"
+                        class:empty={mood === ''}
+                        aria-expanded={openPop === 'mood'}
+                        onclick={() => togglePop('mood')}>
+                        <span class="chip-icon">★</span>
+                        {mood === '' ? 'Mood' : `Mood ${mood}/5`}
+                        <span class="chev">▾</span>
+                    </button>
+                    {#if openPop === 'mood'}
+                        <div class="popover">
+                            <h4>Mood</h4>
+                            <div class="mood-grid">
+                                {#each ['1', '2', '3', '4', '5'] as m}
+                                    <button
+                                        class:selected={mood === m}
+                                        onclick={() => {
+                                            mood = m;
+                                            markDirty();
+                                            openPop = null;
+                                        }}>{m}</button>
+                                {/each}
+                            </div>
+                            {#if mood !== ''}
+                                <button
+                                    class="mood-clear"
+                                    onclick={() => {
+                                        mood = '';
+                                        markDirty();
+                                    }}>Clear mood</button>
+                            {/if}
+                        </div>
+                    {/if}
+                </div>
+
+                <div class="chip-wrap">
+                    <button
+                        class="meta-chip"
+                        class:empty={tags.length === 0}
+                        aria-expanded={openPop === 'tags'}
+                        onclick={() => togglePop('tags')}>
+                        <span class="chip-icon">#</span>
+                        {tags.length === 0
+                            ? 'Tags'
+                            : `${tags.slice(0, 2).join(', ')}${tags.length > 2 ? ` +${tags.length - 2}` : ''}`}
+                        <span class="chev">▾</span>
+                    </button>
+                    {#if openPop === 'tags'}
+                        <div class="popover">
+                            <h4>Tags</h4>
+                            {#if tags.length > 0}
+                                <div class="tag-flow">
+                                    {#each tags as tag}
+                                        <span class="tag-pill">
+                                            <span class="tag-name">{tag}</span>
+                                            <button class="tag-remove" title="Remove tag" onclick={() => removeTag(tag)}
+                                                >×</button>
+                                        </span>
+                                    {/each}
+                                </div>
+                            {/if}
+                            <input class="tag-entry" placeholder="Add tag… (Enter)" onkeydown={addTag} />
+                        </div>
+                    {/if}
+                </div>
+            </div>
         </div>
-        <input class="tags-input" placeholder="Tags, comma separated" bind:value={tagsText} oninput={markDirty} />
+
+        <input class="title-input" placeholder="Title" value={title} oninput={markDirty} />
         <EditorToolbar {editor} {info} onAttach={() => fileInput?.click()} />
         <input type="file" multiple hidden bind:this={fileInput} onchange={onFilesPicked} />
         <div class="editor-mount" bind:this={mountEl}></div>
@@ -227,9 +367,9 @@
             <span class="status">{status}</span>
             {#if deleteArmed}
                 <button onclick={remove}>Really delete this entry?</button>
-                <button class="quiet" onclick={() => (deleteArmed = false)}>Keep it</button>
+                <button class="mood-clear" onclick={() => (deleteArmed = false)}>Keep it</button>
             {:else}
-                <button class="quiet" onclick={() => (deleteArmed = true)}>Delete entry</button>
+                <button class="mood-clear" onclick={() => (deleteArmed = true)}>Delete entry</button>
             {/if}
         </div>
     </div>

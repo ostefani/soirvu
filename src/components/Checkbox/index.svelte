@@ -1,6 +1,6 @@
 <script>
     let {
-        checked = $bindable(false),
+        checked = false,
         label = '',
         disabled = false,
         name = '',
@@ -11,38 +11,17 @@
         children = null,
     } = $props();
 
-    function handleChange(event) {
-        checked = event.currentTarget.checked;
-        onchange?.(event);
-    }
-
     const customFillStyle = $derived.by(() => {
         if (!checked) return '';
-        if (gradient) {
-            return `background: ${gradient}; border-color: transparent;`;
-        }
-        if (color) {
-            return `background-color: ${color}; border-color: ${color};`;
-        }
+        if (gradient) return `background: ${gradient}; border-color: transparent;`;
+        if (color) return `background-color: ${color}; border-color: ${color};`;
         return '';
     });
 </script>
 
 <label class="checkbox-container" class:disabled for={id || undefined}>
-    <input
-        type="checkbox"
-        class="native-checkbox"
-        {id}
-        {name}
-        {disabled}
-        bind:checked
-        onchange={handleChange}
-    />
-    <span
-        class="checkbox-control"
-        class:checked
-        style={customFillStyle}
-        aria-hidden="true">
+    <input type="checkbox" class="native-checkbox" {id} {name} {disabled} {checked} {onchange} />
+    <span class="checkbox-control" class:checked style={customFillStyle} aria-hidden="true">
         {#if checked}
             <svg
                 class="check-icon"

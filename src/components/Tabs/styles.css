@@ -8,7 +8,7 @@
     align-items: center;
     gap: 0.35rem;
     padding: 0.3rem;
-    background-color: var(--surface-card);
+    background-color: var(--color-surface-light);
     border: 1px solid var(--border-subtle);
     border-radius: 10px;
     box-shadow: 0 1px 2px var(--elevation-shadow);
@@ -37,7 +37,7 @@
 
 .tab-item:hover {
     color: var(--text-primary);
-    background-color: var(--interactive-accent-soft);
+    background-color: var(--color-accent-soft-light);
     border-color: transparent;
 }
 
@@ -57,7 +57,7 @@
     font-size: 0.75em;
     padding: 0.1em 0.45em;
     border-radius: 999px;
-    background-color: var(--interactive-accent-soft);
+    background-color: var(--color-accent-soft-light);
     color: var(--interactive-accent);
     font-weight: 600;
 }

@@ -6,49 +6,57 @@
     import Checkbox from '@/components/Checkbox/index.svelte';
     import { ONBOARDING_STEP } from '@/containers/OnboardingContainer/constants.js';
 
-    let { model = $bindable(), fields, actions, onboardingText } = $props();
+    let {
+        step,
+        folderName,
+        warning,
+        recoveryKey,
+        saved,
+        busy,
+        error,
+        fields,
+        values,
+        onboardingText,
+        onFieldInput,
+        onSavedChange,
+        onPick,
+        onCreate,
+        onDone,
+        onCancel = null,
+    } = $props();
 </script>
 
 <div class="center-col">
-    {#if model.step === ONBOARDING_STEP.CHOOSE_FOLDER}
+    {#if step === ONBOARDING_STEP.CHOOSE_FOLDER}
         <NoteComponent text={onboardingText.step1Description} />
-        {#each actions.pick as action (action.name)}
-            <Button {...action} />
-        {/each}
-    {:else if model.step === ONBOARDING_STEP.SET_PASSPHRASE}
+        <Button label={onboardingText.chooseFolderButton} handler={onPick} />
+    {:else if step === ONBOARDING_STEP.SET_PASSPHRASE}
         <p class="folder-selection">
             <span class="folder-label">{onboardingText.folderLabel}</span>
-            <strong class="folder-name">{model.folderName}</strong>
+            <strong class="folder-name">{folderName}</strong>
         </p>
-        <NoteComponent variant="warning" text={model.warning} />
+        <NoteComponent variant="warning" text={warning} />
         {#each fields as field (field.name)}
-            <Input {field} bind:value={model[field.name]} />
+            <Input {field} value={values[field.name]} onInput={(value) => onFieldInput(field.name, value)} />
         {/each}
-        {#each actions.create as action (action.name)}
-            <Button {...action} />
-        {/each}
-    {:else}
+        <Button label={onboardingText.createDiaryButton} handler={onCreate} disabled={busy} />
+    {:else if step === ONBOARDING_STEP.SAVE_RECOVERY_KEY}
         <NoteComponent
             variant="warning"
             title={onboardingText.recoveryKeyNoticeTitle}
-            text={onboardingText.recoveryKeyNotice}
-        />
+            text={onboardingText.recoveryKeyNotice} />
         <div class="recovery-container">
-            <p class="recovery-key">{model.recoveryKey}</p>
+            <p class="recovery-key">{recoveryKey}</p>
         </div>
-        <Checkbox bind:checked={model.saved} label={onboardingText.confirmSavedCheckbox} />
-        {#each actions.done as action (action.name)}
-            <Button {...action} />
-        {/each}
+        <Checkbox checked={saved} label={onboardingText.confirmSavedCheckbox} onChange={onSavedChange} />
+        <Button label={onboardingText.openDiaryButton} handler={onDone} disabled={!saved} />
     {/if}
 
-    {#if model.step < ONBOARDING_STEP.SAVE_RECOVERY_KEY}
-        {#each actions.cancel as action (action.name)}
-            <Button {...action} />
-        {/each}
+    {#if onCancel && step < ONBOARDING_STEP.SAVE_RECOVERY_KEY}
+        <Button label={onboardingText.backButton} kind="quiet" handler={onCancel} />
     {/if}
 
-    <ErrorComponent text={model.error} />
+    <ErrorComponent text={error} />
 </div>
 
 <style src="./styles.css"></style>

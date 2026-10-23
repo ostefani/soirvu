@@ -1,4 +1,5 @@
 <script>
+    import { onDestroy } from 'svelte';
     import * as api from '@/api.js';
     import EntryList from '@/components/EntryList/index.svelte';
     import Calendar from '@/components/Calendar/index.svelte';
@@ -14,6 +15,30 @@
     let calVersion = $state(0);
     let onThisDay = $state([]);
 
+    // Lifted from EntryList: the header owns the search and the
+    // creation action, so their state lives next to their inputs.
+    let query = $state('');
+    let results = $state(null); // null = not searching
+    let searchNote = $state('');
+    let searchTimer = null;
+    let error = $state('');
+    let creating = $state(false);
+
+    // Same short texts as the other screens: codes, never prose
+    // from below.
+    function describeError(e) {
+        switch (String(e)) {
+            case 'locked':
+                return 'The vault is locked.';
+            case 'invalid_input':
+                return 'That was not accepted (invalid_input).';
+            case 'storage':
+                return 'A storage problem (storage).';
+            default:
+                return `Something went wrong (${String(e)}).`;
+        }
+    }
+
     async function loadOnThisDay() {
         const now = new Date();
         const pad = (n) => String(n).padStart(2, '0');
@@ -25,8 +50,10 @@
         }
     }
 
-    export function refreshNavigation() {
-        listEl?.refresh();
+    // Awaited so the list already contains a just-created entry
+    // before the screen selects it.
+    export async function refreshNavigation() {
+        await listEl?.refresh();
         calVersion++;
     }
 
@@ -34,15 +61,79 @@
         void calVersion;
         loadOnThisDay();
     });
+
+    function today() {
+        const d = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+
+    async function newEntry() {
+        if (creating) return;
+        creating = true;
+        try {
+            const created = await api.entrySave({
+                id: null,
+                entry_date: today(),
+                title: null,
+                body_md: '',
+                mood: null,
+                tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                tags: [],
+            });
+            // A new entry belongs to the plain list, not to whatever
+            // the user was searching for a moment ago.
+            query = '';
+            results = null;
+            searchNote = '';
+            await refreshNavigation();
+            selectedId = created.id;
+            error = '';
+        } catch (e) {
+            error = describeError(e);
+        } finally {
+            creating = false;
+        }
+    }
+
+    function onSearchInput() {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(async () => {
+            const q = query.trim();
+            if (!q) {
+                results = null;
+                searchNote = '';
+                return;
+            }
+            try {
+                results = await api.search(q);
+                searchNote = results.length === 0 ? 'Nothing found.' : '';
+            } catch (e) {
+                results = null;
+                searchNote =
+                    e === 'query_too_short' ? 'Type at least 3 characters (2 for Russian).' : `Search failed (${e}).`;
+            }
+        }, 250);
+    }
+
+    onDestroy(() => clearTimeout(searchTimer));
 </script>
 
 <div class="diary-screen">
     <header class="diary-head">
         <span class="vault-label">{vault?.name}</span>
-        <span>
-            <Button label="Settings" kind="quiet" handler={onSettings} />
-            <Button label="Lock" kind="quiet" handler={onLock} />
-        </span>
+        <div class="diary-menu">
+            <input
+                type="search"
+                placeholder="Search the diary…"
+                aria-label="Search the diary"
+                bind:value={query}
+                oninput={onSearchInput} />
+            <Button label="New entry" kind="texture-button" handler={newEntry} disabled={creating} />
+            <Button label="Settings" kind="texture-button" handler={onSettings} />
+            <Button label="Lock" kind="texture-button" handler={onLock} />
+        </div>
+        {#if error}<p class="form-error">{error}</p>{/if}
     </header>
     <div class="diary-body">
         <aside>
@@ -51,7 +142,14 @@
                 {selectedId}
                 onSelect={(id) => (selectedId = id)}
                 date={listDate}
-                onClearDate={() => (listDate = null)} />
+                onClearDate={() => (listDate = null)}
+                {results}
+                {searchNote}
+                onClearSearch={() => {
+                    query = '';
+                    results = null;
+                    searchNote = '';
+                }} />
         </aside>
         <main>
             {#if selectedId}
@@ -69,6 +167,7 @@
                 <div class="calendar-home">
                     <Calendar large selectedDate={listDate} onSelect={(d) => (listDate = d)} version={calVersion} />
                     <NoteComponent
+                        variant="info"
                         text="Pick a day to see its entries in the list — or pick a recent entry on the left." />
                     {#if onThisDay.length}
                         <div class="on-this-day">

@@ -5,30 +5,34 @@
     font-weight: 400;
 
     --color-canvas-light: #fff1e8;
-    /* Signature warm peach paper */
     --color-surface-light: #ffffff;
-    /* Pure white card surface */
     --color-surface-pressed-light: #f3ede7;
-    /* Subtle warm pressed tone */
-    --color-ink-primary-light: #141210;
-    /* Deep near-black warm ink */
-    --color-ink-muted-light: #685f58;
-    /* Readable warm muted ink (WCAG AA) */
-    --color-border-subtle-light: rgba(110, 85, 70, 0.20);
-    --color-border-strong-light: rgba(110, 85, 70, 0.48);
+    --color-ink-primary-light: #4e4f59;
+    --color-ink-muted-light: #6f7184;
+    --color-border-subtle-light: #6e554633;
+    --color-border-strong-light: #6e55467a;
     --color-accent-light: #3362d6;
-    /* Accessible vibrant cobalt */
-    --color-accent-soft-light: rgba(51, 98, 214, 0.10);
+    --color-accent-texture-light: #507ff8;
+    --color-accent-soft-light: #e1e9ff;
     --color-danger-light: #c5281c;
-    /* Accessible destructive red */
-    --color-danger-soft-light: rgba(197, 40, 28, 0.08);
+    --color-danger-soft-light: #c5281c14;
     --color-mark-light: #ffe08a;
-    /* Highlighter amber */
-    --color-shadow-light: rgba(50, 25, 10, 0.08);
+    --color-mark: #fcf7e7;
+    --color-shadow-light: #32190a14;
+    --color-focus-light: #888b9f;
+    --color-focus-dark: #b1b4c9;
+    --color-success-light: #2e7d32;
+    --color-success-dark: #5c8e5e;
 
-    --surface-bg: var(--color-canvas-light);
-    --surface-card: var(--color-surface-light);
-    --surface-card-active: var(--color-surface-pressed-light);
+    /* quiet inset surface for code blocks, table headers,
+       language field */
+    --surface-inset: #6e554612;
+    --surface-button: #f2e0cfa8;
+    --separator-shadow: #bbb7b1;
+
+    /* translucent veil for the sticky toolbar so long notes
+       scroll underneath it instead of showing through. */
+    --bar-veil: #d0c3bcd1;
 
     --text-primary: var(--color-ink-primary-light);
     --text-secondary: var(--color-ink-muted-light);
@@ -45,19 +49,28 @@
     --highlight-mark: var(--color-mark-light);
     --elevation-shadow: var(--color-shadow-light);
 
-    --bg: var(--surface-bg);
-    --surface: var(--surface-card);
-    --surface-pressed: var(--surface-card-active);
+    /* syntax-highlight palette, themed. */
+    --code-kw: #7c3aed;
+    --code-str: #0a7d33;
+    --code-com: #857c74;
+    --code-num: #b25c09;
+    --code-fn: #396cd8;
+
+    --bg: var(--color-canvas-light);
+    --surface: var(--color-surface-light);
+    --surface-pressed: var(--color-surface-pressed-light);
     --ink: var(--text-primary);
     --ink-muted: var(--text-secondary);
     --line: var(--border-subtle);
     --line-strong: var(--border-strong);
     --accent: var(--interactive-accent);
-    --accent-soft: var(--interactive-accent-soft);
+    --accent-soft: var(--color-accent-soft-light);
     --danger: var(--feedback-danger);
     --danger-soft: var(--feedback-danger-soft);
     --mark: var(--highlight-mark);
     --shadow: var(--elevation-shadow);
+
+    --stone-grain: url(/src/assets/sand.svg);
 
     color: var(--text-primary);
     color-scheme: light;
@@ -76,40 +89,47 @@ html {
 
 body {
     margin: 0;
-    background: var(--surface-bg);
     height: 100%;
     width: 100%;
+    background-image: var(--stone-grain);
+    background-color: var(--color-canvas-light);
+}
+
+#app {
+    background-color: #0000001a;
+    height: 100%;
 }
 
 #__tauri_isolation__ {
     display: none !important;
 }
 
-input,
-button {
+button svg {
+    width: 15px;
+    height: 15px;
+}
+
+input {
     border-radius: 8px;
-    border: 1px solid transparent;
+    border: 2px solid transparent;
     padding: 0.6em 1.2em;
     font-size: 1em;
     font-weight: 500;
     font-family: inherit;
     color: var(--text-primary);
-    background-color: var(--surface-card);
+    background-color: var(--color-surface-pressed-light);
     transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
     box-shadow: 0 1px 3px var(--elevation-shadow);
 }
 
-button {
-    cursor: pointer;
+input:active,
+input:focus {
+    border: 2px solid var(--color-focus-light);
+    background-color: var(--color-surface-light);
 }
 
-button:hover {
-    border-color: var(--interactive-accent);
-}
-
-button:active {
-    border-color: var(--interactive-accent);
-    background-color: var(--surface-card-active);
+input:hover {
+    background-color: var(--color-surface-light);
 }
 
 input,
@@ -120,29 +140,21 @@ button {
 @media (prefers-color-scheme: dark) {
     :root {
         --color-canvas-dark: #08102e;
-        /* Deep night navy background */
         --color-surface-dark: #131f45;
-        /* Elevated navy card surface */
         --color-surface-pressed-dark: #1c2b5e;
-        /* Lighter navy pressed surface */
         --color-ink-primary-dark: #ecf0fa;
-        /* Crisp blue-white ink */
         --color-ink-muted-dark: #96a2bf;
-        /* Readable muted navy ink */
         --color-border-subtle-dark: rgba(190, 205, 240, 0.16);
         --color-border-strong-dark: rgba(190, 205, 240, 0.36);
         --color-accent-dark: #7eadfc;
-        /* Sky-blue accent (WCAG AA on dark navy) */
         --color-accent-soft-dark: rgba(126, 173, 252, 0.15);
         --color-danger-dark: #f29b8f;
-        /* Warm salmon note for dark mode */
         --color-danger-soft-dark: rgba(242, 155, 143, 0.14);
         --color-mark-dark: #7a5c0e;
         --color-shadow-dark: rgba(0, 0, 0, 0.45);
 
-        --surface-bg: var(--color-canvas-dark);
-        --surface-card: var(--color-surface-dark);
-        --surface-card-active: var(--color-surface-pressed-dark);
+        --surface-inset: rgba(190, 205, 240, 0.09);
+        --bar-veil: rgba(8, 16, 46, 0.78);
 
         --text-primary: var(--color-ink-primary-dark);
         --text-secondary: var(--color-ink-muted-dark);
@@ -158,6 +170,12 @@ button {
 
         --highlight-mark: var(--color-mark-dark);
         --elevation-shadow: var(--color-shadow-dark);
+
+        --code-kw: #c4a6f5;
+        --code-str: #7fd08c;
+        --code-com: #96a2bf;
+        --code-num: #e8a35c;
+        --code-fn: #8db4f2;
 
         color-scheme: dark;
     }

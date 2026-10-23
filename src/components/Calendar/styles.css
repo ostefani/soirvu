@@ -2,22 +2,7 @@
         padding: 0.5rem 0.75rem 0.75rem;
     }
 
-    .calendar.large {
-        max-width: 620px;
-        margin: 0 auto;
-        padding: 1rem 1.25rem 1.25rem;
-    }
-
-    .calendar.large .cal-title {
-        font-size: 1.15rem;
-    }
-
-    .calendar.large .cal-day {
-        font-size: 1rem;
-        padding: 0.55rem 0;
-    }
-
-    .calendar.large .cal-weekday {
+    .cal-weekday {
         font-size: 0.8rem;
     }
 
@@ -30,7 +15,7 @@
 
     .cal-title {
         font-weight: 600;
-        font-size: 0.9rem;
+        font-size: 1.15rem;
     }
 
     .cal-grid {
@@ -51,10 +36,10 @@
         border: none;
         background: none;
         border-radius: 999px;
-        padding: 0.22rem 0;
-        font-size: 0.82rem;
         cursor: pointer;
         color: inherit;
+        font-size: 1rem;
+        padding: 0.55rem 0;
     }
 
     .cal-day:hover {

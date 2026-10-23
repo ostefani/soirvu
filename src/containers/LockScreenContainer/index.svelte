@@ -15,9 +15,7 @@
 
     let model = $state(createModel());
 
-    const selected = $derived(
-        vaults.find((vault) => vault.id === (model.selectedId ?? vaults[0]?.id)) ?? null,
-    );
+    const selected = $derived(vaults.find((vault) => vault.id === (model.selectedId ?? vaults[0]?.id)) ?? null);
 
     // -------------------------------------------------------------------------
     // Error description formatter
@@ -154,9 +152,8 @@
     const secretField = $derived({
         name: 'secret',
         type: 'password',
-        placeholder: model.kind === 'passphrase'
-            ? lockScreenText.passphrasePlaceholder
-            : lockScreenText.recoveryPlaceholder,
+        placeholder:
+            model.kind === 'passphrase' ? lockScreenText.passphrasePlaceholder : lockScreenText.recoveryPlaceholder,
     });
 
     const kindOptions = AUTHENTICATION_KIND_OPTIONS.map((option) => ({
@@ -172,12 +169,14 @@
             disabled: model.busy || !model.secret,
         },
         ...(model.touchId?.capable && model.touchId?.enrolled
-            ? [{
-                name: 'touch-id',
-                label: lockScreenText.touchIdButton,
-                handler: unlockTouchId,
-                disabled: model.busy,
-            }]
+            ? [
+                  {
+                      name: 'touch-id',
+                      label: lockScreenText.touchIdButton,
+                      handler: unlockTouchId,
+                      disabled: model.busy,
+                  },
+              ]
             : []),
     ]);
 
@@ -207,6 +206,8 @@
         finishFork,
         openAnother,
         create: () => onCreate(),
+        setSecret: (value) => (model.secret = value),
+        setForkSecret: (value) => (model.forkSecret = value),
     };
 </script>
 
@@ -220,5 +221,4 @@
     {unlockActions}
     {forkActions}
     {handlers}
-    textData={lockScreenText}
-/>
+    textData={lockScreenText} />

@@ -1,12 +1,32 @@
 /*
  * Button Component Styles
- * Already fully tokenized — kept as-is. The restyle is carried
- * by app.css (focus ring, hover) and the component files; the
- * variant language here (quiet / default / danger) is exactly
- * what the clean design needs.
  */
+
 button {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    column-gap: 8px;
+
+    border: 1px solid transparent;
+    padding: 0.6em 1.2em;
+    font-size: 1em;
+    font-weight: 500;
+    font-family: inherit;
+    color: var(--text-primary);
+    background-color: var(--color-surface-light);
+    transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+    box-shadow: 0 1px 3px var(--elevation-shadow);
     cursor: pointer;
+}
+
+button:hover {
+    border-color: var(--interactive-accent);
+}
+
+button:active {
+    border-color: var(--interactive-accent);
+    background-color: var(--color-surface-pressed-light);
 }
 
 /* Active / selected state */
@@ -24,16 +44,70 @@ button.quiet,
     color: var(--text-secondary);
 }
 
+.service-button {
+    /* background: var(--surface-button); */
+    background: transparent;
+    border: 2px solid var(--color-border-subtle-light);
+    outline: none;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 50%;
+    padding: 0;
+    min-width: min-content;
+    width: 50px;
+    height: 50px;
+    color: var(--color-ink-muted-light);
+}
+
+.service-button:hover {
+    color: var(--color-ink-primary-light);
+    border: 2px solid var(--color-ink-muted-light);
+}
+
+.texture-button {
+    box-shadow: none;
+    background: transparent;
+    border: 2px solid transparent;
+    color: var(--text-secondary);
+    border-radius: 8px;
+}
+
+.texture-button:hover {
+    /* background-color: var(--color-surface-light); */
+    border-color: var(--color-ink-muted-light);
+}
+
+.primary-button {
+    background-color: var(--interactive-accent);
+    /* border: 2px solid transparent; */
+    border: none;
+    color: var(--color-canvas-light);
+    border-radius: 8px;
+}
+
+.primary-button:hover {
+    background-color: var(--color-accent-texture-light);
+    color: var(--color-canvas-light);
+    /* box-shadow: 1px 2px 5px #32190ab7; */
+}
+
 button.quiet:hover,
 .quiet:hover {
     color: var(--text-primary);
-    background-color: var(--interactive-accent-soft);
+    background-color: var(--color-accent-soft-light);
+    border-color: transparent;
+}
+
+button.service {
+    color: var(--text-primary);
+    background-color: var(--surface-button);
     border-color: transparent;
 }
 
 button.quiet:active,
 .quiet:active {
-    background-color: var(--surface-card-active);
+    background-color: var(--color-surface-pressed-light);
 }
 
 /* Default / standard button */
@@ -41,7 +115,7 @@ button.default,
 button.primary,
 .default,
 .primary {
-    background-color: var(--surface-card);
+    background-color: var(--color-surface-light);
     color: var(--text-primary);
     border-color: transparent;
 }

@@ -21,56 +21,63 @@
         if (openVault) {
             currentVault = openVault;
             screen = APPLICATION_SCREEN.DIARY;
-        } else if (vaults.length === 0) {
-            mainView = MAIN_VIEW.WELCOME;
-            currentVault = null;
-            screen = APPLICATION_SCREEN.MAIN;
         } else {
-            mainView = MAIN_VIEW.LOCKED;
             currentVault = null;
+            mainView = vaults.length === 0 ? MAIN_VIEW.WELCOME : MAIN_VIEW.LOCKED;
             screen = APPLICATION_SCREEN.MAIN;
         }
     }
-
-    onMount(async () => {
-        await api.onVaultStatus(async ({ status }) => {
-            if (status !== VAULT_STATUS.UNLOCKED) {
-                await refresh();
-            }
-        });
-
-        // Clipboard clearing: report copies
-        document.addEventListener('copy', () => {
-            api.clipboardNoteCopy().catch(() => {});
-        });
-
-        // Manual lock: Cmd/Ctrl+Shift+L from anywhere in the diary
-        window.addEventListener('keydown', (event) => {
-            const hasModifier = event.metaKey || event.ctrlKey;
-            const matchesKey = event.key.toLowerCase() === KEYBOARD_SHORTCUT.LOCK_KEY;
-            const isInDiary = screen === APPLICATION_SCREEN.DIARY;
-
-            if (hasModifier && event.shiftKey && matchesKey && isInDiary) {
-                event.preventDefault();
-                lock();
-            }
-        });
-
-        await refresh();
-    });
 
     async function lock() {
         await api.vaultLock();
         await refresh();
     }
 
+    // Manual lock: Cmd/Ctrl+Shift+L from anywhere in the diary
+    function handleKeydown(event) {
+        const isLockShortcut =
+            (event.metaKey || event.ctrlKey) &&
+            event.shiftKey &&
+            event.key.toLowerCase() === KEYBOARD_SHORTCUT.LOCK_KEY;
+
+        if (isLockShortcut && screen === APPLICATION_SCREEN.DIARY) {
+            event.preventDefault();
+            lock();
+        }
+    }
+
+    // Clipboard clearing: report copies
+    function handleCopy() {
+        api.clipboardNoteCopy().catch(() => {});
+    }
+
     // Drop safety net: prevent accidental file navigation on unhandled drag & drop
     function swallowDrop(event) {
         event.preventDefault();
     }
+
+    onMount(() => {
+        let unlisten;
+        let destroyed = false;
+
+        api.onVaultStatus(({ status }) => {
+            if (status !== VAULT_STATUS.UNLOCKED) refresh();
+        }).then((stop) => {
+            if (destroyed) stop?.();
+            else unlisten = stop;
+        });
+
+        refresh();
+
+        return () => {
+            destroyed = true;
+            unlisten?.();
+        };
+    });
 </script>
 
-<svelte:window ondragover={swallowDrop} ondrop={swallowDrop} />
+<svelte:window onkeydown={handleKeydown} ondragover={swallowDrop} ondrop={swallowDrop} />
+<svelte:document oncopy={handleCopy} />
 
 {#if screen === APPLICATION_SCREEN.BOOT}
     <p class="note">{applicationText.bootMessage}</p>

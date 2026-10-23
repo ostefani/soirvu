@@ -12,6 +12,7 @@ export const lockScreenText = {
     retryButton: 'Retry',
     forgetButton: 'Forget',
     forgetConfirmButton: 'Really forget?',
+    forgetCancelButton: 'Cancel',
 
     // Unlock form actions and placeholders
     unlockButton: 'Unlock',

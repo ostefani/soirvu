@@ -2,7 +2,12 @@
  * LockScreen Component Styles
  */
 
-/* Vault selection list */
+/* ---------------------------------------------------------------
+   Vault selection: radio rows that show the chosen folder.
+   The radio input is real (keyboard + screen readers) but
+   visually replaced by the selection disc — picking a row IS
+   choosing the folder; nothing here toggles.
+---------------------------------------------------------------- */
 .vault-list {
     display: flex;
     flex-direction: column;
@@ -15,24 +20,161 @@
     align-items: center;
 }
 
+.vault-pick {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    /* .center-col label (global app.css) applies flex-direction:
+       column + font-size: 0.9em to every <label> in the column.
+       Declare both, or the row breaks apart. */
+    flex-direction: row;
+    font-size: 1em;
+    gap: 0.6rem;
+    align-items: center;
+    padding: 0.35rem 0.4rem;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.vault-pick:hover {
+    background-color: var(--accent-soft);
+}
+
+/* The chosen folder gets a quiet accent wash + bolder name,
+   in addition to the filled disc — selection is never color-only. */
+.vault-pick:has(.vault-radio:checked) {
+    background-color: var(--accent-soft);
+}
+
+.vault-pick:has(.vault-radio:checked) .vault-name {
+    font-weight: 600;
+}
+
+.vault-pick:has(.vault-radio:checked) .vault-icon {
+    color: var(--accent);
+}
+
+/* Neutralize the global input chrome on the carrier radio. */
+.vault-radio {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    background: none;
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* Selection disc: a ring drawn with an inset shadow (no borders),
+   filled with the accent when this vault is chosen. */
+.radio-dot {
+    flex: 0 0 auto;
+    width: 1.15rem;
+    height: 1.15rem;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 0.15rem var(--text-secondary);
+    transition: box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.vault-radio:checked+.radio-dot {
+    background-color: var(--accent);
+    box-shadow: inset 0 0 0 0.15rem var(--accent);
+}
+
+.vault-radio:focus-visible+.radio-dot {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.vault-icon {
+    flex-shrink: 0;
+    color: var(--text-secondary);
+}
+
 .vault-name {
     flex: 1;
+    min-width: 0;
     text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
+/* 0.8 keeps this text ≈4.7:1 on the peach canvas (AA for small text). */
 .missing {
-    opacity: 0.6;
+    opacity: 0.8;
     font-size: 0.85em;
+    color: var(--text-secondary);
 }
 
-/* Passphrase / recovery-key toggle */
-.kind-toggle {
+.vault-actions {
     display: flex;
     gap: 0.4rem;
+    flex-shrink: 0;
 }
 
-.kind-toggle :global(button) {
+/* ---------------------------------------------------------------
+   Kind toggle: a segmented slider (passphrase / recovery key).
+   One shared track, one sliding thumb, two radio options.
+---------------------------------------------------------------- */
+.kind-toggle {
+    position: relative;
+    display: flex;
+    background-color: var(--color-ink-primary-light);
+    border-radius: 8px;
+}
+
+.kind-thumb {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    background-color: var(--color-surface-light);
+    transition: transform 0.15s ease;
+    border-radius: 8px;
+}
+
+.kind-option {
     flex: 1;
+    position: relative;
+    display: flex;
+    /* Same .center-col label collision as .vault-pick. */
+    flex-direction: row;
+    font-size: 1em;
+    align-items: center;
+    justify-content: center;
+    padding: 0.45em 0.6em;
+    cursor: pointer;
+    color: var(--color-surface-light);
+    transition: color 0.15s ease;
+}
+
+
+.kind-option.active {
+    color: var(--text-primary);
+}
+
+.kind-radio {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    background: none;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.kind-option:has(.kind-radio:focus-visible) {
+    box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* Keeps the labels above the sliding thumb. */
+.kind-label {
+    position: relative;
 }
 
 /* Fork panel */

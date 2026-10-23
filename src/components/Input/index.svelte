@@ -1,5 +1,5 @@
 <script>
-    let { field, value = $bindable(''), disabled = false, onenter = null, oninput = null } = $props();
+    let { field, value = '', disabled = false, onenter = null, oninput = null } = $props();
 
     function keydown(e) {
         if (e.key === 'Enter') onenter?.();

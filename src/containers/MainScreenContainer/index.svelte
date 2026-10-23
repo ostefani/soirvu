@@ -4,15 +4,13 @@
     import NoteComponent from '@/components/NoteComponent/index.svelte';
     import OnboardingContainer from '@/containers/OnboardingContainer/index.svelte';
     import LockScreenContainer from '@/containers/LockScreenContainer/index.svelte';
+    import { MAIN_VIEW } from '@/constants.js';
 
     let { vaults, initialView, onVaultsChanged } = $props();
 
-    let view = $state('welcome');
+    // Follows initialView, but can be overridden locally (assignable $derived, Svelte 5.25+).
+    let view = $derived(initialView);
     let welcomeNote = $state('');
-
-    $effect(() => {
-        view = initialView;
-    });
 
     const FS_WARNINGS = {
         cloud_sync:
@@ -25,29 +23,32 @@
         welcomeNote = '';
         const picked = await api.vaultPickFolder('open');
         if (picked) {
-            if (picked.warning) welcomeNote = FS_WARNINGS[picked.warning] || '';
+            welcomeNote = FS_WARNINGS[picked.warning] ?? '';
             await onVaultsChanged();
         }
     }
 
-    const welcomeActions = [
-        { name: 'create', label: 'Create a new diary', handler: () => (view = 'create') },
-        { name: 'open', label: 'Open an existing diary folder…', kind: 'default', handler: openExisting },
-    ];
+    function showCreate() {
+        welcomeNote = '';
+        view = MAIN_VIEW.CREATE;
+    }
+
+    function cancelCreate() {
+        view = vaults.length > 0 ? MAIN_VIEW.LOCKED : MAIN_VIEW.WELCOME;
+    }
 </script>
 
-{#if view === 'welcome'}
+{#if view === MAIN_VIEW.WELCOME}
     <div class="center-col">
         <p>An encrypted diary. It lives in a folder you choose; nothing leaves your machine.</p>
-        {#each welcomeActions as action (action.name)}
-            <Button {...action} />
-        {/each}
+        <Button label="Create a new diary" handler={showCreate} />
+        <Button label="Open an existing diary folder…" kind="default" handler={openExisting} />
         <NoteComponent text={welcomeNote} />
     </div>
-{:else if view === 'create'}
-    <OnboardingContainer onDone={onVaultsChanged} onCancel={vaults.length > 0 ? onVaultsChanged : undefined} />
-{:else}
-    <LockScreenContainer {vaults} onUnlocked={onVaultsChanged} {onVaultsChanged} onCreate={() => (view = 'create')} />
+{:else if view === MAIN_VIEW.CREATE}
+    <OnboardingContainer onDone={onVaultsChanged} onCancel={cancelCreate} />
+{:else if view === MAIN_VIEW.LOCKED}
+    <LockScreenContainer {vaults} onUnlocked={onVaultsChanged} {onVaultsChanged} onCreate={showCreate} />
 {/if}
 
 <style src="./styles.css"></style>

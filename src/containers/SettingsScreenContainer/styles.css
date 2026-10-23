@@ -2,11 +2,12 @@
     position: fixed;
     inset: 0;
     overflow-y: auto;
-    background: var(--surface-bg);
     z-index: 50;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
+    background-image: var(--stone-grain);
+    background-color: var(--color-canvas-light);
 }
 
 /* Native-feeling sticky top header bar */
@@ -18,10 +19,9 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.65rem 1.5rem;
-    background-color: var(--surface-bg);
     border-bottom: 1px solid var(--border-subtle);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
+    background-color: #0000001a;
+    height: 60px;
 }
 
 .head-left {
