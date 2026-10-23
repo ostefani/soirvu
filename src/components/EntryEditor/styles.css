@@ -250,7 +250,7 @@
 
 /* Document-style title: big, bold, borderless — the first
    line of the page, not a form field. */
-.title-input {
+:global(.title-input) {
     flex: 1;
     min-width: 0;
     font-weight: 700;
@@ -265,12 +265,12 @@
     border-radius: 0;
 }
 
-.title-input:hover {
+:global(.title-input:hover) {
     background: var(--color-accent-soft);
 
 }
 
-.title-input:focus {
+:global(.title-input:focus) {
     outline: none;
     border-color: transparent;
     background: transparent;
@@ -477,13 +477,11 @@
     margin: 0;
 }
 
-.list-top {
+/* .list-top {
     display: flex;
     gap: 0.4rem;
 }
 
-/* Search field: a quiet white field — no drop shadow, a
-       hairline on hover, the accent border on focus. */
 .list-top input {
     flex: 1;
     min-width: 0;
@@ -503,7 +501,7 @@
     border-color: var(--color-accent);
     color: var(--color-ink-primary);
     background: var(--color-surface);
-}
+} */
 
 :global(.editor-mount div.attachment) {
     display: flex;

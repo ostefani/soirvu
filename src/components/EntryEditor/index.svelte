@@ -1,5 +1,5 @@
 <script>
-    import { onDestroy, onMount } from 'svelte';
+    import { onMount, untrack } from 'svelte';
     import * as api from '@/api.js';
     import { createEditor } from '@/editor/index.js';
     import EditorToolbar from '@/components/EditorToolbar/index.svelte';
@@ -16,11 +16,9 @@
     let tagsText = $state('');
     let status = $state('');
     let deleteArmed = $state(false);
-    let mountEl = $state(null);
     let fileInput = $state(null);
     let info = $state(null);
     const titleField = { name: 'title', placeholder: 'Title' };
-    // let editor = null;
 
     let editor = $state(null);
     let saveTimer = null;
@@ -142,29 +140,47 @@
 
     const ASSET_PREFIXES = ['soirvu-asset://localhost/', 'http://soirvu-asset.localhost/'];
 
-    $effect(() => {
-        if (!entry || !mountEl || editor) return;
-        mountEl.addEventListener('dblclick', (e) => {
-            const img = e.target.closest('img');
-            const src = img?.getAttribute('src') || '';
-            const prefix = ASSET_PREFIXES.find((p) => src.startsWith(p));
-            if (prefix) {
-                api.attachmentOpen(src.slice(prefix.length)).catch(() => {});
-            }
-        });
-        editor = createEditor(mountEl, {
-            markdown: entry.body_md,
-            onChange: () => markDirty(),
-            onSelectionChange: refreshToolbar,
-            onAttach: (file) => attachFile(file),
-            onAttachmentView: (el, id) => hydrateAttachment(el, id),
-            onOpenLink: (href) => {
-                if (href.startsWith('https://') || href.startsWith('mailto:')) {
-                    api.openLink(href).catch(() => {});
-                }
-            },
-        });
-    });
+    /* Attachment on the mount div: runs once when the element is
+       created (it is inside {#if entry}, so entry is always set) and
+       returns its own teardown. createEditor is untracked so that
+       reads inside it (entry.body_md, editor via refreshToolbar) never
+       make this attachment re-run and rebuild the editor. */
+    function mountEditor(node) {
+        const instance = untrack(() =>
+            createEditor(node, {
+                markdown: entry.body_md,
+                onChange: () => markDirty(),
+                onSelectionChange: refreshToolbar,
+                onAttach: (file) => attachFile(file),
+                onAttachmentView: (el, id) => hydrateAttachment(el, id),
+                onOpenLink: (href) => {
+                    if (href.startsWith('https://') || href.startsWith('mailto:')) {
+                        api.openLink(href).catch(() => {});
+                    }
+                },
+            }),
+        );
+        editor = instance;
+        node.addEventListener('dblclick', onEditorDblClick);
+
+        return () => {
+            node.removeEventListener('dblclick', onEditorDblClick);
+            clearTimeout(saveTimer);
+            // save() reads editor.getMarkdown() synchronously, so it
+            // must run before editor is cleared.
+            if (dirty) save();
+            instance.destroy();
+            editor = null;
+        };
+    }
+
+    function onEditorDblClick(e) {
+        const src = e.target.closest('img')?.getAttribute('src') || '';
+        const prefix = ASSET_PREFIXES.find((p) => src.startsWith(p));
+        if (prefix) {
+            api.attachmentOpen(src.slice(prefix.length)).catch(() => {});
+        }
+    }
 
     const ATTACH_CHUNK = 1024 * 1024;
 
@@ -259,12 +275,6 @@
             el.textContent = 'Attachment unavailable.';
         }
     }
-
-    onDestroy(() => {
-        clearTimeout(saveTimer);
-        if (dirty) save();
-        editor?.destroy();
-    });
 
     async function remove() {
         await api.entryDelete(entry.id);
@@ -374,7 +384,7 @@
         <Input field={titleField} class="title-input" value={title} oninput={onTitleInput} />
         <EditorToolbar {editor} {info} onAttach={() => fileInput?.click()} />
         <input type="file" multiple hidden bind:this={fileInput} onchange={onFilesPicked} />
-        <div class="editor-mount" bind:this={mountEl}></div>
+        <div class="editor-mount" {@attach mountEditor}></div>
         <div class="editor-foot">
             <span class="status">{status}</span>
             {#if deleteArmed}
