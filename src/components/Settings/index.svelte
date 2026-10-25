@@ -214,7 +214,7 @@
             <!-- TAB 3: BACKUPS                                                    -->
             <!-- ================================================================= -->
         {:else if activeTab === 'backup'}
-            <div class="tab-panel" role="tabpanel" id="panel-backup" aria-labelledby="tab-backup">
+            <div class="tab-panel settings-backups" role="tabpanel" id="panel-backup" aria-labelledby="tab-backup">
                 <div class="settings-card">
                     <div class="card-header">
                         <h3 class="card-title">Automated & Manual Backups</h3>
@@ -225,9 +225,9 @@
 
                     <div class="setting-item">
                         <span class="setting-label">{settingsText.backupLocation}</span>
-                        <span class="setting-value">
+                        <span class="location-value" class:is-empty={!general.settings.backup_location}>
                             {#if general.settings.backup_location}
-                                <strong>{general.settings.backup_location}</strong>
+                                {general.settings.backup_location}
                             {:else}
                                 <span class="muted">{settingsText.notSet}</span>
                             {/if}
@@ -245,20 +245,20 @@
 
                     <hr class="settings-divider" />
 
-                    <div class="setting-item">
+                    <div class="setting-item schedule-item">
                         <Select
                             field={fields.schedule}
                             value={general.settings.backup_schedule}
                             onchange={(e) => handlers.saveSchedule(e.currentTarget.value)} />
-                        <div class="setting-row">
-                            {#each actions.backupNow as action (action)}
-                                <Button
-                                    {...ACTIONS[action]}
-                                    kind="texture-button"
-                                    handler={handlers[action]}
-                                    disabled={disabled[action]} />
-                            {/each}
-                        </div>
+                    </div>
+                    <div class="setting-row">
+                        {#each actions.backupNow as action (action)}
+                            <Button
+                                {...ACTIONS[action]}
+                                kind="texture-button"
+                                handler={handlers[action]}
+                                disabled={disabled[action]} />
+                        {/each}
                     </div>
                 </div>
             </div>
