@@ -16,7 +16,7 @@ use tokio::sync::oneshot;
 use zeroize::Zeroize;
 
 use crate::error::{AppError, ipc};
-use crate::lock_handshake::LOCK_ACK_WAIT;
+use crate::lock_handshake::{FlushOutcome, LOCK_ACK_WAIT};
 use crate::state::{AppState, LockRequested, VaultInfo};
 
 #[derive(Serialize)]
@@ -477,10 +477,9 @@ pub async fn vault_unlock(
     }
 }
 
-/// Ask the UI to flush and wait for its verdict (§6.2). Returns
-/// false only when the UI answered that it could not save. Never
+/// Ask the UI to flush and wait for its verdict (§6.2). Never
 /// blocks an async runtime thread: call from a blocking thread.
-pub fn begin_lock_handshake(app: &AppHandle, cap: Duration) -> bool {
+pub fn begin_lock_handshake(app: &AppHandle, cap: Duration) -> FlushOutcome {
     let state = app.state::<AppState>();
     let generation = match state.begin_lock() {
         Some(generation) => {
@@ -491,17 +490,17 @@ pub fn begin_lock_handshake(app: &AppHandle, cap: Duration) -> bool {
     };
     match generation {
         Some(generation) => state.handshake.wait(generation, cap),
-        None => true,
+        None => FlushOutcome::Ok,
     }
 }
 
-/// Idle and OS-signal locks: never vetoed. A failed flush locks
+/// Idle and OS-signal locks: never vetoed. A failed or unanswered flush locks
 /// anyway and leaves a content-free notice for the lock screen.
 /// `cap = None` skips the wait. Returns true if this call locked.
 pub fn lock_forced(app: &AppHandle, cap: Option<Duration>) -> bool {
-    let flushed = cap.map_or(true, |cap| begin_lock_handshake(app, cap));
+    let outcome = cap.map_or(FlushOutcome::Ok, |cap| begin_lock_handshake(app, cap));
     let state = app.state::<AppState>();
-    if !flushed {
+    if matches!(outcome, FlushOutcome::Failed | FlushOutcome::TimedOut) {
         state.handshake.flag_notice();
     }
     if matches!(state.lock_once(), Ok(true)) {
@@ -517,14 +516,15 @@ pub fn lock_forced(app: &AppHandle, cap: Option<Duration>) -> bool {
 pub async fn vault_lock(app: AppHandle) -> Result<(), String> {
     // §6.2 handshake first: the UI flushes while the keys live.
     // The wait runs on a blocking thread. The lock itself is
-    // forced: a failed flush is reported on the lock screen
+    // forced: a failed or unanswered flush is reported on the lock screen
     // instead of refusing the user's explicit lock.
     let handshake_app = app.clone();
-    let flushed = tauri::async_runtime::spawn_blocking(move || {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         begin_lock_handshake(&handshake_app, LOCK_ACK_WAIT)
-     })
-    .await.unwrap_or(true);
-    if !flushed {
+    })
+    .await
+    .unwrap_or(FlushOutcome::Ok);
+    if matches!(outcome, FlushOutcome::Failed | FlushOutcome::TimedOut) {
         app.state::<AppState>().handshake.flag_notice();
     }
     let lock_result =

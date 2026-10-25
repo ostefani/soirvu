@@ -12,11 +12,20 @@ pub const LOCK_ACK_WAIT: Duration = Duration::from_secs(5);
 /// more, so wait less.
 pub const LOCK_ACK_WAIT_OS: Duration = Duration::from_secs(1);
 
+/// What the lock handshake's wait decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlushOutcome {
+    Ok,
+    Failed,
+    TimedOut,
+}
+
 #[derive(Default)]
 struct Shared {
     generation: u64,
     pending: Option<u64>,
     last_ack: Option<(u64, bool)>,
+    last_timeout: Option<u64>,
     /// Content-free: "the last lock dropped unsaved edits".
     notice: bool,
 }
@@ -66,11 +75,14 @@ impl LockHandshake {
         self.cv.notify_all();
     }
 
-    /// Wait for the ack. Returns the UI's `ok`; a timeout or a
-    /// cancel counts as ok (a dead UI must not veto, and there is
-    /// no failure to report). A timed-out handshake is cleared so
-    /// a late ack cannot touch a later wait.
-    pub fn wait(&self, generation: u64, cap: Duration) -> bool {
+    /// Wait for the ack. A timeout is its own outcome: a dead
+    /// UI must not veto locking, but the caller must know the
+    /// flush never answered so it can leave a notice. A cancel
+    /// still counts as ok (a direct lock supersedes the wait, and
+    /// there is no failure to report). A timed-out handshake is
+    /// cleared so a late ack cannot touch a later wait, and the
+    /// generation is recorded so joiners report the timeout too.
+    pub fn wait(&self, generation: u64, cap: Duration) -> FlushOutcome {
         let deadline = Instant::now() + cap;
         let mut s = self.guard();
         while s.pending == Some(generation) {
@@ -86,11 +98,20 @@ impl LockHandshake {
         }
         if s.pending == Some(generation) {
             s.pending = None;
+            s.last_timeout = Some(generation);
             self.cv.notify_all();
+            return FlushOutcome::TimedOut;
         }
         match s.last_ack {
-            Some((g, ok)) if g == generation => ok,
-            _ => true,
+            Some((g, ok)) if g == generation => {
+                if ok {
+                    FlushOutcome::Ok
+                } else {
+                    FlushOutcome::Failed
+                }
+            }
+            _ if s.last_timeout == Some(generation) => FlushOutcome::TimedOut,
+            _ => FlushOutcome::Ok,
         }
     }
 
@@ -134,7 +155,20 @@ mod tests {
             let waiter = s.spawn(move || h.wait(g, Duration::from_secs(5)));
             std::thread::sleep(Duration::from_millis(50));
             assert!(hs.acknowledge(g, false));
-            assert!(!waiter.join().unwrap());
+            assert_eq!(waiter.join().unwrap(), FlushOutcome::Failed);
+        });
+    }
+
+    #[test]
+    fn ack_ok_wakes_waiter_with_ok() {
+        let hs = LockHandshake::default();
+        let g = hs.begin().unwrap();
+        std::thread::scope(|s| {
+            let h = &hs;
+            let waiter = s.spawn(move || h.wait(g, Duration::from_secs(5)));
+            std::thread::sleep(Duration::from_millis(50));
+            assert!(hs.acknowledge(g, true));
+            assert_eq!(waiter.join().unwrap(), FlushOutcome::Ok);
         });
     }
 
@@ -150,16 +184,35 @@ mod tests {
             let b = s.spawn(move || h.wait(joined, Duration::from_secs(5)));
             std::thread::sleep(Duration::from_millis(50));
             hs.acknowledge(g, false);
-            assert!(!a.join().unwrap());
-            assert!(!b.join().unwrap());
+            assert_eq!(a.join().unwrap(), FlushOutcome::Failed);
+            assert_eq!(b.join().unwrap(), FlushOutcome::Failed);
         });
     }
 
     #[test]
-    fn timeout_counts_as_ok_and_clears_the_handshake() {
+    fn timeout_is_its_own_outcome_and_clears_the_handshake() {
         let hs = LockHandshake::default();
         let g = hs.begin().unwrap();
-        assert!(hs.wait(g, Duration::from_millis(50)));
+        assert_eq!(
+            hs.wait(g, Duration::from_millis(50)),
+            FlushOutcome::TimedOut
+        );
+        assert_eq!(hs.pending(), None);
+        assert!(!hs.acknowledge(g, false), "late ack must be ignored");
+    }
+
+    #[test]
+    fn timeout_wakes_joiners_with_timeout() {
+        let hs = LockHandshake::default();
+        let g = hs.begin().unwrap();
+        let joined = hs.pending().unwrap();
+        std::thread::scope(|s| {
+            let h = &hs;
+            let a = s.spawn(move || h.wait(joined, Duration::from_millis(50)));
+            let b = s.spawn(move || h.wait(joined, Duration::from_millis(50)));
+            assert_eq!(a.join().unwrap(), FlushOutcome::TimedOut);
+            assert_eq!(b.join().unwrap(), FlushOutcome::TimedOut);
+        });
         assert_eq!(hs.pending(), None);
         assert!(!hs.acknowledge(g, false), "late ack must be ignored");
     }
@@ -173,7 +226,7 @@ mod tests {
             let waiter = s.spawn(move || h.wait(g, Duration::from_secs(5)));
             std::thread::sleep(Duration::from_millis(50));
             hs.cancel();
-            assert!(waiter.join().unwrap());
+            assert_eq!(waiter.join().unwrap(), FlushOutcome::Ok);
         });
         assert_eq!(hs.pending(), None);
     }

@@ -20,6 +20,7 @@
     let mood = $state('');
     let tagsText = $state('');
     let deleteArmed = $state(false);
+    let frozen = $state(false);
     let fileInput = $state(null);
     let info = $state.raw(null);
     let editor = $state.raw(null);
@@ -60,6 +61,8 @@
     let activeAttachments = 0;
     let pendingAttachments = $state(0);
     let attachmentFailures = $state.raw([]);
+    let abortUploads = false;
+    const inflightUploads = new Set();
 
     const attachmentNote = $derived(
         pendingAttachments > 0
@@ -167,21 +170,18 @@
         return () => document.removeEventListener('click', onDocClick);
     });
 
-    async function waitForUploads(ms) {
-        const deadline = Date.now() + ms;
-        while (pendingAttachments > 0 && Date.now() < deadline) {
-            await new Promise((resolve) => setTimeout(resolve, 50));
-        }
-    }
-
     onMount(() =>
         registerFlushHook(async () => {
+            frozen = true;
             editor?.setReadonly?.(true);
-            await waitForUploads(3000);
+            openPop = null;
+            await abortAllUploads();
             await autosave.flush();
             const ok = autosave.clean && pendingAttachments === 0;
             if (!ok) {
                 editor?.setReadonly?.(false);
+                abortUploads = false;
+                frozen = false;
                 notify(EVENT_TYPE.ERROR, 'Latest edits could not be saved.');
             }
             return ok;
@@ -233,8 +233,16 @@
 
     const ATTACH_CHUNK = 1024 * 1024;
 
+    async function abortAllUploads() {
+        abortUploads = true;
+        const queued = attachmentQueue.length;
+        attachmentQueue.length = 0;
+        pendingAttachments -= queued;
+        await Promise.allSettled([...inflightUploads]);
+    }
+
     function attachFile(file) {
-        if (!entry || !editor) return;
+        if (!entry || !editor || frozen) return;
         if (pendingAttachments === 0) attachmentFailures = [];
         attachmentQueue.push(file);
         pendingAttachments++;
@@ -242,18 +250,21 @@
     }
 
     function drainAttachmentQueue() {
+        if (abortUploads) return;
         while (activeAttachments < MAX_CONCURRENT_UPLOADS && attachmentQueue.length) {
             const file = attachmentQueue.shift();
             activeAttachments++;
-            void uploadFile(file)
+            const done = uploadFile(file)
                 .then((error) => {
                     if (error) attachmentFailures = [...attachmentFailures, error];
                 })
                 .finally(() => {
                     activeAttachments--;
                     pendingAttachments--;
+                    inflightUploads.delete(done);
                     drainAttachmentQueue();
                 });
+            inflightUploads.add(done);
         }
     }
 
@@ -262,6 +273,10 @@
         try {
             uploadId = await api.attachmentBegin(entry.id, file.name, file.type || null);
             for (let offset = 0; offset < file.size; offset += ATTACH_CHUNK) {
+                if (abortUploads) {
+                    await api.attachmentAbort(uploadId).catch(() => {});
+                    return null;
+                }
                 const slice = await file.slice(offset, offset + ATTACH_CHUNK).arrayBuffer();
                 await api.attachmentChunk(uploadId, new Uint8Array(slice));
             }
@@ -316,11 +331,13 @@
 
     /* Save first; stay on the entry if the save failed. */
     async function goBack() {
+        if (frozen) return;
         await autosave.flush();
         if (autosave.clean) onBack?.();
     }
 
     async function remove() {
+        if (frozen) return;
         autosave.discard(); // never save an entry that is being deleted
         await api.entryDelete(entry.id);
         onDeleted?.();
@@ -344,6 +361,7 @@
                         class="meta-chip"
                         class:empty={!entryDate}
                         aria-expanded={openPop === 'date'}
+                        disabled={frozen}
                         onclick={() => togglePop('date')}>
                         <span class="chip-icon">📅</span>
                         {formatDate(entryDate)}
@@ -362,6 +380,7 @@
                         class="meta-chip"
                         class:empty={mood === ''}
                         aria-expanded={openPop === 'mood'}
+                        disabled={frozen}
                         onclick={() => togglePop('mood')}>
                         <span class="chip-icon">★</span>
                         {mood === '' ? 'Mood' : `Mood ${mood}/5`}
@@ -392,6 +411,7 @@
                         class="meta-chip"
                         class:empty={tags.length === 0}
                         aria-expanded={openPop === 'tags'}
+                        disabled={frozen}
                         onclick={() => togglePop('tags')}>
                         <span class="chip-icon">#</span>
                         {tags.length === 0
@@ -420,7 +440,7 @@
             </div>
         </div>
 
-        <Input field={titleField} class="title-input" value={title} oninput={onTitleInput} />
+        <Input field={titleField} class="title-input" value={title} oninput={onTitleInput} disabled={frozen} />
         <EditorToolbar {editor} {info} onAttach={() => fileInput?.click()} />
         <input type="file" multiple hidden bind:this={fileInput} onchange={onFilesPicked} />
         <div class="editor-mount" {@attach mountEditor}></div>
