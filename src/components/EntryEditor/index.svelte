@@ -441,7 +441,7 @@
         </div>
 
         <Input field={titleField} class="title-input" value={title} oninput={onTitleInput} disabled={frozen} />
-        <EditorToolbar {editor} {info} onAttach={() => fileInput?.click()} />
+        <EditorToolbar {editor} {info} disabled={frozen} onAttach={() => fileInput?.click()} />
         <input type="file" multiple hidden bind:this={fileInput} onchange={onFilesPicked} />
         <div class="editor-mount" {@attach mountEditor}></div>
         <div class="editor-foot">

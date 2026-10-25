@@ -1,5 +1,5 @@
 <script>
-    let { editor, info, onAttach = null } = $props();
+    let { editor, info, disabled = false, onAttach = null } = $props();
 
     function run(name) {
         editor?.exec(name);
@@ -10,7 +10,7 @@
     }
 </script>
 
-<div class="editor-toolbar" role="toolbar" aria-label="Formatting">
+<div class="editor-toolbar" class:frozen={disabled} inert={disabled} role="toolbar" aria-label="Formatting">
     <button
         type="button"
         class:active={info?.strong}

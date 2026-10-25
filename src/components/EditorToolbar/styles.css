@@ -17,6 +17,10 @@
     box-shadow: 0 1px 3px var(--elevation-shadow);
 }
 
+.editor-toolbar.frozen {
+    opacity: 0.5;
+}
+
 /* Icon buttons: transparent until hovered, accent-soft
        tint on hover, accent color for the active state. All
        colors come from the theme tokens, so the bar follows
