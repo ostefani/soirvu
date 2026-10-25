@@ -9,13 +9,15 @@ use serde::Serialize;
 use soirvu_core::Vault;
 use soirvu_core::crypto::{DeviceSecret, KdfParams, RecoveryKey};
 use soirvu_core::vault::VaultHeader;
-use tauri::{AppHandle, Manager, State};
+
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::oneshot;
 use zeroize::Zeroize;
 
 use crate::error::{AppError, ipc};
-use crate::state::{AppState, VaultInfo};
+use crate::lock_handshake::LOCK_ACK_WAIT;
+use crate::state::{AppState, LockRequested, VaultInfo};
 
 #[derive(Serialize)]
 pub struct Picked {
@@ -475,18 +477,85 @@ pub async fn vault_unlock(
     }
 }
 
+/// Ask the UI to flush and wait for its verdict (§6.2). Returns
+/// false only when the UI answered that it could not save. Never
+/// blocks an async runtime thread: call from a blocking thread.
+pub fn begin_lock_handshake(app: &AppHandle, cap: Duration) -> bool {
+    let state = app.state::<AppState>();
+    let generation = match state.begin_lock() {
+        Some(generation) => {
+            let _ = app.emit("lock-requested", LockRequested { generation });
+            Some(generation)
+        }
+        None => state.handshake.pending(),
+    };
+    match generation {
+        Some(generation) => state.handshake.wait(generation, cap),
+        None => true,
+    }
+}
+
+/// Idle and OS-signal locks: never vetoed. A failed flush locks
+/// anyway and leaves a content-free notice for the lock screen.
+/// `cap = None` skips the wait. Returns true if this call locked.
+pub fn lock_forced(app: &AppHandle, cap: Option<Duration>) -> bool {
+    let flushed = cap.map_or(true, |cap| begin_lock_handshake(app, cap));
+    let state = app.state::<AppState>();
+    if !flushed {
+        state.handshake.flag_notice();
+    }
+    if matches!(state.lock_once(), Ok(true)) {
+        crate::commands::emit_status(app, &state);
+        crate::commands::reload_main_window(app);
+        true
+    } else {
+        false
+    }
+}
+
 #[tauri::command]
 pub async fn vault_lock(app: AppHandle) -> Result<(), String> {
+    // §6.2 handshake first: the UI flushes while the keys live.
+    // The wait runs on a blocking thread. The lock itself is
+    // forced: a failed flush is reported on the lock screen
+    // instead of refusing the user's explicit lock.
+    let handshake_app = app.clone();
+    let flushed = tauri::async_runtime::spawn_blocking(move || {
+        begin_lock_handshake(&handshake_app, LOCK_ACK_WAIT)
+     })
+    .await.unwrap_or(true);
+    if !flushed {
+        app.state::<AppState>().handshake.flag_notice();
+    }
     let lock_result =
-        crate::commands::run_blocking_state(app.clone(), |state| ipc(state.lock())).await;
+        crate::commands::run_blocking_state(app.clone(), |state| ipc(state.lock_once())).await;
     let state = app.state::<AppState>();
-    super::emit_status(&app, &state);
-    // §9: reload the document onto the lock screen. Deferred to
-    // the main thread's next turn so this command's reply is not
-    // lost with the document it destroys.
-    let reload_app = app.clone();
-    let _ = app.run_on_main_thread(move || super::reload_main_window(&reload_app));
+    // Another trigger may have locked first; it already emitted
+    // and reloaded, so only the winning call does it again.
+    let already_locked = lock_result == Ok(false);
+    if !already_locked {
+        super::emit_status(&app, &state);
+        // §9: reload the document onto the lock screen. Deferred to
+        // the main thread's next turn so this command's reply is not
+        // lost with the document it destroys.
+        let reload_app = app.clone();
+        let _ = app.run_on_main_thread(move || super::reload_main_window(&reload_app));
+    }
     lock_result.map(|_| ())
+}
+
+/// Acknowledge the lock handshake (§6.2): the UI flushed (or
+/// has nothing to flush) for `generation`. Returns true only
+/// when the ack matches the pending handshake.
+#[tauri::command]
+pub fn vault_lock_ready(state: State<'_, AppState>, generation: u64, ok: bool) -> bool {
+    state.handshake.acknowledge(generation, ok)
+}
+
+/// True once if the last forced lock dropped unsaved edits.
+#[tauri::command]
+pub fn lock_notice_take(state: State<'_, AppState>) -> bool {
+    state.handshake.take_notice()
 }
 
 #[tauri::command]

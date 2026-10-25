@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vault-lock-ready"
+description = "Enables the vault_lock_ready command without any pre-configured scope."
+commands.allow = ["vault_lock_ready"]
+
+[[permission]]
+identifier = "deny-vault-lock-ready"
+description = "Denies the vault_lock_ready command without any pre-configured scope."
+commands.deny = ["vault_lock_ready"]

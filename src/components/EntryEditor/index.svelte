@@ -7,6 +7,9 @@
     import IconLeft from '@/icons/arrow-left.svelte';
     import Input from '@/components/Input/index.svelte';
     import { createAutosave } from '@/lib/autosave.svelte.js';
+    import { registerFlushHook } from '@/lib/lock-hooks.js';
+    import { notify } from '@/components/Notification/store.svelte.js';
+    import { EVENT_TYPE } from '@/constants.js';
 
     let { entryId, onDeleted, onSaved, onBack } = $props();
 
@@ -164,6 +167,27 @@
         return () => document.removeEventListener('click', onDocClick);
     });
 
+    async function waitForUploads(ms) {
+        const deadline = Date.now() + ms;
+        while (pendingAttachments > 0 && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+    }
+
+    onMount(() =>
+        registerFlushHook(async () => {
+            editor?.setReadonly?.(true);
+            await waitForUploads(3000);
+            await autosave.flush();
+            const ok = autosave.clean && pendingAttachments === 0;
+            if (!ok) {
+                editor?.setReadonly?.(false);
+                notify(EVENT_TYPE.ERROR, 'Latest edits could not be saved.');
+            }
+            return ok;
+        }),
+    );
+
     const ASSET_PREFIXES = ['soirvu-asset://localhost/', 'http://soirvu-asset.localhost/'];
 
     /* Attachment on the mount div: runs once when the element is
@@ -191,7 +215,9 @@
             node.removeEventListener('dblclick', onEditorDblClick);
             // Freezes the last snapshot synchronously, so it is safe
             // to destroy the editor right after.
-            autosave.close();
+            autosave.close().then((ok) => {
+                if (!ok) notify(EVENT_TYPE.ERROR, 'Latest edits could not be saved.');
+            });
             instance.destroy();
             editor = null;
         };

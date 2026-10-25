@@ -12,6 +12,8 @@ fn main() {
         "touch_id_enroll",
         "touch_id_disable",
         "vault_lock",
+        "vault_lock_ready",
+        "lock_notice_take",
         "vault_forget",
         "vault_relocate",
         "vault_fork_import",

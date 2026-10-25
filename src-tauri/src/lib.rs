@@ -9,6 +9,7 @@ mod error;
 mod keychain;
 #[cfg(target_os = "linux")]
 mod linux_lock;
+mod lock_handshake;
 #[cfg(target_os = "macos")]
 mod macos_lock;
 mod platform;
@@ -21,6 +22,8 @@ use std::time::Duration;
 use tauri::{Emitter, Manager};
 
 use state::AppState;
+
+use lock_handshake::{LOCK_ACK_WAIT, LOCK_ACK_WAIT_OS};
 
 /// The app-data folder under the system config dir, holding
 /// app.json (the vault registry and settings) and opened/.
@@ -144,12 +147,23 @@ pub fn run() {
             // screensaver lock the vault like the idle timer does.
             let mut lock_events = platform::lock_events();
             let event_handle = app.handle().clone();
-            let _ = lock_events.start(Box::new(move |_reason| {
+            let _ = lock_events.start(Box::new(move |reason| {
                 let state = event_handle.state::<AppState>();
-                if state.status() == state::Status::Unlocked {
-                    let _ = state.lock();
-                    commands::emit_status(&event_handle, &state);
-                    commands::reload_main_window(&event_handle);
+                if state.status() != state::Status::Unlocked {
+                    return;
+                }
+                // Sleep locks at once, as before the handshake: the
+                // keys must be gone before the machine sleeps. (Lid
+                // close sleeps, so it arrives as Sleep, not as its
+                // own variant.) Screen lock and screensaver wait at
+                // most a second for the UI to flush.
+                if matches!(reason, platform::LockReason::Sleep) {
+                    let _ = commands::vault::lock_forced(&event_handle, None);
+                } else {
+                    let handle = event_handle.clone();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        let _ = commands::vault::lock_forced(&handle, Some(LOCK_ACK_WAIT_OS));
+                    });
                 }
             }));
             // The observers live as long as the process: there
@@ -157,7 +171,7 @@ pub fn run() {
             std::mem::forget(lock_events);
 
             // Idle auto-lock (§6.2): every 5 s, ask the state; on
-            // expiry, lock and tell the UI.
+            // expiry, ask the UI to flush, then lock and tell the UI.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut ticks: u64 = 0;
@@ -166,24 +180,32 @@ pub fn run() {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     ticks += 1;
                     let check_handle = handle.clone();
-                    let unlocked = tauri::async_runtime::spawn_blocking(move || {
+                    let (idle, unlocked) = tauri::async_runtime::spawn_blocking(move || {
                         let state = check_handle.state::<AppState>();
-                        if state.idle_expired() {
-                            let _ = state.lock();
-                            commands::emit_status(&check_handle, &state);
-                            commands::reload_main_window(&check_handle);
-                            let _ = check_handle.emit("vault-locked", "idle");
-                        }
+                        let idle = state.idle_expired();
                         // §3: a volume that disappears mid-session locks
-                        // the vault and drops its keys.
+                        // the vault and drops its keys. No handshake
+                        // here: with the volume gone there is nothing
+                        // to flush to.
                         if state.lock_if_current_missing() {
                             commands::emit_status(&check_handle, &state);
                             commands::reload_main_window(&check_handle);
                         }
-                        state.status() == state::Status::Unlocked
+                        (idle, state.status() == state::Status::Unlocked)
                     })
                     .await
-                    .unwrap_or(false);
+                    .unwrap_or((false, false));
+                    if idle {
+                        let lock_handle = handle.clone();
+                        let _ = tauri::async_runtime::spawn_blocking(move || {
+                            if commands::vault::lock_forced(&lock_handle, Some(LOCK_ACK_WAIT)) {
+                                let _ = lock_handle.emit("vault-locked", "idle");
+                            }
+                        })
+                        .await;
+                    }
+                    let unlocked = unlocked
+                        && handle.state::<AppState>().status() == state::Status::Unlocked;
                     // §13: scheduled backups — once when a vault opens,
                     // then every five minutes while open. Detached so a
                     // large copy cannot stall lock and idle checks.
@@ -205,6 +227,8 @@ pub fn run() {
             commands::vault::vault_create,
             commands::vault::vault_unlock,
             commands::vault::vault_lock,
+            commands::vault::vault_lock_ready,
+            commands::vault::lock_notice_take,
             commands::vault::vault_forget,
             commands::vault::vault_relocate,
             commands::vault::vault_fork_import,

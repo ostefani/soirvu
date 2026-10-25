@@ -50,12 +50,15 @@ export function createAutosave({ snapshot, send, delay = 900 }) {
         saved = revision;
     }
 
-    /** For teardown: freeze the final snapshot, then flush it. */
+    /** For teardown: flush the final snapshot, then report
+        whether the entry is clean. The caller is already gone
+        by the time this settles, so the result — not the state
+        — is what a teardown notice reads. */
     function close() {
-        if (saved === revision) return running ?? Promise.resolve();
+        if (saved === revision) return running ? running.then(() => saved === revision) : Promise.resolve(true);
         const last = takeSnapshot();
         takeSnapshot = () => last;
-        return flush();
+        return flush().then(() => saved === revision);
     }
 
     return {

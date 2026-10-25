@@ -35,6 +35,8 @@
                 "touch_id_enroll",
                 "touch_id_disable",
                 "vault_lock",
+                "vault_lock_ready",
+                "lock_notice_take",
                 "vault_forget",
                 "vault_relocate",
         "vault_fork_import",
@@ -84,7 +86,7 @@
                 "plugin:event|listen",
                 "plugin:event|unlisten",
             ]);
-            const KNOWN_EVENTS = new Set(["vault-status", "rotation-started"]);
+            const KNOWN_EVENTS = new Set(["vault-status", "rotation-started", "lock-requested"]);
 
             // Invoke arguments are always a plain object (a string
             // map), never an array or a primitive. No prototype

@@ -15,6 +15,8 @@ use std::fs;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
+
+use crate::lock_handshake::LockHandshake;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -189,6 +191,13 @@ struct Inner {
     upload_seq: u64,
 }
 
+/// Payload of the `lock-requested` event (§6.2): the generation
+/// the frontend must echo in `vault_lock_ready`.
+#[derive(Serialize, Clone)]
+pub struct LockRequested {
+    pub generation: u64,
+}
+
 /// One in-flight attachment upload.
 pub struct Upload {
     pub entry_id: String,
@@ -209,6 +218,12 @@ pub struct AppState {
     // backup snapshot, or plaintext materialization from interleaving with
     // another vault operation between individual database calls.
     vault_operations: Mutex<()>,
+    /// Lock handshake (§6.2). Status stays Unlocked while one is
+    /// pending, so the editor's flush still passes the guard.
+    pub handshake: LockHandshake,
+    /// Serializes forced locks so two triggers cannot both run the
+    /// lock/emit/reload sequence.
+    lock_serial: Mutex<()>,
     config_file: PathBuf,
 }
 
@@ -293,6 +308,8 @@ impl AppState {
                 upload_seq: 0,
             }),
             vault_operations: Mutex::new(()),
+            handshake: LockHandshake::default(),
+            lock_serial: Mutex::new(()),
             config_file,
         };
         // Copies left by a crashed run must not outlive it.
@@ -792,11 +809,37 @@ impl AppState {
         }
     }
 
+    /// Begin a lock handshake. None if not Unlocked or one is pending.
+    pub fn begin_lock(&self) -> Option<u64> {
+        if self.status() != Status::Unlocked {
+            return None;
+        }
+        self.handshake.begin()
+    }
+
+    /// Lock only if still Unlocked. Returns true if this call locked.
+    /// A trigger that joined someone else's wait uses this, so the
+    /// window is reloaded once, not once per trigger.
+    pub fn lock_once(&self) -> AppResult<bool> {
+        let _serial = self
+            .lock_serial
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.status() != Status::Unlocked {
+            return Ok(false);
+        }
+        self.lock()?;
+        Ok(true)
+    }
+
     /// Unlocked ──► Locking ──► Locked (or Unavailable if the vault
     /// folder is gone). Zeroizes the keys via the core's lock().
     pub fn lock(&self) -> AppResult<()> {
         let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
+        // A direct lock supersedes any pending handshake: the keys
+        // drop now, so a late ack must not end a later wait.
+        self.handshake.cancel();
         inner.uploads.clear();
         inner.upload_bytes = 0;
         if inner.vault.is_none() {

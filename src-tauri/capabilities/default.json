@@ -16,6 +16,8 @@
         "allow-touch-id-enroll",
         "allow-touch-id-disable",
         "allow-vault-lock",
+        "allow-vault-lock-ready",
+        "allow-lock-notice-take",
         "allow-vault-forget",
         "allow-vault-relocate",
     "allow-vault-fork-import",

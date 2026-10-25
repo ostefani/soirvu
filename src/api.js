@@ -161,6 +161,21 @@ export function vaultLock() {
 }
 
 /**
+ * Acknowledge the lock handshake (§6.2): the UI flushed (or
+ * has nothing to flush) for this lock generation.
+ * @param {number} generation
+ * @param {boolean} [ok] false when the UI could not flush
+ */
+export function vaultLockReady(generation, ok = true) {
+    return invoke("vault_lock_ready", { generation, ok });
+}
+
+/** True once if the last automatic lock dropped unsaved edits. */
+export function lockNoticeTake() {
+    return invoke("lock_notice_take");
+}
+
+/**
  * Removes a vault from the known list. Files are never touched (§3).
  * @param {string} vaultId
  */
@@ -650,4 +665,15 @@ export function syncReemit() {
  */
 export function onVaultStatus(cb) {
     return listen("vault-status", (event) => cb(event.payload));
+}
+
+/**
+ * Fires when Rust asks the UI to flush before it drops the
+ * keys (§6.2). The handler must flush, then answer with
+ * vaultLockReady.
+ * @param {(payload: { generation: number }) => void} cb
+ * @returns {Promise<() => void>} The unlisten function.
+ */
+export function onLockRequested(cb) {
+    return listen("lock-requested", (event) => cb(event.payload));
 }

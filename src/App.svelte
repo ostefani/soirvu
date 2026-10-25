@@ -6,7 +6,9 @@
     import SettingsScreenContainer from '@/containers/SettingsScreenContainer/index.svelte';
     import NotificationStack from '@/containers/NotificationStackContainer/index.svelte';
 
-    import { APPLICATION_SCREEN, MAIN_VIEW, VAULT_STATUS, KEYBOARD_SHORTCUT } from '@/constants.js';
+    import { APPLICATION_SCREEN, MAIN_VIEW, VAULT_STATUS, KEYBOARD_SHORTCUT, EVENT_TYPE } from '@/constants.js';
+    import { notify } from '@/components/Notification/store.svelte.js';
+    import { runFlushHooks } from '@/lib/lock-hooks.js';
     import { applicationText } from '@/data.js';
 
     let screen = $state(APPLICATION_SCREEN.BOOT);
@@ -58,6 +60,7 @@
 
     onMount(() => {
         let unlisten;
+        let unlistenLock;
         let destroyed = false;
 
         api.onVaultStatus(({ status }) => {
@@ -67,11 +70,30 @@
             else unlisten = stop;
         });
 
+        api.onLockRequested(async ({ generation }) => {
+            let ok = false;
+            try {
+                ok = await runFlushHooks();
+            } finally {
+                api.vaultLockReady(generation, ok).catch(() => {});
+            }
+        }).then((stop) => {
+            if (destroyed) stop?.();
+            else unlistenLock = stop;
+        });
+
+        api.lockNoticeTake()
+            .then((dropped) => {
+                if (dropped) notify(EVENT_TYPE.ERROR, 'The diary locked before your latest edits could be saved.');
+            })
+            .catch(() => {});
+
         refresh();
 
         return () => {
             destroyed = true;
             unlisten?.();
+            unlistenLock?.();
         };
     });
 </script>
