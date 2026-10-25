@@ -35,7 +35,7 @@
         await refresh();
     }
 
-    const ACTIVITY_REPORT_INTERVAL = 30000;
+    const ACTIVITY_REPORT_INTERVAL = 5000;
     let lastActivitySent = 0;
     function noteActivity() {
         const now = Date.now();

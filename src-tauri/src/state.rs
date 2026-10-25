@@ -1227,10 +1227,7 @@ mod tests {
     #[test]
     fn note_activity_resets_idle_expiry() {
         let (_dir, state, _id) = state_with_vault();
-        let mut settings = state.settings();
-        settings.lock_timeout_secs = 1;
-        state.set_settings(settings).unwrap();
-        std::thread::sleep(Duration::from_millis(1500));
+        state.inner.lock().unwrap().last_activity = Instant::now() - Duration::from_secs(600);
         assert!(state.idle_expired());
         state.note_activity();
         assert!(!state.idle_expired());

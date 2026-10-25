@@ -562,8 +562,9 @@ pub fn lock_notice_take(state: State<'_, AppState>) -> bool {
 /// calls this on input so the idle timeout measures inactivity,
 /// not time since unlock.
 #[tauri::command]
-pub fn vault_activity(state: State<'_, AppState>) {
+pub async fn vault_activity(state: State<'_, AppState>) -> Result<(), String> {
     state.note_activity();
+    Ok(())
 }
 
 #[tauri::command]

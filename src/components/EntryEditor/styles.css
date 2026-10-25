@@ -556,6 +556,10 @@
     min-width: 12rem;
 }
 
+:global(.editor-mount img) {
+    max-width: 100%;
+}
+
 :global(.editor-mount img[data-blocked-image]) {
     display: inline-block;
     width: 1.2em;
