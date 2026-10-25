@@ -293,15 +293,49 @@
 }
 
 .editor-foot {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    /* position: fixed; */
+    bottom: 0;
+    right: 0;
+    /* background: var(--color-canvas); */
+    background-color: #0000001a;
+    /* width: calc(100% - 28% - 16px); */
+    width: 100%;
+    margin-top: 16px;
+    height: 46px;
+    overflow-x: hidden;
     align-items: center;
-    padding-top: 0.25rem;
+    border-radius: 12px;
+
+    /* grid-template-areas: 'status keep delete'; */
+}
+
+/*
+.editor-foot:hover {
+    width: 50%;
+    transition: width 1s ease;
+} */
+
+:global(.keep-button) {
+    /* grid-area: keep; */
+    grid-column: 10 / -1;
+}
+
+:global(.confirm-button) {
+    /* grid-area: delete; */
+    grid-column: 6 / 10;
+}
+
+:global(.delete-button) {
+    /* grid-area: delete; */
+    grid-column: 10 / -1;
 }
 
 .status {
     font-size: 0.8em;
     color: var(--color-ink-muted);
+    grid-column: 4 / 6;
 }
 
 /* Spaces render as typed: with the default white-space a

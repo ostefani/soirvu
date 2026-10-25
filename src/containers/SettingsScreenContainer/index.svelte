@@ -4,6 +4,7 @@
     import * as api from '@/api.js';
     import Button from '@/components/Button/index.svelte';
     import Settings from '@/components/Settings/index.svelte';
+    import IconLeft from '@/icons/arrow-left.svelte';
     import {
         createExportModel,
         createGeneralModel,
@@ -493,7 +494,7 @@
 <div class="settings-screen">
     <header class="settings-head">
         <div class="head-left">
-            <Button label={`‹ ${settingsText.back}`} kind="quiet" handler={onBack} />
+            <Button kind="quiet" handler={onBack}><IconLeft />{settingsText.back}</Button>
         </div>
         <div class="head-title">
             <span>{settingsText.title}</span>

@@ -1,6 +1,6 @@
 :root {
     font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-    font-size: 16px;
+    font-size: 12px;
     line-height: 24px;
     font-weight: 400;
 
@@ -162,8 +162,9 @@ button {
         --color-danger-soft-dark: #f29b8f24;
         --color-mark-dark: #7a5c0e;
         --color-shadow-dark: #00000073;
-        --color-focus-dark: #b1b4c9;
-        --color-focus-bg-dark: #d1d4ea;
+        /* --color-focus-dark: #f78e5a6d; */
+        --color-focus-dark: #cead3f85;
+        --color-focus-bg-dark: #203577;
 
         --color-input-border-dark: #00000087;
 
@@ -242,8 +243,14 @@ button {
     color: var(--feedback-danger);
 }
 
-.note {
-    opacity: 0.75;
-    padding: 0.5rem;
-    color: var(--text-secondary);
+@media (min-width: 810px) {
+    :root {
+        font-size: 14px;
+    }
+}
+
+@media (min-width: 1000px) {
+    :root {
+        font-size: 16px;
+    }
 }

@@ -27,7 +27,6 @@
         setTimeoutMin,
         onTabChange,
     } = $props();
-    console.log('actions: ', actions);
 
     let activeTab = $state('general');
 
@@ -235,7 +234,11 @@
                         </span>
                         <div class="setting-row">
                             {#each actions.backupFolder as action (action)}
-                                <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
+                                <Button
+                                    {...ACTIONS[action]}
+                                    kind="texture-button"
+                                    handler={handlers[action]}
+                                    disabled={disabled[action]} />
                             {/each}
                         </div>
                     </div>
@@ -249,7 +252,11 @@
                             onchange={(e) => handlers.saveSchedule(e.currentTarget.value)} />
                         <div class="setting-row">
                             {#each actions.backupNow as action (action)}
-                                <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
+                                <Button
+                                    {...ACTIONS[action]}
+                                    kind="texture-button"
+                                    handler={handlers[action]}
+                                    disabled={disabled[action]} />
                             {/each}
                         </div>
                     </div>
@@ -278,7 +285,11 @@
                         </span>
                         <div class="setting-row">
                             {#each actions.syncFolder as action (action)}
-                                <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
+                                <Button
+                                    {...ACTIONS[action]}
+                                    kind="texture-button"
+                                    handler={handlers[action]}
+                                    disabled={disabled[action]} />
                             {/each}
                         </div>
                     </div>
@@ -290,7 +301,7 @@
                             <ErrorComponent text={settingsText.ackAhead}>
                                 <Button
                                     label={settingsText.dismiss}
-                                    kind="quiet"
+                                    kind="texture-button"
                                     handler={handlers.dismissAckAhead}
                                     disabled={sync.busy} />
                             </ErrorComponent>
@@ -326,13 +337,6 @@
                         {/if}
                     {/if}
 
-                    <!-- {#if sync.note}
-                        <Notification
-                            id="settings.sync"
-                            event={sync.noteEvent}
-                            text={sync.note}
-                            onDismiss={(text) => onDismissNotification?.('sync', text)} />
-                    {/if} -->
                     {#each sync.problems as problem}
                         <ErrorComponent text={problem} />
                     {/each}
@@ -351,16 +355,13 @@
                     </div>
                     <div class="setting-row">
                         {#each actions.restamp as action (action)}
-                            <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
+                            <Button
+                                {...ACTIONS[action]}
+                                kind="texture-button"
+                                handler={handlers[action]}
+                                disabled={disabled[action]} />
                         {/each}
                     </div>
-                    <!-- {#if sync.restampNote}
-                        <Notification
-                            id="settings.restamp"
-                            event={sync.restampNoteEvent}
-                            text={sync.restampNote}
-                            onDismiss={(text) => onDismissNotification?.('restamp', text)} />
-                    {/if} -->
                 </div>
             </div>
 
@@ -385,17 +386,13 @@
 
                     <div class="setting-row">
                         {#each actions.export as action (action)}
-                            <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
+                            <Button
+                                {...ACTIONS[action]}
+                                kind="texture-button"
+                                handler={handlers[action]}
+                                disabled={disabled[action]} />
                         {/each}
                     </div>
-
-                    <!-- {#if exp.note}
-                        <Notification
-                            id="settings.export"
-                            event={exp.noteEvent}
-                            text={exp.note}
-                            onDismiss={(text) => onDismissNotification?.('export', text)} />
-                    {/if} -->
                 </div>
 
                 <div class="settings-card">
@@ -406,7 +403,11 @@
 
                     <div class="setting-row">
                         {#each actions.import as action (action)}
-                            <Button {...ACTIONS[action]} handler={handlers[action]} disabled={disabled[action]} />
+                            <Button
+                                {...ACTIONS[action]}
+                                kind="texture-button"
+                                handler={handlers[action]}
+                                disabled={disabled[action]} />
                         {/each}
                     </div>
                 </div>

@@ -6,29 +6,76 @@
     import Button from '@/components/Button/index.svelte';
     import IconLeft from '@/icons/arrow-left.svelte';
     import Input from '@/components/Input/index.svelte';
+    import { createAutosave } from '@/lib/autosave.svelte.js';
 
     let { entryId, onDeleted, onSaved, onBack } = $props();
 
     let entry = $state(null);
+    let loadFailed = $state(false);
     let title = $state('');
     let entryDate = $state('');
     let mood = $state('');
     let tagsText = $state('');
-    let status = $state('');
     let deleteArmed = $state(false);
     let fileInput = $state(null);
-    let info = $state(null);
+    let info = $state.raw(null);
+    let editor = $state.raw(null);
     const titleField = { name: 'title', placeholder: 'Title' };
 
-    let editor = $state(null);
-    let saveTimer = null;
-    let dirty = false;
+    /* Tags are edited as comma-separated text but sent as an array. */
+    const tags = $derived(
+        tagsText
+            .split(',')
+            .map((t) => t.trim())
+            .filter((t) => t !== ''),
+    );
+
+    /* ---- Autosave: owns the timer, revisions and single-flight sending. ---- */
+    const autosave = createAutosave({
+        snapshot: () =>
+            entry && editor
+                ? {
+                      id: entry.id,
+                      entry_date: entryDate,
+                      title: title.trim() === '' ? null : title.trim(),
+                      body_md: editor.getMarkdown(),
+                      mood: mood === '' ? null : Number(mood),
+                      tz: entry.tz,
+                      tags: [...tags],
+                  }
+                : null,
+        send: async (payload) => {
+            entry = await api.entrySave(payload);
+            onSaved?.();
+        },
+    });
+
+    /* ---- Attachment progress: facts in state, text derived. ---- */
     // Matches the backend's MAX_ACTIVE_UPLOADS safety limit.
     const MAX_CONCURRENT_UPLOADS = 8;
     const attachmentQueue = [];
     let activeAttachments = 0;
-    let pendingAttachments = 0;
-    let attachmentFailures = [];
+    let pendingAttachments = $state(0);
+    let attachmentFailures = $state.raw([]);
+
+    const attachmentNote = $derived(
+        pendingAttachments > 0
+            ? `Attaching ${pendingAttachments} file${pendingAttachments === 1 ? '' : 's'}…`
+            : attachmentFailures.length === 1
+              ? attachmentFailures[0]
+              : attachmentFailures.length > 1
+                ? `${attachmentFailures.length} files could not be attached. ${attachmentFailures[0]}`
+                : '',
+    );
+
+    const SAVE_LABEL = {
+        idle: '',
+        dirty: 'Not saved yet',
+        saving: 'Saving…',
+        saved: 'Saved',
+        error: 'Could not save',
+    };
+    const status = $derived(attachmentNote || SAVE_LABEL[autosave.state]);
 
     /* ---- Compact meta chips: one popover open at a time. ---- */
     let openPop = $state(null);
@@ -37,19 +84,9 @@
         openPop = openPop === name ? null : name;
     }
 
-    /* Tags still live in tagsText (the comma-separated string the
-       save API expects) — the popover is just a nicer editor
-       on top of it. */
-    const tags = $derived(
-        tagsText
-            .split(',')
-            .map((t) => t.trim())
-            .filter((t) => t !== ''),
-    );
-
     function setTags(next) {
         tagsText = next.join(', ');
-        markDirty();
+        autosave.touch();
     }
 
     function removeTag(name) {
@@ -58,11 +95,22 @@
 
     function addTag(e) {
         if (e.key !== 'Enter' && e.key !== ',') return;
-        const value = e.currentTarget.value.split(',')[0].trim();
-        if (value === '') return;
+        const values = e.currentTarget.value
+            .split(',')
+            .map((t) => t.trim())
+            .filter((t) => t !== '');
+        if (values.length === 0) return;
         e.preventDefault();
         e.currentTarget.value = '';
-        if (!tags.includes(value)) setTags([...tags, value]);
+        const known = new Set(tags.map((t) => t.toLowerCase()));
+        const fresh = [];
+        for (const value of values) {
+            const key = value.toLowerCase();
+            if (known.has(key)) continue;
+            known.add(key);
+            fresh.push(value);
+        }
+        if (fresh.length > 0) setTags([...tags, ...fresh]);
     }
 
     /* Chip label: "Wed, Oct 20" instead of "2026-10-20". */
@@ -75,52 +123,30 @@
 
     function onTitleInput(e) {
         title = e.currentTarget.value;
-        markDirty();
+        autosave.touch();
     }
 
     function onDateChange(e) {
         entryDate = e.currentTarget.value;
-        markDirty();
+        autosave.touch();
+    }
+
+    function setMood(value) {
+        mood = value;
+        autosave.touch();
     }
 
     function refreshToolbar() {
         info = editor ? editor.query() : null;
     }
 
-    function markDirty() {
-        dirty = true;
-        status = 'Not saved yet';
-        clearTimeout(saveTimer);
-        saveTimer = setTimeout(save, 900);
-    }
-
-    async function save() {
-        if (!dirty || !entry || !editor) return;
-        status = 'Saving…';
-        try {
-            const saved = await api.entrySave({
-                id: entry.id,
-                entry_date: entryDate,
-                title: title.trim() === '' ? null : title.trim(),
-                body_md: editor.getMarkdown(),
-                mood: mood === '' ? null : Number(mood),
-                tz: entry.tz,
-                tags: tagsText
-                    .split(',')
-                    .map((t) => t.trim())
-                    .filter((t) => t !== ''),
-            });
-            entry = saved;
-            dirty = false;
-            status = 'Saved';
-            onSaved?.();
-        } catch (e) {
-            status = `Could not save (${e})`;
-        }
-    }
-
     onMount(async () => {
-        entry = await api.entryGet(entryId);
+        try {
+            entry = await api.entryGet(entryId);
+        } catch {
+            loadFailed = true;
+            return;
+        }
         title = entry.title ?? '';
         entryDate = entry.entry_date;
         mood = entry.mood == null ? '' : String(entry.mood);
@@ -141,15 +167,13 @@
     const ASSET_PREFIXES = ['soirvu-asset://localhost/', 'http://soirvu-asset.localhost/'];
 
     /* Attachment on the mount div: runs once when the element is
-       created (it is inside {#if entry}, so entry is always set) and
-       returns its own teardown. createEditor is untracked so that
-       reads inside it (entry.body_md, editor via refreshToolbar) never
-       make this attachment re-run and rebuild the editor. */
+       created and returns its own teardown. createEditor is untracked
+       so reads inside it never rebuild the editor. */
     function mountEditor(node) {
         const instance = untrack(() =>
             createEditor(node, {
                 markdown: entry.body_md,
-                onChange: () => markDirty(),
+                onChange: () => autosave.touch(),
                 onSelectionChange: refreshToolbar,
                 onAttach: (file) => attachFile(file),
                 onAttachmentView: (el, id) => hydrateAttachment(el, id),
@@ -165,10 +189,9 @@
 
         return () => {
             node.removeEventListener('dblclick', onEditorDblClick);
-            clearTimeout(saveTimer);
-            // save() reads editor.getMarkdown() synchronously, so it
-            // must run before editor is cleared.
-            if (dirty) save();
+            // Freezes the last snapshot synchronously, so it is safe
+            // to destroy the editor right after.
+            autosave.close();
             instance.destroy();
             editor = null;
         };
@@ -189,7 +212,6 @@
         if (pendingAttachments === 0) attachmentFailures = [];
         attachmentQueue.push(file);
         pendingAttachments++;
-        status = `Attaching ${pendingAttachments} file${pendingAttachments === 1 ? '' : 's'}…`;
         drainAttachmentQueue();
     }
 
@@ -199,21 +221,11 @@
             activeAttachments++;
             void uploadFile(file)
                 .then((error) => {
-                    if (error) attachmentFailures.push(error);
+                    if (error) attachmentFailures = [...attachmentFailures, error];
                 })
                 .finally(() => {
                     activeAttachments--;
                     pendingAttachments--;
-                    if (pendingAttachments === 0) {
-                        status =
-                            attachmentFailures.length === 0
-                                ? 'Saved'
-                                : attachmentFailures.length === 1
-                                  ? attachmentFailures[0]
-                                  : `${attachmentFailures.length} files could not be attached. ${attachmentFailures[0]}`;
-                    } else {
-                        status = `Attaching ${pendingAttachments} file${pendingAttachments === 1 ? '' : 's'}…`;
-                    }
                     drainAttachmentQueue();
                 });
         }
@@ -229,7 +241,7 @@
             }
             const added = await api.attachmentFinish(uploadId);
             uploadId = null;
-            editor.insertAttachment({ id: added.id, mime: added.mime, name: file.name });
+            editor?.insertAttachment({ id: added.id, mime: added.mime, name: file.name });
             return null;
         } catch (e) {
             if (uploadId) await api.attachmentAbort(uploadId).catch(() => {});
@@ -249,36 +261,43 @@
 
     async function hydrateAttachment(el, id) {
         try {
-            const info = await api.attachmentInfo(id);
+            const meta = await api.attachmentInfo(id);
             el.replaceChildren();
-            const url = api.assetUrl(info.id);
-            if (info.mime.startsWith('video/')) {
+            const url = api.assetUrl(meta.id);
+            if (meta.mime.startsWith('video/')) {
                 const v = document.createElement('video');
                 v.controls = true;
                 v.src = url;
                 el.appendChild(v);
-            } else if (info.mime.startsWith('audio/')) {
+            } else if (meta.mime.startsWith('audio/')) {
                 const a = document.createElement('audio');
                 a.controls = true;
                 a.src = url;
                 el.appendChild(a);
             } else {
                 const label = document.createElement('span');
-                label.textContent = `${info.name} · ${Math.max(1, Math.round(info.size / 1024))} KB`;
+                label.textContent = `${meta.name} · ${Math.max(1, Math.round(meta.size / 1024))} KB`;
                 el.appendChild(label);
             }
             el.title = 'Double-click to open';
             el.addEventListener('dblclick', () => {
-                api.attachmentOpen(info.id).catch(() => {});
+                api.attachmentOpen(meta.id).catch(() => {});
             });
         } catch {
             el.textContent = 'Attachment unavailable.';
         }
     }
 
+    /* Save first; stay on the entry if the save failed. */
+    async function goBack() {
+        await autosave.flush();
+        if (autosave.clean) onBack?.();
+    }
+
     async function remove() {
+        autosave.discard(); // never save an entry that is being deleted
         await api.entryDelete(entry.id);
-        onDeleted();
+        onDeleted?.();
     }
 </script>
 
@@ -292,7 +311,7 @@
         <!-- One compact meta row: back + chips. Date, mood and
              tags each open a popover instead of stacking rows. -->
         <div class="meta-row">
-            <Button kind="quiet" handler={() => onBack?.()} aria-label="Back"><IconLeft />Back</Button>
+            <Button kind="quiet" handler={goBack} aria-label="Back"><IconLeft />Back</Button>
             <div class="meta-chips">
                 <div class="chip-wrap">
                     <button
@@ -330,19 +349,13 @@
                                     <button
                                         class:selected={mood === m}
                                         onclick={() => {
-                                            mood = m;
-                                            markDirty();
+                                            setMood(m);
                                             openPop = null;
                                         }}>{m}</button>
                                 {/each}
                             </div>
                             {#if mood !== ''}
-                                <button
-                                    class="mood-clear"
-                                    onclick={() => {
-                                        mood = '';
-                                        markDirty();
-                                    }}>Clear mood</button>
+                                <button class="mood-clear" onclick={() => setMood('')}>Clear mood</button>
                             {/if}
                         </div>
                     {/if}
@@ -386,17 +399,18 @@
         <input type="file" multiple hidden bind:this={fileInput} onchange={onFilesPicked} />
         <div class="editor-mount" {@attach mountEditor}></div>
         <div class="editor-foot">
+            <Button kind="quiet" handler={goBack} aria-label="Back"><IconLeft />Back</Button>
             <span class="status">{status}</span>
             {#if deleteArmed}
-                <button onclick={remove}>Really delete this entry?</button>
-                <button class="mood-clear" onclick={() => (deleteArmed = false)}>Keep it</button>
+                <Button kind="danger" class="confirm-button" handler={remove}>Really delete entry?</Button>
+                <Button kind="quiet" class="keep-button" handler={() => (deleteArmed = false)}>Keep it</Button>
             {:else}
-                <button class="mood-clear" onclick={() => (deleteArmed = true)}>Delete entry</button>
+                <Button kind="quiet" class="delete-button" handler={() => (deleteArmed = true)}>Delete entry</Button>
             {/if}
         </div>
     </div>
 {:else}
-    <p class="note">Opening…</p>
+    <p class="note">{loadFailed ? 'Could not open this entry.' : 'Opening…'}</p>
 {/if}
 
 <style src="./styles.css"></style>

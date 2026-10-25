@@ -4,7 +4,7 @@
        slide underneath instead of showing through. */
 .editor-toolbar {
     position: sticky;
-    top: 0;
+    top: -16px;
     z-index: 30;
     display: flex;
     align-items: center;

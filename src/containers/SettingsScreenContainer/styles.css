@@ -8,6 +8,7 @@
     flex-direction: column;
     /* background-color: #0000001a; */
     background-image: var(--stone-grain);
+    background-color: var(--color-canvas);
 }
 
 /* Native-feeling sticky top header bar */
