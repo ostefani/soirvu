@@ -68,9 +68,22 @@
 }
 
 .setting-value {
+    display: block;
+    padding: 0.7rem 0.9rem;
+    background-color: var(--color-canvas);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.95rem;
     color: var(--color-ink-primary);
     word-break: break-all;
+    user-select: all;
+}
+
+/* "Not set" reads better in the UI font than in mono */
+.setting-value.is-empty {
+    font-family: inherit;
+    user-select: none;
 }
 
 .setting-value .muted {
@@ -190,18 +203,6 @@
 }
 
 /* ------------- GENERAL ------------- */
-.settings-storage .location-value {
-    display: block;
-    padding: 0.7rem 0.9rem;
-    background-color: var(--color-canvas);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 8px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.85rem;
-    color: var(--color-ink-primary);
-    word-break: break-all;
-    user-select: all;
-}
 
 .settings-storage .timeout-item {
     display: grid;
@@ -237,28 +238,44 @@
     color: var(--color-ink-muted);
 }
 
-.location-value {
-    display: block;
-    padding: 0.7rem 0.9rem;
-    background-color: var(--color-canvas);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 8px;
+.sync-peers-list code {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.85rem;
+    font-size: 0.82rem;
+    overflow-wrap: anywhere;
+    /* a full UUID must never push past the box */
+}
+
+.sync-peer-info code {
     color: var(--color-ink-primary);
-    word-break: break-all;
-    user-select: all;
 }
 
-.location-value .muted {
+.settings-card :global(label:not(.checkbox-container)) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    font-size: 0.88rem;
+    font-weight: 500;
     color: var(--color-ink-muted);
-    opacity: 0.7;
 }
 
-/* "Not set" reads better in the UI font than in mono */
-.location-value.is-empty {
-    font-family: inherit;
-    user-select: none;
+.label-container {
+    width: 50%;
+}
+
+.imports-form {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    column-gap: 1.25rem;
+    row-gap: 1.15rem;
+    align-items: start;
+}
+
+.form-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
 }
 
 /* Narrow windows: stack everything */

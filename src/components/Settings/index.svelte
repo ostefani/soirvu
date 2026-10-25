@@ -61,7 +61,7 @@
 
                     <div class="setting-item">
                         <span class="setting-label">{settingsText.vaultLocation}</span>
-                        <code class="location-value">{general.settings.vault_location ?? '—'}</code>
+                        <code class="setting-value">{general.settings.vault_location ?? '—'}</code>
                     </div>
 
                     <hr class="settings-divider" />
@@ -225,7 +225,7 @@
 
                     <div class="setting-item">
                         <span class="setting-label">{settingsText.backupLocation}</span>
-                        <span class="location-value" class:is-empty={!general.settings.backup_location}>
+                        <span class="setting-value" class:is-empty={!general.settings.backup_location}>
                             {#if general.settings.backup_location}
                                 {general.settings.backup_location}
                             {:else}
@@ -378,21 +378,22 @@
                             <Description size="small" subtle text={note} />
                         {/each}
                     </div>
+                    <form class="imports-form">
+                        <Input
+                            field={fields.exportPass}
+                            value={exp.pass}
+                            oninput={(e) => setExportPass(e.currentTarget.value)} />
 
-                    <Input
-                        field={fields.exportPass}
-                        value={exp.pass}
-                        oninput={(e) => setExportPass(e.currentTarget.value)} />
-
-                    <div class="setting-row">
-                        {#each actions.export as action (action)}
-                            <Button
-                                {...ACTIONS[action]}
-                                kind="texture-button"
-                                handler={handlers[action]}
-                                disabled={disabled[action]} />
-                        {/each}
-                    </div>
+                        <div class="form-actions">
+                            {#each actions.export as action (action)}
+                                <Button
+                                    {...ACTIONS[action]}
+                                    kind="texture-button"
+                                    handler={handlers[action]}
+                                    disabled={disabled[action]} />
+                            {/each}
+                        </div>
+                    </form>
                 </div>
 
                 <div class="settings-card">
