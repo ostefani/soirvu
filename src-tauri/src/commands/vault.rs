@@ -558,6 +558,14 @@ pub fn lock_notice_take(state: State<'_, AppState>) -> bool {
     state.handshake.take_notice()
 }
 
+/// Record user activity for the idle watcher (§6.2): the frontend
+/// calls this on input so the idle timeout measures inactivity,
+/// not time since unlock.
+#[tauri::command]
+pub fn vault_activity(state: State<'_, AppState>) {
+    state.note_activity();
+}
+
 #[tauri::command]
 pub async fn vault_forget(app: AppHandle, vault_id: String) -> Result<(), String> {
     crate::commands::run_blocking_state(app, move |state| ipc(state.forget(&vault_id))).await

@@ -883,6 +883,13 @@ impl AppState {
                 >= Duration::from_secs(inner.config.settings.lock_timeout_secs)
     }
 
+    /// Record user activity: the idle watcher measures silence
+    /// since this stamp, not since unlock.
+    pub fn note_activity(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.last_activity = Instant::now();
+    }
+
     /// THE guard (§6.2). Every vault-touching command runs its work
     /// through here: not Unlocked → the `locked` error code.
     /// Locks the vault if its folder has gone (volume ejected
@@ -1215,6 +1222,18 @@ mod tests {
             !state.idle_expired(),
             "a locked vault is never idle-expired"
         );
+    }
+
+    #[test]
+    fn note_activity_resets_idle_expiry() {
+        let (_dir, state, _id) = state_with_vault();
+        let mut settings = state.settings();
+        settings.lock_timeout_secs = 1;
+        state.set_settings(settings).unwrap();
+        std::thread::sleep(Duration::from_millis(1500));
+        assert!(state.idle_expired());
+        state.note_activity();
+        assert!(!state.idle_expired());
     }
 
     #[test]

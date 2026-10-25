@@ -35,8 +35,18 @@
         await refresh();
     }
 
+    const ACTIVITY_REPORT_INTERVAL = 30000;
+    let lastActivitySent = 0;
+    function noteActivity() {
+        const now = Date.now();
+        if (now - lastActivitySent < ACTIVITY_REPORT_INTERVAL) return;
+        lastActivitySent = now;
+        api.vaultActivity().catch(() => {});
+    }
+
     // Manual lock: Cmd/Ctrl+Shift+L from anywhere in the diary
     function handleKeydown(event) {
+        noteActivity();
         const isLockShortcut =
             (event.metaKey || event.ctrlKey) &&
             event.shiftKey &&
@@ -98,7 +108,7 @@
     });
 </script>
 
-<svelte:window onkeydown={handleKeydown} ondragover={swallowDrop} ondrop={swallowDrop} />
+<svelte:window onkeydown={handleKeydown} onpointerdown={noteActivity} onwheel={noteActivity} ontouchstart={noteActivity} onmousemove={noteActivity} ondragover={swallowDrop} ondrop={swallowDrop} />
 <svelte:document oncopy={handleCopy} />
 
 {#if screen === APPLICATION_SCREEN.BOOT}

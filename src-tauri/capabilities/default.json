@@ -18,6 +18,7 @@
         "allow-vault-lock",
         "allow-vault-lock-ready",
         "allow-lock-notice-take",
+        "allow-vault-activity",
         "allow-vault-forget",
         "allow-vault-relocate",
     "allow-vault-fork-import",

@@ -14,6 +14,7 @@ fn main() {
         "vault_lock",
         "vault_lock_ready",
         "lock_notice_take",
+        "vault_activity",
         "vault_forget",
         "vault_relocate",
         "vault_fork_import",

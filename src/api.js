@@ -175,6 +175,11 @@ export function lockNoticeTake() {
     return invoke("lock_notice_take");
 }
 
+/** Tell Rust the user is active so the idle watcher measures inactivity, not time since unlock. */
+export function vaultActivity() {
+    return invoke("vault_activity");
+}
+
 /**
  * Removes a vault from the known list. Files are never touched (§3).
  * @param {string} vaultId
