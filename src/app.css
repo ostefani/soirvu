@@ -70,7 +70,7 @@
     --mark: var(--highlight-mark);
     --shadow: var(--elevation-shadow);
 
-    --stone-grain: url(/src/assets/sand.svg);
+    --stone-grain: url(./assets/sand.svg);
 
     color-scheme: light;
 
