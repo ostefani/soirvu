@@ -37,7 +37,7 @@
         </p>
         <NoteComponent variant="warning" text={warning} />
         {#each fields as field (field.name)}
-            <Input {field} value={values[field.name]} onInput={(value) => onFieldInput(field.name, value)} />
+            <Input {field} value={values[field.name]} oninput={(e) => onFieldInput(field.name, e.target.value)} />
         {/each}
         <Button label={onboardingText.createDiaryButton} handler={onCreate} disabled={busy} />
     {:else if step === ONBOARDING_STEP.SAVE_RECOVERY_KEY}
@@ -48,7 +48,7 @@
         <div class="recovery-container">
             <p class="recovery-key">{recoveryKey}</p>
         </div>
-        <Checkbox checked={saved} label={onboardingText.confirmSavedCheckbox} onChange={onSavedChange} />
+        <Checkbox checked={saved} label={onboardingText.confirmSavedCheckbox} onchange={onSavedChange} />
         <Button label={onboardingText.openDiaryButton} handler={onDone} disabled={!saved} />
     {/if}
 
