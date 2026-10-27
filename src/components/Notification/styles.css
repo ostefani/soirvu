@@ -20,14 +20,7 @@
     box-shadow: 0 4px 14px var(--elevation-shadow);
 }
 
-/* --- Semantic Variants --- */
-
-/* Success (created, saved, updated) */
 .type-success {
-    /* background-color: #2e7d3217;
-    border: 1px solid #2e7d3240;
-    border-left: 3px solid #2e7d32;
-    color: var(--color-ink-primary); */
 
     color: var(--color-ink-primary);
     background-color: color-mix(in srgb, var(--color-success-light) 9%, var(--color-surface));
@@ -37,18 +30,6 @@
 
 .type-success .notification-icon {
     color: #2e7d32;
-}
-
-@media (prefers-color-scheme: dark) {
-    .type-success {
-        background-color: #4caf501f;
-        border: 1px solid #81c78440;
-        border-left: 3px solid #81c784;
-    }
-
-    .type-success .notification-icon {
-        color: #81c784;
-    }
 }
 
 /* Info (copied, in progress, notices) */
