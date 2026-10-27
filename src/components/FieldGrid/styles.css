@@ -1,0 +1,34 @@
+.field-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    column-gap: 1.25rem;
+    row-gap: 1.15rem;
+    align-items: start;
+}
+
+.field {
+    min-width: 0;
+}
+
+.field.second-column {
+    grid-column: 2 / 3;
+}
+
+.field-grid-footer {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    gap: 1.15rem;
+}
+
+/* Narrow windows: stack everything */
+@media (max-width: 40rem) {
+    .field-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* without this the field would create an implicit second column */
+    .field.second-column {
+        grid-column: auto;
+    }
+}

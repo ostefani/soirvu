@@ -4,9 +4,6 @@
     overflow-y: auto;
     z-index: 50;
     box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    /* background-color: #0000001a; */
     background-image: var(--stone-grain);
     background-color: var(--color-canvas);
 }

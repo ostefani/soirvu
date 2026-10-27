@@ -1,0 +1,32 @@
+.sync-peers-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background-color: var(--color-canvas);
+    border-radius: 8px;
+    border: 1px solid var(--color-border-subtle);
+    font-size: 0.85rem;
+}
+
+.sync-device-id {
+    margin: 0;
+    font-weight: 500;
+    color: var(--color-ink-primary);
+}
+
+.sync-peer-info {
+    margin: 0;
+    color: var(--color-ink-muted);
+}
+
+.sync-peers-list code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.82rem;
+    /* a full UUID must never push past the box */
+    overflow-wrap: anywhere;
+}
+
+.sync-peer-info code {
+    color: var(--color-ink-primary);
+}

@@ -1,0 +1,13 @@
+.card-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.card-title {
+    margin: 0;
+    font-size: 1.12rem;
+    font-weight: 600;
+    color: var(--color-ink-primary);
+    letter-spacing: -0.01em;
+}

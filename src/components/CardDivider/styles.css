@@ -1,0 +1,6 @@
+.card-divider {
+    height: 1px;
+    background-color: var(--color-border-subtle);
+    margin: 0.25rem 0;
+    border: none;
+}

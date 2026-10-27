@@ -1,6 +1,7 @@
 /*
- * Settings Component Styles
- * Structured, spacious layout with card grouping and tab panels.
+ * Settings screen layout only.
+ * Cards, headers, rows and fields style themselves (see SettingsCard, CardHeader,
+ * ActionRow, FieldGrid, LocationField, TabPanel, …).
  */
 
 .settings-wrapper {
@@ -13,198 +14,8 @@
     box-sizing: border-box;
 }
 
-/* Tab panel content */
-.tab-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 1.25rem;
-    width: 100%;
-}
-
-/* Individual setting section card */
-.settings-card {
-    background-color: var(--color-surface);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 12px;
-    padding: 1.5rem;
-    box-shadow: 0 1px 3px var(--elevation-shadow);
-    display: flex;
-    flex-direction: column;
-    gap: 1.15rem;
-}
-
-.card-header {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-}
-
-.card-title {
-    margin: 0;
-    font-size: 1.12rem;
-    font-weight: 600;
-    color: var(--color-ink-primary);
-    letter-spacing: -0.01em;
-}
-
-.settings-divider {
-    height: 1px;
-    background-color: var(--color-border-subtle);
-    margin: 0.25rem 0;
-    border: none;
-}
-
-/* Form items & layouts */
-.setting-item {
-    display: flex;
-    flex-direction: column;
-    gap: 0.45rem;
-}
-
-.setting-label {
-    font-size: 0.88rem;
-    font-weight: 500;
-    color: var(--color-ink-muted);
-}
-
-.setting-value {
-    display: block;
-    padding: 0.7rem 0.9rem;
-    background-color: var(--color-canvas);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 8px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.95rem;
-    color: var(--color-ink-primary);
-    word-break: break-all;
-    user-select: all;
-}
-
-/* "Not set" reads better in the UI font than in mono */
-.setting-value.is-empty {
-    font-family: inherit;
-    user-select: none;
-}
-
-.setting-value .muted {
-    color: var(--color-ink-muted);
-    opacity: 0.7;
-}
-
-.setting-row {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    flex-wrap: wrap;
-}
-
-/* Checkbox controls */
-.checkbox-group {
-    display: flex;
-    flex-direction: column;
-    gap: 0.85rem;
-}
-
-/* Sync peer information */
-.sync-peers-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 0.75rem 1rem;
-    background-color: var(--color-canvas);
-    border-radius: 8px;
-    border: 1px solid var(--color-border-subtle);
-    font-size: 0.85rem;
-}
-
-.sync-device-id {
-    margin: 0;
-    font-weight: 500;
-    color: var(--color-ink-primary);
-}
-
-.sync-peer-info {
-    margin: 0;
-    color: var(--color-ink-muted);
-}
-
-/* Activity and rotation progress */
-.progress {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    font-size: 0.9rem;
-    color: var(--color-ink-muted);
-}
-
-.spinner {
-    width: 0.95em;
-    height: 0.95em;
-    flex: none;
-    border: 2px solid currentColor;
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-}
-
-/* ---------- Security form ---------- */
-.security-form {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    column-gap: 1.25rem;
-    row-gap: 1.15rem;
-    align-items: start;
-}
-
-.security-form .field {
-    min-width: 0;
-}
-
-/* Row 2: "Confirm new passphrase" spans the full width */
-.security-form .field-second {
-    grid-column: 2 / 3;
-}
-
-/* Label above control, same rhythm as .setting-label / .setting-item */
-.security-form :global(label) {
-    display: flex;
-    flex-direction: column;
-    gap: 0.45rem;
-    font-size: 0.88rem;
-    font-weight: 500;
-    color: var(--color-ink-muted);
-}
-
-.security-form .form-actions {
-    grid-column: 1 / -1;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    align-items: center;
-}
-
-
-.security-form .form-actions-secondary {
-    padding-top: 1.15rem;
-    border-top: 1px solid var(--color-border-subtle);
-}
-
-.security-form .form-full {
-    grid-column: 1 / -1;
-}
-
-.settings-storage :global(label) {
-    display: flex;
-    flex-direction: column;
-    gap: 0.45rem;
-    font-size: 0.88rem;
-    font-weight: 500;
-    color: var(--color-ink-muted);
-}
-
-/* ------------- GENERAL ------------- */
-
-.settings-storage .timeout-item {
+/* Lock timeout: number input with its save button beside it */
+.timeout-row {
     display: grid;
     grid-template-columns: auto auto;
     column-gap: 0.75rem;
@@ -212,81 +23,13 @@
     justify-content: start;
 }
 
-/* ------------- BACKUPS ------------- */
-.settings-backups .schedule-item {
+/* a four-option select shouldn't span the whole card */
+.schedule-field {
     max-width: 22rem;
-    /* a 4-option select shouldn't span the card */
 }
 
-.settings-backups :global(select) {
-    width: 100%;
-    padding: 0.7rem 0.9rem;
-    font: inherit;
-    font-size: 0.95rem;
-    color: var(--color-ink-primary);
-    background-color: var(--color-canvas);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 8px;
-}
-
-.settings-backups :global(label) {
+.checkbox-group {
     display: flex;
     flex-direction: column;
-    gap: 0.45rem;
-    font-size: 0.88rem;
-    font-weight: 500;
-    color: var(--color-ink-muted);
-}
-
-.sync-peers-list code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.82rem;
-    overflow-wrap: anywhere;
-    /* a full UUID must never push past the box */
-}
-
-.sync-peer-info code {
-    color: var(--color-ink-primary);
-}
-
-.settings-card :global(label:not(.checkbox-container)) {
-    display: flex;
-    flex-direction: column;
-    gap: 0.45rem;
-    font-size: 0.88rem;
-    font-weight: 500;
-    color: var(--color-ink-muted);
-}
-
-.label-container {
-    width: 50%;
-}
-
-.imports-form {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    column-gap: 1.25rem;
-    row-gap: 1.15rem;
-    align-items: start;
-}
-
-.form-actions {
-    grid-column: 1 / -1;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    align-items: center;
-}
-
-/* Narrow windows: stack everything */
-@media (max-width: 40rem) {
-    .security-form {
-        grid-template-columns: minmax(0, 1fr);
-    }
-}
-
-@keyframes spin {
-    to {
-        transform: rotate(360deg);
-    }
+    gap: 0.85rem;
 }

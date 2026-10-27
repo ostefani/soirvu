@@ -1,0 +1,11 @@
+.action-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.action-row.separated {
+    padding-top: 1.15rem;
+    border-top: 1px solid var(--color-border-subtle);
+}
