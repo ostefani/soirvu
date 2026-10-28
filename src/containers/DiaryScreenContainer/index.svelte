@@ -7,12 +7,11 @@
     import Button from '@/components/Button/index.svelte';
     import NoteComponent from '@/components/NoteComponent/index.svelte';
 
-    let { vault, onLock, onSettings } = $props();
+    let { vault, onLock, onSettings, importTick = 0 } = $props();
 
     let selectedId = $state(null);
-    let listEl = $state(null);
     let listDate = $state(null);
-    let calVersion = $state(0);
+    let navVersion = $state(0);
     let onThisDay = $state([]);
 
     // Lifted from EntryList: the header owns the search and the
@@ -50,15 +49,21 @@
         }
     }
 
-    // Awaited so the list already contains a just-created entry
-    // before the screen selects it.
-    export async function refreshNavigation() {
-        await listEl?.refresh();
-        calVersion++;
+    function bumpNavigation() {
+        navVersion++;
     }
 
+    let lastImportTick = 0;
+
     $effect(() => {
-        void calVersion;
+        if (importTick !== lastImportTick) {
+            lastImportTick = importTick;
+            navVersion++;
+        }
+    });
+
+    $effect(() => {
+        void navVersion;
         loadOnThisDay();
     });
 
@@ -86,7 +91,7 @@
             query = '';
             results = null;
             searchNote = '';
-            await refreshNavigation();
+            bumpNavigation();
             selectedId = created.id;
             error = '';
         } catch (e) {
@@ -138,7 +143,7 @@
     <div class="diary-body">
         <aside>
             <EntryList
-                bind:this={listEl}
+                version={navVersion}
                 {selectedId}
                 onSelect={(id) => (selectedId = id)}
                 date={listDate}
@@ -159,13 +164,13 @@
                         onBack={() => (selectedId = null)}
                         onDeleted={() => {
                             selectedId = null;
-                            refreshNavigation();
+                            bumpNavigation();
                         }}
-                        onSaved={refreshNavigation} />
+                        onSaved={bumpNavigation} />
                 {/key}
             {:else}
                 <div class="calendar-home">
-                    <Calendar large selectedDate={listDate} onSelect={(d) => (listDate = d)} version={calVersion} />
+                    <Calendar large selectedDate={listDate} onSelect={(d) => (listDate = d)} version={navVersion} />
                     <NoteComponent
                         variant="info"
                         text="Pick a day to see its entries in the list — or pick a recent entry on the left." />
