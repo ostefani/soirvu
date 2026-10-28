@@ -393,17 +393,18 @@
         general.timeoutMin = value === '' ? null : Number(value);
     };
 
+    const backupErrors = {
+        backup_unavailable: 'The backup folder is not available.',
+        vault_mismatch:
+            'The open vault no longer matches this entry. Lock and re-open it, then try again.',
+    };
+
     async function backUpNow() {
         general.error = '';
         try {
             notify(EVENT_TYPE.SAVED, `Backed up to ${await api.backupNow()}.`);
         } catch (e) {
-            general.error =
-                e === 'backup_unavailable'
-                    ? 'The backup folder is not available.'
-                    : e === 'vault_mismatch'
-                      ? 'That folder now holds a different vault. Re-open it from the lock screen, then back up.'
-                      : somethingWrong(e);
+            general.error = backupErrors[e] ?? somethingWrong(e);
         }
     }
 

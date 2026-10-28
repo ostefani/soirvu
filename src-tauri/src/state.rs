@@ -13,7 +13,7 @@
 
 use std::fs;
 use std::ops::{Deref, DerefMut};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use crate::lock_handshake::LockHandshake;
@@ -572,26 +572,35 @@ impl AppState {
         }
         // One folder holds one vault: rows pointing here under a
         // different id contradict the header just read from it, so
-        // they go. The open vault's own row is never taken here —
-        // changing folders out from under a live vault needs a lock
-        // first, like above.
+        // they go. Dropping a locked row's device assignment is
+        // deliberate: that vault no longer lives here, so the
+        // assignment is stale too. The open vault's own row is
+        // never taken here.
         if inner.current.as_deref().is_some_and(|current| {
             inner.vault.is_some()
-                && inner
-                    .config
-                    .vaults
-                    .iter()
-                    .any(|v| v.id == current && v.path == path && current != id.as_str())
+                && inner.config.vaults.iter().any(|v| {
+                    v.id == current && same_folder(&v.path, &path) && current != id.as_str()
+                })
         }) {
             return Err(AppError::Other(
-                "lock the vault before changing its folder".into(),
+                "lock the open vault before registering its folder again".into(),
             ));
         }
         let previous = inner.config.clone();
         inner
             .config
             .vaults
-            .retain(|v| v.id == id || v.path != path);
+            .retain(|v| v.id == id || !same_folder(&v.path, &path));
+        // A dropped row can only be the locked current one (the
+        // open vault's row is guarded above): leave no dangling
+        // pointer behind.
+        if inner.status == Status::Locked
+            && inner.current.as_deref().is_some_and(|current| {
+                !inner.config.vaults.iter().any(|v| v.id == current)
+            })
+        {
+            inner.current = None;
+        }
         if let Some(existing) = inner.config.vaults.iter_mut().find(|v| v.id == id) {
             existing.path = path;
             existing.name = name;
@@ -1053,6 +1062,21 @@ impl AppState {
     }
 }
 
+/// Same folder, tolerating symlinked prefixes (`/tmp` on macOS
+/// lives under `/private`): raw equality first, a canonicalized
+/// comparison when both sides resolve. Case-only variants on
+/// case-insensitive volumes still slip past — registration paths
+/// come straight from the native picker, so this stays best effort.
+fn same_folder(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Where a known vault actually stands (§3, §6.1): the header
 /// file is there ("available"), the folder is gone from a volume
 /// that is itself gone ("volume_missing" — the mountpoint under
@@ -1128,7 +1152,7 @@ mod tests {
 
     #[test]
     fn unlock_adopts_only_the_requested_vault() {
-        let (dir, state, _id) = state_with_vault();
+        let (dir, state, id) = state_with_vault();
         let path = dir.path().join("vault");
         let _ = state.lock();
         // The folder now holds a different vault than the entry asks for.
@@ -1155,7 +1179,7 @@ mod tests {
         }
         // Nothing adopted, nothing rewritten: still locked, same entry.
         assert_eq!(state.status(), Status::Locked);
-        assert!(state.vault_path(&_id).is_ok());
+        assert!(state.vault_path(&id).is_ok());
     }
 
     #[test]
@@ -1171,6 +1195,8 @@ mod tests {
         assert_eq!(vaults.len(), 1);
         assert_eq!(vaults[0].id, other);
         assert_eq!(state.vault_path(&other).unwrap(), path);
+        // The dropped row was the locked current one: no dangling pointer.
+        assert_eq!(state.current_id(), None);
     }
 
     #[test]

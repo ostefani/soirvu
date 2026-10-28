@@ -450,23 +450,7 @@ pub async fn vault_unlock(
     .await;
     secret.zeroize();
     match joined {
-        Ok(Ok(vault)) => {
-            if assignment.is_none() {
-                // A pre-step-3 entry: adopt the identity
-                // this vault already syncs under.
-                // Best effort — the vault is open either
-                // way, and a stored open yields the same
-                // id next time, so a failed write just
-                // retries then.
-                let _ = state.set_device_id(&vault_id, vault.device_id().to_string());
-            }
-            if let Err(e) = state.unlock_ok(vault) {
-                super::emit_status(&app, &state);
-                return Err(e.to_ipc());
-            }
-            super::emit_status(&app, &state);
-            Ok(())
-        }
+        Ok(Ok(vault)) => adopt_unlocked_vault(&app, &state, &vault_id, assignment, vault),
         Ok(Err(e)) => {
             state.unlock_failed();
             Err(AppError::from(e).to_ipc())
@@ -476,6 +460,32 @@ pub async fn vault_unlock(
             Err("internal".into())
         }
     }
+}
+
+/// Adopts an opened vault after the identity check: the device
+/// assignment is only stored for the vault that was actually
+/// adopted, never for a stranger the guard rejected.
+fn adopt_unlocked_vault(
+    app: &AppHandle,
+    state: &AppState,
+    vault_id: &str,
+    assignment: Option<String>,
+    vault: Vault,
+) -> Result<(), String> {
+    let opened_device = vault.device_id().to_string();
+    if let Err(error) = state.unlock_ok(vault) {
+        super::emit_status(app, state);
+        return Err(error.to_ipc());
+    }
+    if assignment.is_none() {
+        // A pre-step-3 entry: adopt the identity this vault already
+        // syncs under. Best effort — the vault is open either way,
+        // and a stored open yields the same id next time, so a
+        // failed write just retries then.
+        let _ = state.set_device_id(vault_id, opened_device);
+    }
+    super::emit_status(app, state);
+    Ok(())
 }
 
 /// Ask the UI to flush and wait for its verdict (§6.2). Never
@@ -759,18 +769,7 @@ pub async fn vault_unlock_touch_id(
     })
     .await;
     match joined {
-        Ok(Ok(vault)) => {
-            if assignment.is_none() {
-                // Adopt, as in vault_unlock.
-                let _ = state.set_device_id(&vault_id, vault.device_id().to_string());
-            }
-            if let Err(e) = state.unlock_ok(vault) {
-                super::emit_status(&app, &state);
-                return Err(e.to_ipc());
-            }
-            super::emit_status(&app, &state);
-            Ok(())
-        }
+        Ok(Ok(vault)) => adopt_unlocked_vault(&app, &state, &vault_id, assignment, vault),
         Ok(Err(TouchUnlockError::Keychain(crate::keychain::KeychainError::Cancelled))) => {
             state.unlock_aborted();
             Err("touch_id_cancelled".into())

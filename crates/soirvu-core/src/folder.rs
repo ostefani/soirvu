@@ -429,46 +429,43 @@ fn read_header(dir: &Path) -> Result<VaultHeader> {
 /// already names it, so installing the header is exactly the
 /// missing step. Anything else — no marker, an unreadable one,
 /// or one naming a different id — is a genuinely mixed folder
-/// and stays a mismatch. Returns whether there is now a header
-/// worth re-checking.
-fn complete_interrupted_fork(dir: &Path, db: &Database) -> Result<bool> {
+/// and stays a mismatch, with the evidence renamed aside rather
+/// than destroyed: failed opens never delete.
+fn complete_interrupted_fork(dir: &Path, db: &Database) -> Result<Option<VaultHeader>> {
     let marker = dir.join(FORK_MARKER);
     let bytes = match fs::read(&marker) {
         Ok(bytes) => bytes,
-        Err(_) => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
     };
     let header = match VaultHeader::from_json(&bytes) {
         Ok(header) => header,
         Err(_) => {
-            let _ = fs::remove_file(&marker);
-            return Ok(false);
+            let _ = fs::rename(&marker, dir.join(format!("{FORK_MARKER}.rejected")));
+            return Ok(None);
         }
     };
     if db.meta("vault_id")?.as_deref() != Some(header.vault_id.as_str()) {
-        let _ = fs::remove_file(&marker);
-        return Ok(false);
+        let _ = fs::rename(&marker, dir.join(format!("{FORK_MARKER}.rejected")));
+        return Ok(None);
     }
     write_atomic(&dir.join(HEADER_FILE), &bytes)?;
     let _ = fs::remove_file(&marker);
-    Ok(true)
+    Ok(Some(header))
 }
 
 fn finish_open(
     dir: &Path,
-    header: VaultHeader,
+    mut header: VaultHeader,
     master: MasterKey,
     device: Option<&str>,
 ) -> Result<Vault> {
     let mut db = Database::open(&dir.join(DB_FILE), &master.db_key(), &dir.join(BACKUPS_DIR))?;
     // Belt and braces: the database must say it belongs to this header.
-    let mut header = header;
     if db.meta("vault_id")?.as_deref() != Some(header.vault_id.as_str()) {
-        if !complete_interrupted_fork(dir, &db)? {
-            return Err(Error::VaultMismatch);
-        }
-        header = read_header(dir)?;
-        if db.meta("vault_id")?.as_deref() != Some(header.vault_id.as_str()) {
-            return Err(Error::VaultMismatch);
+        match complete_interrupted_fork(dir, &db)? {
+            Some(completed) => header = completed,
+            None => return Err(Error::VaultMismatch),
         }
     }
     // A leftover marker with no mismatch behind it is just litter.
@@ -869,10 +866,76 @@ mod tests {
 
         let result = Vault::open_with_passphrase(&dir, PASSPHRASE);
         assert!(matches!(result, Err(Error::VaultMismatch)));
+        // Failed opens never delete: the evidence is renamed aside.
         assert!(!dir.join(FORK_MARKER).exists());
+        assert_eq!(
+            fs::read(dir.join(format!("{FORK_MARKER}.rejected"))).unwrap(),
+            b"not a header"
+        );
         // And the plain mismatch without any marker still refuses.
         let result = Vault::open_with_passphrase(&dir, PASSPHRASE);
         assert!(matches!(result, Err(Error::VaultMismatch)));
+    }
+
+    #[test]
+    fn valid_marker_for_another_id_still_refuses() {
+        let (tmp, vault, _recovery) = new_vault_with_note();
+        let dir = tmp.path().join("v");
+        let key = vault.master.db_key();
+        let (other, _) = Vault::create(&tmp.path().join("other"), "other pass", fast()).unwrap();
+        let other_header = fs::read(tmp.path().join("other").join(HEADER_FILE)).unwrap();
+        other.lock();
+        vault.lock();
+
+        // The database names a third vault; the staged header belongs
+        // to the second. This is not a half fork — refuse, keep evidence.
+        let db = Database::open(&dir.join(DB_FILE), &key, &dir.join(BACKUPS_DIR)).unwrap();
+        db.connection()
+            .execute(
+                "UPDATE meta SET value = 'someone-else' WHERE key = 'vault_id'",
+                [],
+            )
+            .unwrap();
+        drop(db);
+        fs::write(dir.join(FORK_MARKER), &other_header).unwrap();
+
+        let result = Vault::open_with_passphrase(&dir, PASSPHRASE);
+        assert!(matches!(result, Err(Error::VaultMismatch)));
+        assert!(!dir.join(FORK_MARKER).exists());
+        assert_eq!(
+            fs::read(dir.join(format!("{FORK_MARKER}.rejected"))).unwrap(),
+            other_header
+        );
+    }
+
+    #[test]
+    fn litter_marker_removed_on_clean_open() {
+        let (tmp, vault, _recovery) = new_vault_with_note();
+        let dir = tmp.path().join("v");
+        vault.lock();
+
+        // No mismatch behind it: the marker is just litter.
+        fs::write(dir.join(FORK_MARKER), b"stale").unwrap();
+        let copy = Vault::open_with_passphrase(&dir, PASSPHRASE).unwrap();
+        assert!(!dir.join(FORK_MARKER).exists());
+        assert!(!dir.join(format!("{FORK_MARKER}.rejected")).exists());
+        copy.lock();
+    }
+
+    #[test]
+    fn fork_leaves_no_marker() {
+        let (tmp, mut vault, _recovery) = new_vault_with_note();
+        let dir = tmp.path().join("v");
+        let before = vault.header().vault_id.clone();
+        vault.fork_identity(PASSPHRASE).unwrap();
+        let after = vault.header().vault_id.clone();
+        assert_ne!(after, before);
+        assert!(!dir.join(FORK_MARKER).exists());
+        vault.lock();
+
+        let copy = Vault::open_with_passphrase(&dir, PASSPHRASE).unwrap();
+        assert_eq!(copy.header().vault_id, after);
+        copy.lock();
     }
 
     #[test]
