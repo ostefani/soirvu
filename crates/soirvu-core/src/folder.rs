@@ -16,6 +16,10 @@ use crate::vault::VaultHeader;
 
 const HEADER_FILE: &str = "vault.header.json";
 const DB_FILE: &str = "soirvu.db";
+/// A fork interrupted between the database write and the header swap
+/// leaves this file holding the new header, so opening can finish
+/// the job instead of bricking the copy.
+const FORK_MARKER: &str = ".fork-in-progress";
 const BACKUPS_DIR: &str = "backups";
 
 /// An UNLOCKED vault: the master key is in memory and the database is open.
@@ -270,13 +274,18 @@ impl Vault {
     /// passphrase by opening it). Operates on an imported copy
     /// before it is registered, so a failure leaves the copy
     /// unregistered and the original vault untouched.
+    /// Crash-safe: the new header is staged in a marker file
+    /// before the database moves, so an interruption is finished
+    /// on the next open instead of bricking the copy.
     pub fn fork_identity(&mut self, passphrase: &str) -> Result<RecoveryKey> {
         let (header, recovery) = self.header.fork(passphrase, &self.master)?;
+        write_atomic(&self.dir.join(FORK_MARKER), &header.to_json()?)?;
         self.db.connection().execute(
             "UPDATE meta SET value = ?1 WHERE key = 'vault_id'",
             rusqlite::params![header.vault_id],
         )?;
         write_atomic(&self.dir.join(HEADER_FILE), &header.to_json()?)?;
+        let _ = fs::remove_file(self.dir.join(FORK_MARKER));
         self.header = header;
         Ok(recovery)
     }
@@ -415,6 +424,35 @@ fn read_header(dir: &Path) -> Result<VaultHeader> {
     VaultHeader::from_json(&bytes)
 }
 
+/// Finishes a fork that died between the database write and the
+/// header swap: the marker holds the new header and the database
+/// already names it, so installing the header is exactly the
+/// missing step. Anything else — no marker, an unreadable one,
+/// or one naming a different id — is a genuinely mixed folder
+/// and stays a mismatch. Returns whether there is now a header
+/// worth re-checking.
+fn complete_interrupted_fork(dir: &Path, db: &Database) -> Result<bool> {
+    let marker = dir.join(FORK_MARKER);
+    let bytes = match fs::read(&marker) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(false),
+    };
+    let header = match VaultHeader::from_json(&bytes) {
+        Ok(header) => header,
+        Err(_) => {
+            let _ = fs::remove_file(&marker);
+            return Ok(false);
+        }
+    };
+    if db.meta("vault_id")?.as_deref() != Some(header.vault_id.as_str()) {
+        let _ = fs::remove_file(&marker);
+        return Ok(false);
+    }
+    write_atomic(&dir.join(HEADER_FILE), &bytes)?;
+    let _ = fs::remove_file(&marker);
+    Ok(true)
+}
+
 fn finish_open(
     dir: &Path,
     header: VaultHeader,
@@ -423,9 +461,18 @@ fn finish_open(
 ) -> Result<Vault> {
     let mut db = Database::open(&dir.join(DB_FILE), &master.db_key(), &dir.join(BACKUPS_DIR))?;
     // Belt and braces: the database must say it belongs to this header.
+    let mut header = header;
     if db.meta("vault_id")?.as_deref() != Some(header.vault_id.as_str()) {
-        return Err(Error::VaultMismatch);
+        if !complete_interrupted_fork(dir, &db)? {
+            return Err(Error::VaultMismatch);
+        }
+        header = read_header(dir)?;
+        if db.meta("vault_id")?.as_deref() != Some(header.vault_id.as_str()) {
+            return Err(Error::VaultMismatch);
+        }
     }
+    // A leftover marker with no mismatch behind it is just litter.
+    let _ = fs::remove_file(dir.join(FORK_MARKER));
     let device_id = match device {
         Some(id) => {
             check_device_id(id)?;
@@ -772,6 +819,58 @@ mod tests {
             .unwrap();
         drop(db);
 
+        let result = Vault::open_with_passphrase(&dir, PASSPHRASE);
+        assert!(matches!(result, Err(Error::VaultMismatch)));
+    }
+
+    #[test]
+    fn interrupted_fork_completes_on_open() {
+        let (tmp, vault, _recovery) = new_vault_with_note();
+        let dir = tmp.path().join("v");
+        let key = vault.master.db_key();
+        let (new_header, _) = vault.header.fork(PASSPHRASE, &vault.master).unwrap();
+        let new_id = new_header.vault_id.clone();
+        vault.lock();
+
+        // The crash: the database moved to the new id, but the
+        // header swap never landed. The staged marker remains.
+        let db = Database::open(&dir.join(DB_FILE), &key, &dir.join(BACKUPS_DIR)).unwrap();
+        db.connection()
+            .execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'vault_id'",
+                [&new_id],
+            )
+            .unwrap();
+        drop(db);
+        fs::write(dir.join(FORK_MARKER), new_header.to_json().unwrap()).unwrap();
+
+        let copy = Vault::open_with_passphrase(&dir, PASSPHRASE).unwrap();
+        assert_eq!(copy.header().vault_id, new_id);
+        assert!(!dir.join(FORK_MARKER).exists());
+        copy.lock();
+    }
+
+    #[test]
+    fn garbage_marker_still_refuses() {
+        let (tmp, vault, _recovery) = new_vault_with_note();
+        let dir = tmp.path().join("v");
+        let key = vault.master.db_key();
+        vault.lock();
+
+        let db = Database::open(&dir.join(DB_FILE), &key, &dir.join(BACKUPS_DIR)).unwrap();
+        db.connection()
+            .execute(
+                "UPDATE meta SET value = 'someone-else' WHERE key = 'vault_id'",
+                [],
+            )
+            .unwrap();
+        drop(db);
+        fs::write(dir.join(FORK_MARKER), b"not a header").unwrap();
+
+        let result = Vault::open_with_passphrase(&dir, PASSPHRASE);
+        assert!(matches!(result, Err(Error::VaultMismatch)));
+        assert!(!dir.join(FORK_MARKER).exists());
+        // And the plain mismatch without any marker still refuses.
         let result = Vault::open_with_passphrase(&dir, PASSPHRASE);
         assert!(matches!(result, Err(Error::VaultMismatch)));
     }

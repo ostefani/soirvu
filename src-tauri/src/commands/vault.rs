@@ -460,7 +460,10 @@ pub async fn vault_unlock(
                 // retries then.
                 let _ = state.set_device_id(&vault_id, vault.device_id().to_string());
             }
-            state.unlock_ok(vault);
+            if let Err(e) = state.unlock_ok(vault) {
+                super::emit_status(&app, &state);
+                return Err(e.to_ipc());
+            }
             super::emit_status(&app, &state);
             Ok(())
         }
@@ -761,7 +764,10 @@ pub async fn vault_unlock_touch_id(
                 // Adopt, as in vault_unlock.
                 let _ = state.set_device_id(&vault_id, vault.device_id().to_string());
             }
-            state.unlock_ok(vault);
+            if let Err(e) = state.unlock_ok(vault) {
+                super::emit_status(&app, &state);
+                return Err(e.to_ipc());
+            }
             super::emit_status(&app, &state);
             Ok(())
         }

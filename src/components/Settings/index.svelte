@@ -186,6 +186,7 @@
                     </div>
 
                     <ActionRow names={actions.backupNow} />
+                    {#if general.error}<ErrorComponent text={general.error} />{/if}
                 </SettingsCard>
             </TabPanel>
 

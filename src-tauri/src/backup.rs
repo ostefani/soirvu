@@ -147,7 +147,7 @@ pub fn make_backup(state: &AppState) -> AppResult<String> {
     let per_vault = per_vault_dir(&root, &src, &id);
     state.with_vault_exclusive(|vault| {
         if vault.header().vault_id != id {
-            return Err(AppError::Code("locked".into()));
+            return Err(AppError::from(soirvu_core::Error::VaultMismatch));
         }
         // Checkpoint and copy form one operation: no write or key change can
         // slip between them and produce a mixed-time backup.

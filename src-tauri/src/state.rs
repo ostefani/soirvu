@@ -570,7 +570,28 @@ impl AppState {
                 "lock the vault before changing its folder".into(),
             ));
         }
+        // One folder holds one vault: rows pointing here under a
+        // different id contradict the header just read from it, so
+        // they go. The open vault's own row is never taken here —
+        // changing folders out from under a live vault needs a lock
+        // first, like above.
+        if inner.current.as_deref().is_some_and(|current| {
+            inner.vault.is_some()
+                && inner
+                    .config
+                    .vaults
+                    .iter()
+                    .any(|v| v.id == current && v.path == path && current != id.as_str())
+        }) {
+            return Err(AppError::Other(
+                "lock the vault before changing its folder".into(),
+            ));
+        }
         let previous = inner.config.clone();
+        inner
+            .config
+            .vaults
+            .retain(|v| v.id == id || v.path != path);
         if let Some(existing) = inner.config.vaults.iter_mut().find(|v| v.id == id) {
             existing.path = path;
             existing.name = name;
@@ -668,8 +689,20 @@ impl AppState {
         Ok(())
     }
 
-    pub fn unlock_ok(&self, vault: Vault) {
+    /// Adopts an opened vault. The header must name the vault that was
+    /// asked for: a folder whose contents changed since registration
+    /// adopts nothing and reports `vault_mismatch` instead of a
+    /// misleading `locked`. This is not a wrong guess, so the failure
+    /// backoff is left alone.
+    pub fn unlock_ok(&self, vault: Vault) -> AppResult<()> {
+        let opened_id = vault.header().vault_id.clone();
         let mut inner = self.inner.lock().unwrap();
+        if inner.current.as_deref() != Some(opened_id.as_str()) {
+            inner.status = Status::Locked;
+            drop(inner);
+            vault.lock();
+            return Err(AppError::from(soirvu_core::Error::VaultMismatch));
+        }
         inner.vault = Some(vault);
         inner.status = Status::Unlocked;
         inner.last_activity = Instant::now();
@@ -679,6 +712,7 @@ impl AppState {
             inner.config.last_opened = Some(id.clone());
         }
         let _ = self.save_config(&inner);
+        Ok(())
     }
 
     /// A vault created in this session starts Unlocked: its keys
@@ -1090,6 +1124,53 @@ mod tests {
             Err(AppError::Code(code)) => assert_eq!(code, "locked"),
             _ => panic!("locked state must refuse with the locked code"),
         }
+    }
+
+    #[test]
+    fn unlock_adopts_only_the_requested_vault() {
+        let (dir, state, _id) = state_with_vault();
+        let path = dir.path().join("vault");
+        let _ = state.lock();
+        // The folder now holds a different vault than the entry asks for.
+        let (other, _) =
+            Vault::create(&dir.path().join("other"), "other pass", fast_legal_kdf()).unwrap();
+        let other_id = other.header().vault_id.clone();
+        other.checkpoint().unwrap();
+        other.lock();
+        std::fs::copy(
+            dir.path().join("other").join("soirvu.db"),
+            path.join("soirvu.db"),
+        )
+        .unwrap();
+        std::fs::copy(
+            dir.path().join("other").join("vault.header.json"),
+            path.join("vault.header.json"),
+        )
+        .unwrap();
+        let swapped = Vault::open_with_passphrase(&path, "other pass").unwrap();
+        assert_eq!(swapped.header().vault_id, other_id);
+        match state.unlock_ok(swapped) {
+            Err(AppError::Code(code)) => assert_eq!(code, "vault_mismatch"),
+            _ => panic!("a swapped folder must refuse with vault_mismatch"),
+        }
+        // Nothing adopted, nothing rewritten: still locked, same entry.
+        assert_eq!(state.status(), Status::Locked);
+        assert!(state.vault_path(&_id).is_ok());
+    }
+
+    #[test]
+    fn register_replaces_same_path_rows() {
+        let (dir, state, id) = state_with_vault();
+        let path = dir.path().join("vault");
+        let _ = state.lock();
+        let other = format!("{}-other", &id[..32]);
+        state
+            .register(other.clone(), "Copy".into(), path.clone())
+            .unwrap();
+        let vaults = state.vault_list();
+        assert_eq!(vaults.len(), 1);
+        assert_eq!(vaults[0].id, other);
+        assert_eq!(state.vault_path(&other).unwrap(), path);
     }
 
     #[test]

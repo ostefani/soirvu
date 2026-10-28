@@ -398,7 +398,12 @@
         try {
             notify(EVENT_TYPE.SAVED, `Backed up to ${await api.backupNow()}.`);
         } catch (e) {
-            general.error = e === 'backup_unavailable' ? 'The backup folder is not available.' : somethingWrong(e);
+            general.error =
+                e === 'backup_unavailable'
+                    ? 'The backup folder is not available.'
+                    : e === 'vault_mismatch'
+                      ? 'That folder now holds a different vault. Re-open it from the lock screen, then back up.'
+                      : somethingWrong(e);
         }
     }
 
