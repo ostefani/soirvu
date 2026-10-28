@@ -2,7 +2,8 @@
 //!
 //!   MyVault/
 //!   ├── vault.header.json   key slots (no secrets); written last when creating
-//!   └── soirvu.db           encrypted SQLite database (plus -wal / -shm while open)
+//!   ├── soirvu.db           encrypted SQLite database (plus -wal / -shm while open)
+//!   └── attachments/ab/<id> encrypted attachment blobs, sharded by id prefix
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -15,6 +16,10 @@ use crate::vault::VaultHeader;
 
 const HEADER_FILE: &str = "vault.header.json";
 const DB_FILE: &str = "soirvu.db";
+/// A fork interrupted between the database write and the header swap
+/// leaves this file holding the new header, so opening can finish
+/// the job instead of bricking the copy.
+const FORK_MARKER: &str = ".fork-in-progress";
 const BACKUPS_DIR: &str = "backups";
 
 /// An UNLOCKED vault: the master key is in memory and the database is open.
@@ -269,13 +274,21 @@ impl Vault {
     /// passphrase by opening it). Operates on an imported copy
     /// before it is registered, so a failure leaves the copy
     /// unregistered and the original vault untouched.
+    /// Crash-safe: the new header is staged in a marker file
+    /// before the database moves, so an interruption is finished
+    /// on the next open instead of bricking the copy.
+    /// Caveat: a fork completed this way was never shown its new
+    /// recovery key, and the old one no longer works — unlock with
+    /// the passphrase and regenerate the recovery key afterwards.
     pub fn fork_identity(&mut self, passphrase: &str) -> Result<RecoveryKey> {
         let (header, recovery) = self.header.fork(passphrase, &self.master)?;
+        write_atomic(&self.dir.join(FORK_MARKER), &header.to_json()?)?;
         self.db.connection().execute(
             "UPDATE meta SET value = ?1 WHERE key = 'vault_id'",
             rusqlite::params![header.vault_id],
         )?;
         write_atomic(&self.dir.join(HEADER_FILE), &header.to_json()?)?;
+        let _ = fs::remove_file(self.dir.join(FORK_MARKER));
         self.header = header;
         Ok(recovery)
     }
@@ -354,6 +367,49 @@ fn create_files(
     Ok((vault, recovery))
 }
 
+/// Copies a vault folder's content — the database, the header and the
+/// encrypted attachment blobs — into `to` (created when missing).
+/// Backups and restores both go through here, so a copy is always whole:
+/// entries without their blobs are worse than no copy at all.
+/// A missing `attachments/` tree copies as nothing (old copies predate it);
+/// unfinished `.tmp` uploads and dotfiles are skipped, like the sweep does.
+pub fn copy_vault_files(from: &Path, to: &Path) -> Result<()> {
+    fs::create_dir_all(to)?;
+    fs::copy(from.join(DB_FILE), to.join(DB_FILE))?;
+    fs::copy(from.join(HEADER_FILE), to.join(HEADER_FILE))?;
+    copy_attachments(from, to)?;
+    Ok(())
+}
+
+/// Copies finished attachment blobs, preserving the id sharding.
+fn copy_attachments(from: &Path, to: &Path) -> Result<()> {
+    let src = from.join("attachments");
+    if !src.exists() {
+        return Ok(());
+    }
+    for shard in fs::read_dir(&src)? {
+        let shard = shard?;
+        if !shard.file_type()?.is_dir() {
+            continue;
+        }
+        for file in fs::read_dir(shard.path())? {
+            let file = file?;
+            if !file.file_type()?.is_file() {
+                continue;
+            }
+            let name = file.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') {
+                continue;
+            }
+            let dest_dir = to.join("attachments").join(shard.file_name());
+            fs::create_dir_all(&dest_dir)?;
+            fs::copy(file.path(), dest_dir.join(name.as_ref()))?;
+        }
+    }
+    Ok(())
+}
+
 fn remove_our_files(dir: &Path) {
     for name in [
         HEADER_FILE,
@@ -371,17 +427,62 @@ fn read_header(dir: &Path) -> Result<VaultHeader> {
     VaultHeader::from_json(&bytes)
 }
 
+/// Finishes a fork that died between the database write and the
+/// header swap: the marker holds the new header and the database
+/// already names it, so installing the header is exactly the
+/// missing step. Anything else — no marker, an unreadable one,
+/// or one naming a different id — is a genuinely mixed folder
+/// and stays a mismatch, with the evidence renamed aside rather
+/// than destroyed: failed opens never delete.
+/// Moves a disproven marker out of the way for forensics. First
+/// evidence wins: if a previous rejection is already there, the
+/// marker stays put rather than destroying either copy.
+fn set_marker_aside(dir: &Path, marker: &Path) {
+    let rejected = dir.join(format!("{FORK_MARKER}.rejected"));
+    if !rejected.exists() {
+        let _ = fs::rename(marker, rejected);
+    }
+}
+
+fn complete_interrupted_fork(dir: &Path, db: &Database) -> Result<Option<VaultHeader>> {
+    let marker = dir.join(FORK_MARKER);
+    let bytes = match fs::read(&marker) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let header = match VaultHeader::from_json(&bytes) {
+        Ok(header) => header,
+        Err(_) => {
+            set_marker_aside(dir, &marker);
+            return Ok(None);
+        }
+    };
+    if db.meta("vault_id")?.as_deref() != Some(header.vault_id.as_str()) {
+        set_marker_aside(dir, &marker);
+        return Ok(None);
+    }
+    write_atomic(&dir.join(HEADER_FILE), &bytes)?;
+    let _ = fs::remove_file(&marker);
+    Ok(Some(header))
+}
+
 fn finish_open(
     dir: &Path,
-    header: VaultHeader,
+    mut header: VaultHeader,
     master: MasterKey,
     device: Option<&str>,
 ) -> Result<Vault> {
     let mut db = Database::open(&dir.join(DB_FILE), &master.db_key(), &dir.join(BACKUPS_DIR))?;
     // Belt and braces: the database must say it belongs to this header.
     if db.meta("vault_id")?.as_deref() != Some(header.vault_id.as_str()) {
-        return Err(Error::VaultMismatch);
+        match complete_interrupted_fork(dir, &db)? {
+            Some(completed) => header = completed,
+            None => return Err(Error::VaultMismatch),
+        }
     }
+    // A leftover marker with no mismatch behind it is just litter.
+    let _ = fs::remove_file(dir.join(FORK_MARKER));
     let device_id = match device {
         Some(id) => {
             check_device_id(id)?;
@@ -730,6 +831,150 @@ mod tests {
 
         let result = Vault::open_with_passphrase(&dir, PASSPHRASE);
         assert!(matches!(result, Err(Error::VaultMismatch)));
+    }
+
+    #[test]
+    fn interrupted_fork_completes_on_open() {
+        let (tmp, vault, _recovery) = new_vault_with_note();
+        let dir = tmp.path().join("v");
+        let key = vault.master.db_key();
+        let (new_header, _) = vault.header.fork(PASSPHRASE, &vault.master).unwrap();
+        let new_id = new_header.vault_id.clone();
+        vault.lock();
+
+        // The crash: the database moved to the new id, but the
+        // header swap never landed. The staged marker remains.
+        let db = Database::open(&dir.join(DB_FILE), &key, &dir.join(BACKUPS_DIR)).unwrap();
+        db.connection()
+            .execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'vault_id'",
+                [&new_id],
+            )
+            .unwrap();
+        drop(db);
+        fs::write(dir.join(FORK_MARKER), new_header.to_json().unwrap()).unwrap();
+
+        let copy = Vault::open_with_passphrase(&dir, PASSPHRASE).unwrap();
+        assert_eq!(copy.header().vault_id, new_id);
+        assert!(!dir.join(FORK_MARKER).exists());
+        copy.lock();
+    }
+
+    #[test]
+    fn garbage_marker_still_refuses() {
+        let (tmp, vault, _recovery) = new_vault_with_note();
+        let dir = tmp.path().join("v");
+        let key = vault.master.db_key();
+        vault.lock();
+
+        let db = Database::open(&dir.join(DB_FILE), &key, &dir.join(BACKUPS_DIR)).unwrap();
+        db.connection()
+            .execute(
+                "UPDATE meta SET value = 'someone-else' WHERE key = 'vault_id'",
+                [],
+            )
+            .unwrap();
+        drop(db);
+        fs::write(dir.join(FORK_MARKER), b"not a header").unwrap();
+
+        let result = Vault::open_with_passphrase(&dir, PASSPHRASE);
+        assert!(matches!(result, Err(Error::VaultMismatch)));
+        // Failed opens never delete: the evidence is renamed aside.
+        assert!(!dir.join(FORK_MARKER).exists());
+        assert_eq!(
+            fs::read(dir.join(format!("{FORK_MARKER}.rejected"))).unwrap(),
+            b"not a header"
+        );
+        // And the plain mismatch without any marker still refuses.
+        let result = Vault::open_with_passphrase(&dir, PASSPHRASE);
+        assert!(matches!(result, Err(Error::VaultMismatch)));
+    }
+
+    #[test]
+    fn valid_marker_for_another_id_still_refuses() {
+        let (tmp, vault, _recovery) = new_vault_with_note();
+        let dir = tmp.path().join("v");
+        let key = vault.master.db_key();
+        let (other, _) = Vault::create(&tmp.path().join("other"), "other pass", fast()).unwrap();
+        let other_header = fs::read(tmp.path().join("other").join(HEADER_FILE)).unwrap();
+        other.lock();
+        vault.lock();
+
+        // The database names a third vault; the staged header belongs
+        // to the second. This is not a half fork — refuse, keep evidence.
+        let db = Database::open(&dir.join(DB_FILE), &key, &dir.join(BACKUPS_DIR)).unwrap();
+        db.connection()
+            .execute(
+                "UPDATE meta SET value = 'someone-else' WHERE key = 'vault_id'",
+                [],
+            )
+            .unwrap();
+        drop(db);
+        fs::write(dir.join(FORK_MARKER), &other_header).unwrap();
+
+        let result = Vault::open_with_passphrase(&dir, PASSPHRASE);
+        assert!(matches!(result, Err(Error::VaultMismatch)));
+        assert!(!dir.join(FORK_MARKER).exists());
+        assert_eq!(
+            fs::read(dir.join(format!("{FORK_MARKER}.rejected"))).unwrap(),
+            other_header
+        );
+    }
+
+    #[test]
+    fn litter_marker_removed_on_clean_open() {
+        let (tmp, vault, _recovery) = new_vault_with_note();
+        let dir = tmp.path().join("v");
+        vault.lock();
+
+        // No mismatch behind it: the marker is just litter.
+        fs::write(dir.join(FORK_MARKER), b"stale").unwrap();
+        let copy = Vault::open_with_passphrase(&dir, PASSPHRASE).unwrap();
+        assert!(!dir.join(FORK_MARKER).exists());
+        assert!(!dir.join(format!("{FORK_MARKER}.rejected")).exists());
+        copy.lock();
+    }
+
+    #[test]
+    fn fork_leaves_no_marker() {
+        let (tmp, mut vault, _recovery) = new_vault_with_note();
+        let dir = tmp.path().join("v");
+        let before = vault.header().vault_id.clone();
+        vault.fork_identity(PASSPHRASE).unwrap();
+        let after = vault.header().vault_id.clone();
+        assert_ne!(after, before);
+        assert!(!dir.join(FORK_MARKER).exists());
+        vault.lock();
+
+        let copy = Vault::open_with_passphrase(&dir, PASSPHRASE).unwrap();
+        assert_eq!(copy.header().vault_id, after);
+        copy.lock();
+    }
+
+    #[test]
+    fn copied_vault_keeps_attachments() {
+        let (tmp, mut vault, _recovery) = new_vault_with_note();
+        let entry = vault
+            .create_entry(&crate::entries::EntryDraft {
+                entry_date: "2026-10-15".into(),
+                title: Some("with file".into()),
+                body_md: "see attachment".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let att = vault
+            .add_attachment(&entry.id, "note.txt", "text/plain", b"attachment bytes")
+            .unwrap();
+        vault.checkpoint().unwrap();
+        vault.lock();
+
+        let dest = tmp.path().join("copy");
+        copy_vault_files(&tmp.path().join("v"), &dest).unwrap();
+
+        let copy = Vault::open_with_passphrase(&dest, PASSPHRASE).unwrap();
+        assert_eq!(copy.read_attachment(&att.id).unwrap(), b"attachment bytes");
+        assert!(copy.verify().unwrap().problems.is_empty());
+        copy.lock();
     }
 }
 

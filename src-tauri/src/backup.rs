@@ -1,11 +1,12 @@
 //! Scheduled and manual vault backups (§13 Phase 6).
 //!
-//! A backup is a plain copy of the open vault's two files — the
-//! database (after a WAL checkpoint, so the copy is whole) and
-//! the key-slot header — into the folder the user picked in
-//! Phase 3, under `<vault folder>-<id8>/<timestamp>/`. The copy
-//! stays encrypted: restoring means pointing the app at the
-//! copied folder and unlocking it as usual.
+//! A backup is a plain copy of the open vault — the database
+//! (after a WAL checkpoint, so the copy is whole), the key-slot
+//! header and the encrypted attachment blobs — into the folder
+//! the user picked in Phase 3, under
+//! `<vault folder>-<id8>/<timestamp>/`. The copy stays
+//! encrypted: restoring means pointing the app at the copied
+//! folder and unlocking it as usual.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -146,7 +147,7 @@ pub fn make_backup(state: &AppState) -> AppResult<String> {
     let per_vault = per_vault_dir(&root, &src, &id);
     state.with_vault_exclusive(|vault| {
         if vault.header().vault_id != id {
-            return Err(AppError::Code("locked".into()));
+            return Err(AppError::from(soirvu_core::Error::VaultMismatch));
         }
         // Checkpoint and copy form one operation: no write or key change can
         // slip between them and produce a mixed-time backup.
@@ -157,10 +158,8 @@ pub fn make_backup(state: &AppState) -> AppResult<String> {
         let tmp = per_vault.join(format!(".{stamp}.tmp"));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).map_err(|_| unavailable())?;
-        let copied = (|| -> std::io::Result<()> {
-            fs::copy(src.join("soirvu.db"), tmp.join("soirvu.db"))?;
-            fs::copy(src.join("vault.header.json"), tmp.join("vault.header.json"))?;
-            Ok(())
+        let copied = (|| -> AppResult<()> {
+            soirvu_core::folder::copy_vault_files(&src, &tmp).map_err(|_| unavailable())
         })();
         if copied.is_err() {
             let _ = fs::remove_dir_all(&tmp);

@@ -15,7 +15,7 @@
     let mainView = $state(MAIN_VIEW.WELCOME);
     let vaults = $state([]);
     let currentVault = $state(null);
-    let diaryElement = $state(null);
+    let importTick = $state(0);
 
     async function refresh() {
         vaults = await api.vaultList();
@@ -117,14 +117,14 @@
     <MainScreenContainer {vaults} initialView={mainView} onVaultsChanged={refresh} />
 {:else if screen === APPLICATION_SCREEN.DIARY || screen === APPLICATION_SCREEN.SETTINGS}
     <DiaryScreenContainer
-        bind:this={diaryElement}
         vault={currentVault}
+        importTick={importTick}
         onLock={lock}
         onSettings={() => (screen = APPLICATION_SCREEN.SETTINGS)} />
     {#if screen === APPLICATION_SCREEN.SETTINGS}
         <SettingsScreenContainer
             onBack={() => (screen = APPLICATION_SCREEN.DIARY)}
-            onImported={() => diaryElement?.refreshNavigation()} />
+            onImported={() => importTick++} />
     {/if}
 {/if}
 

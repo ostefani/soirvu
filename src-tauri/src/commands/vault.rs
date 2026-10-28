@@ -84,8 +84,9 @@ fn read_vault_id(path: &std::path::Path) -> Result<String, AppError> {
     Ok(header.vault_id)
 }
 
-/// Copies a vault's two files into an empty folder — the
-/// restore-as-import step. The source (a backup) is only read.
+/// Copies a vault — the database, the header and the encrypted
+/// attachment blobs — into an empty folder: the restore-as-import
+/// step. The source (a backup) is only read.
 fn import_copy(from: &std::path::Path, to: &std::path::Path) -> Result<(), AppError> {
     // A folder holding only .DS_Store counts as empty: Finder
     // writes that file into every folder it shows, so a folder
@@ -96,10 +97,7 @@ fn import_copy(from: &std::path::Path, to: &std::path::Path) -> Result<(), AppEr
             return Err(AppError::Code("destination_not_empty".into()));
         }
     }
-    for file in ["soirvu.db", "vault.header.json"] {
-        std::fs::copy(from.join(file), to.join(file))
-            .map_err(|_| AppError::Code("storage".into()))?;
-    }
+    soirvu_core::folder::copy_vault_files(from, to)?;
     Ok(())
 }
 
@@ -452,20 +450,7 @@ pub async fn vault_unlock(
     .await;
     secret.zeroize();
     match joined {
-        Ok(Ok(vault)) => {
-            if assignment.is_none() {
-                // A pre-step-3 entry: adopt the identity
-                // this vault already syncs under.
-                // Best effort — the vault is open either
-                // way, and a stored open yields the same
-                // id next time, so a failed write just
-                // retries then.
-                let _ = state.set_device_id(&vault_id, vault.device_id().to_string());
-            }
-            state.unlock_ok(vault);
-            super::emit_status(&app, &state);
-            Ok(())
-        }
+        Ok(Ok(vault)) => adopt_unlocked_vault(&app, &state, &vault_id, assignment, vault),
         Ok(Err(e)) => {
             state.unlock_failed();
             Err(AppError::from(e).to_ipc())
@@ -475,6 +460,32 @@ pub async fn vault_unlock(
             Err("internal".into())
         }
     }
+}
+
+/// Adopts an opened vault after the identity check: the device
+/// assignment is only stored for the vault that was actually
+/// adopted, never for a stranger the guard rejected.
+fn adopt_unlocked_vault(
+    app: &AppHandle,
+    state: &AppState,
+    vault_id: &str,
+    assignment: Option<String>,
+    vault: Vault,
+) -> Result<(), String> {
+    let opened_device = vault.device_id().to_string();
+    if let Err(error) = state.unlock_ok(vault) {
+        super::emit_status(app, state);
+        return Err(error.to_ipc());
+    }
+    if assignment.is_none() {
+        // A pre-step-3 entry: adopt the identity this vault already
+        // syncs under. Best effort — the vault is open either way,
+        // and a stored open yields the same id next time, so a
+        // failed write just retries then.
+        let _ = state.set_device_id(vault_id, opened_device);
+    }
+    super::emit_status(app, state);
+    Ok(())
 }
 
 /// Ask the UI to flush and wait for its verdict (§6.2). Never
@@ -614,8 +625,20 @@ mod tests {
         std::fs::create_dir_all(&to).unwrap();
         std::fs::write(from.join("soirvu.db"), b"db").unwrap();
         std::fs::write(from.join("vault.header.json"), b"{}").unwrap();
+        std::fs::create_dir_all(from.join("attachments").join("ab")).unwrap();
+        std::fs::write(from.join("attachments").join("ab").join("blob-id"), b"blob").unwrap();
+        std::fs::write(
+            from.join("attachments").join("ab").join(".blob-id.tmp"),
+            b"partial",
+        )
+        .unwrap();
         import_copy(&from, &to).unwrap();
         assert_eq!(std::fs::read(to.join("soirvu.db")).unwrap(), b"db");
+        assert_eq!(
+            std::fs::read(to.join("attachments").join("ab").join("blob-id")).unwrap(),
+            b"blob"
+        );
+        assert!(!to.join("attachments").join("ab").join(".blob-id.tmp").exists());
         // And a non-empty destination is refused, untouched.
         let err = import_copy(&from, &to).unwrap_err();
         assert_eq!(err.to_ipc(), "destination_not_empty");
@@ -746,15 +769,7 @@ pub async fn vault_unlock_touch_id(
     })
     .await;
     match joined {
-        Ok(Ok(vault)) => {
-            if assignment.is_none() {
-                // Adopt, as in vault_unlock.
-                let _ = state.set_device_id(&vault_id, vault.device_id().to_string());
-            }
-            state.unlock_ok(vault);
-            super::emit_status(&app, &state);
-            Ok(())
-        }
+        Ok(Ok(vault)) => adopt_unlocked_vault(&app, &state, &vault_id, assignment, vault),
         Ok(Err(TouchUnlockError::Keychain(crate::keychain::KeychainError::Cancelled))) => {
             state.unlock_aborted();
             Err("touch_id_cancelled".into())

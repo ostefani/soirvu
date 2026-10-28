@@ -13,7 +13,7 @@
 
 use std::fs;
 use std::ops::{Deref, DerefMut};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use crate::lock_handshake::LockHandshake;
@@ -555,6 +555,9 @@ impl AppState {
         path: PathBuf,
         device_id: Option<String>,
     ) -> AppResult<VaultRef> {
+        // Canonicalized once, outside the state mutex: resolving
+        // symlinks does I/O, and every registration needs it at most once.
+        let canonical = fs::canonicalize(&path).ok();
         let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
         if inner.current.as_deref() == Some(id.as_str())
@@ -570,7 +573,46 @@ impl AppState {
                 "lock the vault before changing its folder".into(),
             ));
         }
+        // One folder holds one vault: rows pointing here under a
+        // different id contradict the header just read from it, so
+        // they go. Dropping a row's device assignment is deliberate:
+        // that vault no longer lives here, so the assignment is stale
+        // too. The open vault's own row is never taken here.
+        // Symlinked prefixes (`/tmp` on macOS lives under `/private`)
+        // compare through one canonicalization; case-only variants on
+        // case-insensitive volumes still slip past.
+        let same = |other: &Path| {
+            *other == path
+                || canonical.as_deref().is_some_and(|canon| {
+                    fs::canonicalize(other)
+                        .map(|o| o == *canon)
+                        .unwrap_or(false)
+                })
+        };
+        if inner.current.as_deref().is_some_and(|current| {
+            inner.vault.is_some()
+                && inner.config.vaults.iter().any(|v| {
+                    v.id == current && same(&v.path) && current != id.as_str()
+                })
+        }) {
+            return Err(AppError::Other(
+                "lock the open vault before registering its folder again".into(),
+            ));
+        }
         let previous = inner.config.clone();
+        inner.config.vaults.retain(|v| v.id == id || !same(&v.path));
+        // A dropped row is never the open vault's (guarded above), so
+        // a missing current means the pointer went stale with it: clear
+        // it rather than leave it dangling. In the pathological case of
+        // a registration racing an in-flight unlock, the pending attempt
+        // then fails loud instead of adopting an unlisted vault.
+        if inner.vault.is_none()
+            && inner.current.as_deref().is_some_and(|current| {
+                !inner.config.vaults.iter().any(|v| v.id == current)
+            })
+        {
+            inner.current = None;
+        }
         if let Some(existing) = inner.config.vaults.iter_mut().find(|v| v.id == id) {
             existing.path = path;
             existing.name = name;
@@ -668,8 +710,26 @@ impl AppState {
         Ok(())
     }
 
-    pub fn unlock_ok(&self, vault: Vault) {
+    /// Adopts an opened vault. The header must name the vault that was
+    /// asked for: a folder whose contents changed since registration
+    /// adopts nothing and reports `vault_mismatch` instead of a
+    /// misleading `locked`. This is not a wrong guess, so the failure
+    /// backoff is left alone.
+    /// Compared against `current` on purpose: an overlapping unlock
+    /// attempt changes `current` first, so checking the live selection
+    /// fails safe (refusal) instead of adopting the wrong vault.
+    /// `Locked` is set unconditionally on refusal — the state is
+    /// `Unlocking` at this point, and leaving it there would wedge
+    /// every later guard until the next attempt.
+    pub fn unlock_ok(&self, vault: Vault) -> AppResult<()> {
+        let opened_id = vault.header().vault_id.clone();
         let mut inner = self.inner.lock().unwrap();
+        if inner.current.as_deref() != Some(opened_id.as_str()) {
+            inner.status = Status::Locked;
+            drop(inner);
+            vault.lock();
+            return Err(AppError::from(soirvu_core::Error::VaultMismatch));
+        }
         inner.vault = Some(vault);
         inner.status = Status::Unlocked;
         inner.last_activity = Instant::now();
@@ -679,6 +739,7 @@ impl AppState {
             inner.config.last_opened = Some(id.clone());
         }
         let _ = self.save_config(&inner);
+        Ok(())
     }
 
     /// A vault created in this session starts Unlocked: its keys
@@ -1090,6 +1151,84 @@ mod tests {
             Err(AppError::Code(code)) => assert_eq!(code, "locked"),
             _ => panic!("locked state must refuse with the locked code"),
         }
+    }
+
+    #[test]
+    fn unlock_adopts_only_the_requested_vault() {
+        let (dir, state, id) = state_with_vault();
+        let path = dir.path().join("vault");
+        let _ = state.lock();
+        // The folder now holds a different vault than the entry asks for.
+        let (other, _) =
+            Vault::create(&dir.path().join("other"), "other pass", fast_legal_kdf()).unwrap();
+        let other_id = other.header().vault_id.clone();
+        other.checkpoint().unwrap();
+        other.lock();
+        std::fs::copy(
+            dir.path().join("other").join("soirvu.db"),
+            path.join("soirvu.db"),
+        )
+        .unwrap();
+        std::fs::copy(
+            dir.path().join("other").join("vault.header.json"),
+            path.join("vault.header.json"),
+        )
+        .unwrap();
+        let swapped = Vault::open_with_passphrase(&path, "other pass").unwrap();
+        assert_eq!(swapped.header().vault_id, other_id);
+        match state.unlock_ok(swapped) {
+            Err(AppError::Code(code)) => assert_eq!(code, "vault_mismatch"),
+            _ => panic!("a swapped folder must refuse with vault_mismatch"),
+        }
+        // Nothing adopted, nothing rewritten: still locked, same entry.
+        assert_eq!(state.status(), Status::Locked);
+        assert!(state.vault_path(&id).is_ok());
+    }
+
+    #[test]
+    fn register_replaces_same_path_rows() {
+        let (dir, state, id) = state_with_vault();
+        let path = dir.path().join("vault");
+        let _ = state.lock();
+        let other = format!("{}-other", &id[..32]);
+        state
+            .register(other.clone(), "Copy".into(), path.clone())
+            .unwrap();
+        let vaults = state.vault_list();
+        assert_eq!(vaults.len(), 1);
+        assert_eq!(vaults[0].id, other);
+        assert_eq!(state.vault_path(&other).unwrap(), path);
+        // The dropped row was the locked current one: no dangling pointer.
+        assert_eq!(state.current_id(), None);
+    }
+
+    #[test]
+    fn register_onto_the_open_vaults_folder_is_refused() {
+        let (dir, state, id) = state_with_vault();
+        let path = dir.path().join("vault");
+        let other = format!("{}-other", &id[..32]);
+        match state.register(other, "Copy".into(), path) {
+            Err(AppError::Other(_)) => {}
+            _ => panic!("registering onto the open vault's folder must be refused"),
+        }
+        // Nothing changed: the open vault's row is intact.
+        assert_eq!(state.vault_list().len(), 1);
+        assert_eq!(state.vault_path(&id).unwrap(), dir.path().join("vault"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn register_dedupes_through_symlinks() {
+        let (dir, state, id) = state_with_vault();
+        let path = dir.path().join("vault");
+        let _ = state.lock();
+        let link = dir.path().join("linked-vault");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        let other = format!("{}-other", &id[..32]);
+        state.register(other.clone(), "Copy".into(), link).unwrap();
+        let vaults = state.vault_list();
+        assert_eq!(vaults.len(), 1);
+        assert_eq!(vaults[0].id, other);
     }
 
     #[test]

@@ -10,6 +10,7 @@
         results = null, // null = not searching
         searchNote = '',
         onClearSearch,
+        version = 0,
     } = $props();
 
     let entries = $state([]);
@@ -54,11 +55,12 @@
         tags = await api.tagList();
     }
 
-    export async function refresh() {
+    async function refresh() {
         await Promise.all([load(true), loadTags()]);
     }
 
     $effect(() => {
+        void version;
         refresh();
     });
 
