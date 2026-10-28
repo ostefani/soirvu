@@ -31,11 +31,26 @@ jobs:
             verify: python scripts/verify-release-windows.py src-tauri/target/release/soirvu.exe
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
       - uses: dtolnay/rust-toolchain@stable
+      # SQLCipher/OpenSSL are built from source (rusqlite's
+      # bundled-sqlcipher-vendored-openssl): the VC-WIN64A build needs
+      # a full perl plus nasm. The image ships both, but Git's own
+      # crippled perl shadows them. Prefer the working tools, then
+      # prove it: a silent PATH miss fails here in seconds, not in
+      # the OpenSSL build minutes later.
+      - name: OpenSSL build tools (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
+          if (-not ((Get-Command nasm -ErrorAction SilentlyContinue) -or (Test-Path 'C:\Program Files\NASM\nasm.exe'))) { choco install nasm -y --no-progress }
+          "C:\Strawberry\perl\bin" | Add-Content -Path $env:GITHUB_PATH
+          "C:\Program Files\NASM" | Add-Content -Path $env:GITHUB_PATH
+          & "C:\Strawberry\perl\bin\perl.exe" -MLocale::Maketext::Simple -e "print 'perl-ok'"
+          if (-not (Test-Path "C:\Program Files\NASM\nasm.exe")) { throw "nasm missing; the OpenSSL build would fail" }
       - name: WebKitGTK build dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -69,7 +84,7 @@ jobs:
           if (-not (Test-Path "$env:LOCALAPPDATA\soirvu\soirvu.exe")) { throw "install did not place the app" }
           Start-Process "$env:LOCALAPPDATA\soirvu\uninstall.exe" -ArgumentList "/S" -Wait
           if (-not (Test-Path "$env:TEMP\fakevault\keep.txt")) { throw "uninstall touched a vault folder" }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: installers-${{ runner.os }}
           path: |
@@ -82,8 +97,8 @@ jobs:
     needs: build
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
         with:
           pattern: installers-*
           merge-multiple: true
@@ -99,6 +114,6 @@ jobs:
           printf '%s' "$MINISIGN_SECRET_KEY" > /tmp/minisign.key
           minisign -S -s /tmp/minisign.key -x SHA256SUMS.minisig -m SHA256SUMS <<< "$MINISIGN_PASSWORD"
           rm /tmp/minisign.key
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*

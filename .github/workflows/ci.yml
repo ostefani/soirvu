@@ -8,7 +8,7 @@ jobs:
   lint:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Platform cfg stays in the platform files (§12)
         run: sh scripts/check-platform-cfg.sh
 
@@ -19,7 +19,7 @@ jobs:
         os: [ubuntu-26.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -32,7 +32,10 @@ jobs:
         run: |
           if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
           if (-not (Get-Command nasm -ErrorAction SilentlyContinue)) { choco install nasm -y --no-progress }
-          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "C:\Strawberry\perl\bin" | Add-Content -Path $env:GITHUB_PATH
+          "C:\Program Files\NASM" | Add-Content -Path $env:GITHUB_PATH
+          & "C:\Strawberry\perl\bin\perl.exe" -MLocale::Maketext::Simple -e "print 'perl-ok'"
+          if (-not (Test-Path "C:\Program Files\NASM\nasm.exe")) { throw "nasm missing; the OpenSSL build would fail" }
       - name: Core and CLI tests
         run: cargo test -p soirvu-core -p soirvu-cli
       - name: Clippy (core and CLI)
@@ -45,14 +48,17 @@ jobs:
         os: [ubuntu-26.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: OpenSSL build tools (Windows)
         if: runner.os == 'Windows'
         run: |
           if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
           if (-not (Get-Command nasm -ErrorAction SilentlyContinue)) { choco install nasm -y --no-progress }
-          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "C:\Strawberry\perl\bin" | Add-Content -Path $env:GITHUB_PATH
+          "C:\Program Files\NASM" | Add-Content -Path $env:GITHUB_PATH
+          & "C:\Strawberry\perl\bin\perl.exe" -MLocale::Maketext::Simple -e "print 'perl-ok'"
+          if (-not (Test-Path "C:\Program Files\NASM\nasm.exe")) { throw "nasm missing; the OpenSSL build would fail" }
       - name: WebKitGTK system libraries (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -71,20 +77,23 @@ jobs:
         os: [ubuntu-26.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: OpenSSL build tools (Windows)
         if: runner.os == 'Windows'
         run: |
           if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
           if (-not (Get-Command nasm -ErrorAction SilentlyContinue)) { choco install nasm -y --no-progress }
-          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "C:\Strawberry\perl\bin" | Add-Content -Path $env:GITHUB_PATH
+          "C:\Program Files\NASM" | Add-Content -Path $env:GITHUB_PATH
+          & "C:\Strawberry\perl\bin\perl.exe" -MLocale::Maketext::Simple -e "print 'perl-ok'"
+          if (-not (Test-Path "C:\Program Files\NASM\nasm.exe")) { throw "nasm missing; the OpenSSL build would fail" }
       - name: Create a fixture vault on this OS
         shell: bash
         env:
           SOIRVU_MAKE_FIXTURE: ${{ runner.temp }}/fixture
         run: cargo test -p soirvu-core --test cross_os -- --exact cross_os_fixture
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: fixture-${{ matrix.os }}
           path: ${{ runner.temp }}/fixture
@@ -98,9 +107,9 @@ jobs:
         os: [ubuntu-26.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: fixture-*
           path: ${{ runner.temp }}/incoming
@@ -109,7 +118,10 @@ jobs:
         run: |
           if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
           if (-not (Get-Command nasm -ErrorAction SilentlyContinue)) { choco install nasm -y --no-progress }
-          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "C:\Strawberry\perl\bin" | Add-Content -Path $env:GITHUB_PATH
+          "C:\Program Files\NASM" | Add-Content -Path $env:GITHUB_PATH
+          & "C:\Strawberry\perl\bin\perl.exe" -MLocale::Maketext::Simple -e "print 'perl-ok'"
+          if (-not (Test-Path "C:\Program Files\NASM\nasm.exe")) { throw "nasm missing; the OpenSSL build would fail" }
       - name: Open every OS's fixture vault here
         shell: bash
         run: |
@@ -121,8 +133,8 @@ jobs:
   frontend:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
       - name: Install exactly as the lockfile says, no scripts
@@ -143,7 +155,7 @@ jobs:
   deny:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # The Embark action bundles its own cargo-deny with no version
       # pin, so a schema change in deny.toml breaks it silently.
       # Install the pinned version instead; bump deliberately.
@@ -160,8 +172,8 @@ jobs:
   macos-release:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
       - uses: dtolnay/rust-toolchain@stable
