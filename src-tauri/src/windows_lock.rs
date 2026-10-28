@@ -144,7 +144,7 @@ impl LockEvents for WindowsLockEvents {
         let thread_id = Arc::clone(&self.thread_id);
         self.thread = Some(std::thread::spawn(move || unsafe {
             thread_id.store(GetCurrentThreadId(), Ordering::SeqCst);
-            let class_name = wide("SoirvuLockWindow");
+            let class_name = wide("SoirVuLockWindow");
             let instance = GetModuleHandleW(std::ptr::null());
             let class = WndClassW {
                 style: 0,

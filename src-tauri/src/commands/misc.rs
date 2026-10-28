@@ -22,7 +22,7 @@ pub async fn open_link(app: AppHandle, url: String) -> Result<bool, String> {
     let (tx, rx) = oneshot::channel();
     app.dialog()
         .message(format!("Open this link in your browser?\n\n{url}"))
-        .title("Soirvu")
+        .title("SoirVu")
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Open".into(),
@@ -123,7 +123,7 @@ async fn confirm_export(app: &AppHandle) -> bool {
              Keep the export somewhere private, and delete it when you no longer need it."
                 .to_string(),
         )
-        .title("Soirvu")
+        .title("SoirVu")
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Export plaintext".into(),
@@ -256,7 +256,7 @@ pub async fn import_markdown(app: AppHandle) -> Result<Option<ImportOutcome>, St
     Ok(Some(report.into()))
 }
 
-/// §8: import a Soirvu JSON export into the open diary.
+/// §8: import a SoirVu JSON export into the open diary.
 /// Entries and attachments keep their ids; ids already taken
 /// are skipped, never overwritten.
 #[tauri::command]

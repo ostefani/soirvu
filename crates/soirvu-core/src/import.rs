@@ -1,6 +1,6 @@
 //! Import (DESIGN §8): bring entries INTO a vault from plain
 //! files — a Markdown folder (our own export, or another app's
-//! notes; front matter optional) or a Soirvu JSON export.
+//! notes; front matter optional) or a SoirVu JSON export.
 //!
 //! Import only ever ADDS. An id that is already taken — by a
 //! live entry or a tombstone — is never overwritten: JSON
@@ -170,16 +170,16 @@ impl Vault {
         Ok((1, imported, skipped_attachments))
     }
 
-    /// Imports a Soirvu JSON export (see `export_json`).
+    /// Imports a SoirVu JSON export (see `export_json`).
     /// Entries and attachments keep their ids; anything whose
     /// id is already taken is skipped, never overwritten.
     pub fn import_json(&mut self, file: &Path) -> Result<ImportReport> {
         let text = fs::read_to_string(file)?;
         let data: JsonImport = serde_json::from_str(&text)
-            .map_err(|e| Error::InvalidInput(format!("not a Soirvu JSON export: {e}")))?;
+            .map_err(|e| Error::InvalidInput(format!("not a SoirVu JSON export: {e}")))?;
         if data.format != "soirvu-json-export" || data.version != 1 {
             return Err(Error::InvalidInput(
-                "not a Soirvu JSON export (bad format or version)".into(),
+                "not a SoirVu JSON export (bad format or version)".into(),
             ));
         }
         let mut report = ImportReport {

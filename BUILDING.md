@@ -1,6 +1,6 @@
-# Building Soirvu
+# Building SoirVu
 
-Soirvu's release installers are **unsigned**. macOS shows the
+SoirVu's release installers are **unsigned**. macOS shows the
 usual unidentified-developer prompt, Windows shows a
 SmartScreen warning, Ubuntu shows nothing special. That is a
 deliberate trade: the trust anchor is not a certificate, it
@@ -94,7 +94,7 @@ upgrade or uninstall.
 
 `npm run tauri dev` runs the app with hot reload. Dev
 builds keep their registry, settings and keychain items
-separate from release builds ("Soirvu Dev" app data,
+separate from release builds ("SoirVu Dev" app data,
 `soirvu.device.dev` keychain service), so developing never
 touches real diaries' bookkeeping.
 

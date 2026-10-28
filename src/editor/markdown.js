@@ -1,4 +1,4 @@
-// Markdown <-> document for the Soirvu editor (DESIGN §6.5).
+// Markdown <-> document for the SoirVu editor (DESIGN §6.5).
 //
 // Parsing: markdown-it (HTML off) tokenizes the whole note. Before
 // tokenizing, unsupported TOP-LEVEL blocks (tables, raw HTML blocks,
@@ -175,7 +175,7 @@ function extractRawBlocks(source) {
     }
     if (rawAt.size === 0) return source;
     const out = [];
-    for (let line = 0; line < lines.length; ) {
+    for (let line = 0; line < lines.length;) {
         const raw = rawAt.get(line);
         if (raw) {
             // The fence must be longer than any backtick run inside.
@@ -314,10 +314,10 @@ parser.tokenHandlers.td_close = (state) => closeCell(state);
 
 // Wrapper tokens with no node of their own: rows and cells
 // open directly under the table.
-parser.tokenHandlers.thead_open = () => {};
-parser.tokenHandlers.thead_close = () => {};
-parser.tokenHandlers.tbody_open = () => {};
-parser.tokenHandlers.tbody_close = () => {};
+parser.tokenHandlers.thead_open = () => { };
+parser.tokenHandlers.thead_close = () => { };
+parser.tokenHandlers.tbody_open = () => { };
+parser.tokenHandlers.tbody_close = () => { };
 
 // markdown-it marks a cell's alignment as a style attribute.
 function cellAlign(tok) {
@@ -344,7 +344,7 @@ for (const type of [
     "footnote_close",
     "footnote_anchor",
 ]) {
-    parser.tokenHandlers[type] = () => {};
+    parser.tokenHandlers[type] = () => { };
 }
 parser.tokenHandlers.footnote_ref = (state, tok) => {
     state.addText(`[^${tok.meta.label}]`);
@@ -401,8 +401,8 @@ const serializer = new MarkdownSerializer(
             });
             state.closeBlock(node);
         },
-        table_row() {},
-        table_cell() {},
+        table_row() { },
+        table_cell() { },
         raw_block(state, node) {
             state.write(node.textContent);
             state.closeBlock(node);

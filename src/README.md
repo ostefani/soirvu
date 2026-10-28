@@ -1,6 +1,6 @@
-# Soirvu frontend (`src/`)
+# SoirVu frontend (`src/`)
 
-Svelte 5 + plain JavaScript frontend for Soirvu, a local encrypted diary
+Svelte 5 + plain JavaScript frontend for SoirVu, a local encrypted diary
 (Tauri v2). It runs in the webview and does no cryptography itself: every
 vault operation goes through the Rust backend, reached only via `api.js`.
 

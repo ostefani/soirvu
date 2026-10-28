@@ -304,7 +304,7 @@ mod imp {
         // The deprecated-but-functional prompt key: a plain
         // string, no LAContext object to build over FFI. The
         // system still shows its own Touch ID sheet.
-        let prompt = cf_string("Unlock Soirvu");
+        let prompt = cf_string("Unlock SoirVu");
         unsafe {
             let query = dictionary(&[
                 (kSecClass, kSecClassGenericPassword),

@@ -1,6 +1,6 @@
-__APPDATA__/Soirvu
-__APPDATA__/Soirvu Dev
+__APPDATA__/SoirVu
+__APPDATA__/SoirVu Dev
 __LOCALAPPDATA__/__BUNDLE_ID__
-__LOCALAPPDATA__/Soirvu
+__LOCALAPPDATA__/SoirVu
 __LOCALAPPDATA__/CrashDumps
 __APPDATA__/Microsoft/Windows/Recent

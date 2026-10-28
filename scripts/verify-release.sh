@@ -1,12 +1,12 @@
 #!/bin/sh
-# §9 release checks for a built Soirvu.app (macOS, local build):
+# §9 release checks for a built SoirVu.app (macOS, local build):
 # - the hardened runtime flag survived ad-hoc signing
 # - no get-task-allow (debugger) entitlement
 # - no library-validation exemption
 # - no dyld environment entitlements
 # - the signature is ad-hoc (identity "-"), as designed
 set -eu
-APP="${1:?usage: verify-release.sh /path/to/Soirvu.app}"
+APP="${1:?usage: verify-release.sh /path/to/SoirVu.app}"
 INFO="$(codesign -dv --verbose=4 "$APP" 2>&1)"
 echo "$INFO" | grep -q "flags=.*runtime" || {
     echo "FAIL: hardened runtime flag missing"

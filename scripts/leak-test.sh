@@ -81,7 +81,7 @@ app_running() {
     if [ "$OS" = windows ]; then
         tasklist 2>/dev/null | grep -qi "soirvu.exe"
     else
-        pgrep -x "soirvu" >/dev/null 2>&1 || pgrep -x "Soirvu" >/dev/null 2>&1
+        pgrep -x "soirvu" >/dev/null 2>&1 || pgrep -x "SoirVu" >/dev/null 2>&1
     fi
 }
 while app_running; do

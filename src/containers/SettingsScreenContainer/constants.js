@@ -36,14 +36,14 @@ export const settingsText = {
     exportIntro:
         'Export writes the diary as plain, unencrypted files. You will be asked to confirm, to type your passphrase again, and to pick an empty folder.',
     exportNotes: [
-        'Markdown is for reading and moving to other apps. JSON keeps everything — ids, deleted entries — and is made for importing back into Soirvu.',
+        'Markdown is for reading and moving to other apps. JSON keeps everything — ids, deleted entries — and is made for importing back into SoirVu.',
     ],
     importTitle: 'Import',
     importIntro:
-        'Import adds entries to this diary — nothing is overwritten or merged. A Markdown folder can be a Soirvu export or notes from another app. A JSON file must be a Soirvu export; entries whose id already exists are skipped.',
+        'Import adds entries to this diary — nothing is overwritten or merged. A Markdown folder can be a SoirVu export or notes from another app. A JSON file must be a SoirVu export; entries whose id already exists are skipped.',
     syncTitle: 'Sync',
     syncIntro:
-        "Sync writes this diary's changes as encrypted bundles into a folder. Another tool — Syncthing, a cloud folder, a USB stick — carries the folder between your devices; Soirvu itself never uses the network.",
+        "Sync writes this diary's changes as encrypted bundles into a folder. Another tool — Syncthing, a cloud folder, a USB stick — carries the folder between your devices; SoirVu itself never uses the network.",
     syncFolder: 'Sync folder:',
     ackAhead:
         'An ack in this folder has claimed more than this vault holds — a copy may share its identity, or this vault was restored. Entries a peer pruned on the strength of it return when that peer re-emits everything. If THIS diary is the copy, restamp it below; if it is the original, the copy is the one to restamp. Once the missing entries are back, dismiss this note.',

@@ -3,6 +3,27 @@
 version = 4
 
 [[package]]
+name = "SoirVu"
+version = "0.1.0"
+dependencies = [
+ "block2",
+ "insta",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "serde",
+ "serde_json",
+ "soirvu-core",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tempfile",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3380,27 +3401,6 @@ dependencies = [
  "wasm-bindgen",
  "web-sys",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "soirvu"
-version = "0.1.0"
-dependencies = [
- "block2",
- "insta",
- "libc",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "serde",
- "serde_json",
- "soirvu-core",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tempfile",
- "tokio",
- "zeroize",
 ]
 
 [[package]]

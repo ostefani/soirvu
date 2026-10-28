@@ -1,5 +1,5 @@
-//! Soirvu's Tauri shell: a thin bridge between the webview and
-//! soirvu-core. All diary logic lives in the core; this crate owns
+//! SoirVu's Tauri shell: a thin bridge between the webview and
+//! soirVu-core. All diary logic lives in the core; this crate owns
 //! the lock state machine, the command surface (§6.1) and the
 //! security configuration (§6.3).
 
@@ -32,9 +32,9 @@ use lock_handshake::{LOCK_ACK_WAIT, LOCK_ACK_WAIT_OS};
 /// app's data by accident; release builds — including the
 /// signed Touch ID variant — use the plain name.
 const CONFIG_DIR_NAME: &str = if cfg!(debug_assertions) {
-    "Soirvu Dev"
+    "SoirVu Dev"
 } else {
-    "Soirvu"
+    "SoirVu"
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -106,7 +106,7 @@ pub fn run() {
                 "main",
                 tauri::WebviewUrl::App("index.html".into()),
             )
-            .title("Soirvu")
+            .title("SoirVu")
             .inner_size(1100.0, 760.0)
             .min_inner_size(720.0, 480.0)
             .on_navigation(|url| {
@@ -280,5 +280,5 @@ pub fn run() {
             commands::attachments::attachment_open,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Soirvu");
+        .expect("error while running SoirVu");
 }

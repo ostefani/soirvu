@@ -132,6 +132,6 @@ jobs:
       - name: Build the app (ad-hoc signed, hardened runtime)
         run: npm run tauri build
       - name: Verify the signature (§9)
-        run: sh scripts/verify-release.sh src-tauri/target/release/bundle/macos/Soirvu.app
+        run: sh scripts/verify-release.sh src-tauri/target/release/bundle/macos/SoirVu.app
       - name: Plaintext-leak test (§10)
         run: sh scripts/leak-test.sh

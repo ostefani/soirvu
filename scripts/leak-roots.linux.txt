@@ -1,5 +1,5 @@
-__HOME__/.config/Soirvu
-__HOME__/.config/Soirvu Dev
+__HOME__/.config/SoirVu
+__HOME__/.config/SoirVu Dev
 __HOME__/.local/share/__BUNDLE_ID__
 __HOME__/.local/share/soirvu
 __HOME__/.cache/__BUNDLE_ID__

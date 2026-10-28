@@ -112,7 +112,7 @@ async fn confirm_import(app: &AppHandle, name: &str) -> bool {
         .message(format!(
             "This is a backup of \"{name}\"\n\nTo restore it, choose an empty folder where the diary will live. The backup itself stays untouched."
         ))
-        .title("Soirvu")
+        .title("SoirVu")
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Choose folder\u{2026}".into(),
@@ -157,9 +157,9 @@ async fn confirm_open_copy(app: &AppHandle, name: &str) -> bool {
     let (tx, rx) = oneshot::channel();
     app.dialog()
         .message(format!(
-            "This folder is a copy of \"{name}\"\n\nOpen the copy? Soirvu will use this folder for \"{name}\" from now on and assign it a new sync identity. The other folder is left untouched."
+            "This folder is a copy of \"{name}\"\n\nOpen the copy? SoirVu will use this folder for \"{name}\" from now on and assign it a new sync identity. The other folder is left untouched."
         ))
-        .title("Soirvu")
+        .title("SoirVu")
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Open the copy".into(),
@@ -934,8 +934,8 @@ fn rotation_paths(
 async fn confirm_rotate(app: &AppHandle) -> bool {
     let (tx, rx) = oneshot::channel();
     app.dialog()
-        .message(format!("Change the master key?\n\nSoirvu builds a fresh copy of this diary under a new master key, checks it, and replaces the old one. Your passphrase stays the same and you will get a NEW recovery key.\n\nBackups made earlier keep the old master key — delete them if the old key may have leaked."))
-        .title("Soirvu")
+        .message(format!("Change the master key?\n\nSoirVu builds a fresh copy of this diary under a new master key, checks it, and replaces the old one. Your passphrase stays the same and you will get a NEW recovery key.\n\nBackups made earlier keep the old master key — delete them if the old key may have leaked."))
+        .title("SoirVu")
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Change master key".into(),

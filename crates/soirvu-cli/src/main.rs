@@ -60,7 +60,7 @@ fn failed(error: Error) -> RunError {
 }
 
 const USAGE: &str = "\
-soirvu-cli — create, check and export a Soirvu vault without the app
+soirvu-cli — create, check and export a SoirVu vault without the app
 
   soirvu-cli create <vault-dir>
   soirvu-cli header-info <vault-dir>

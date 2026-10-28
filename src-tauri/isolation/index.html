@@ -1,146 +1,149 @@
 <!doctype html>
 <html lang="en">
-    <head>
-        <meta charset="utf-8" />
-        <title>Soirvu isolation</title>
-    </head>
-    <body>
-        <script>
-            // The isolation hook (DESIGN v6, §6.3). Tauri routes
-            // every IPC message from the app webview through this
-            // frame before it reaches Rust; this function is the
-            // only code that runs here. It validates the envelope
-            // and the command name, and passes valid messages on
-            // unchanged — argument checking stays in Rust (serde
-            // and the core), this frame stops anything that is not
-            // a known command in a sane envelope.
-            //
-            // Throwing rejects the message: it never reaches Rust.
-            // (The app-side invoke then never settles, which is
-            // acceptable — such a message means the frontend is
-            // broken or compromised, not a state to serve.)
-            //
-            // The two plugin:event commands are not ours: the
-            // Tauri API package uses them internally for listen()
-            // and unlisten(). They are scoped to the one event the
-            // UI may subscribe to, so the page cannot listen in on
-            // anything else Rust emits, now or later.
-            const ALLOWED = new Set([
-                "vault_list",
-                "vault_pick_folder",
-                "vault_create",
-                "vault_unlock",
-                "vault_unlock_touch_id",
-                "touch_id_status",
-                "touch_id_enroll",
-                "touch_id_disable",
-                "vault_lock",
-                "vault_lock_ready",
-                "lock_notice_take",
-                "vault_activity",
-                "vault_forget",
-                "vault_relocate",
-        "vault_fork_import",
-        "vault_change_passphrase",
-        "vault_regenerate_recovery",
-        "vault_rotate_master_key",
-        "export_markdown",
-        "export_json",
-        "import_markdown",
-        "import_json",
-                "entry_list",
-        "calendar_days",
-        "on_this_day",
-                "entry_get",
-                "entry_save",
-                "entry_delete",
-                "search",
-                "tag_list",
-                "tag_rename",
-                "tag_merge",
-                "tag_delete",
-                "open_link",
-        "clipboard_note_copy",
-        "backup_now",
-                "settings_get",
-                "settings_set",
-                "settings_pick_backup_dir",
-                "settings_clear_backup_dir",
-                "sync_overview",
-                "sync_pick_folder",
-                "sync_clear_folder",
-                "sync_emit",
-                "sync_apply",
-                "sync_prune",
-                "sync_reemit",
-                "sync_dismiss_ack_ahead",
-                "restamp_device",
-        "attachment_begin",
-        "attachment_chunk",
-        "attachment_finish",
-        "attachment_abort",
-        "attachment_info",
-        "attachment_import",
-        "attachment_open",
-            ]);
-            const EVENT_COMMANDS = new Set([
-                "plugin:event|listen",
-                "plugin:event|unlisten",
-            ]);
-            const KNOWN_EVENTS = new Set(["vault-status", "rotation-started", "lock-requested"]);
 
-            // Invoke arguments are always a plain object (a string
-            // map), never an array or a primitive. No prototype
-            // check: the object was created in the app frame's
-            // realm, so its prototype is not this frame's Object.
-            function isPlainObject(x) {
-                return typeof x === "object" && x !== null && !Array.isArray(x);
+<head>
+    <meta charset="utf-8" />
+    <title>SoirVu isolation</title>
+</head>
+
+<body>
+    <script>
+        // The isolation hook (DESIGN v6, §6.3). Tauri routes
+        // every IPC message from the app webview through this
+        // frame before it reaches Rust; this function is the
+        // only code that runs here. It validates the envelope
+        // and the command name, and passes valid messages on
+        // unchanged — argument checking stays in Rust (serde
+        // and the core), this frame stops anything that is not
+        // a known command in a sane envelope.
+        //
+        // Throwing rejects the message: it never reaches Rust.
+        // (The app-side invoke then never settles, which is
+        // acceptable — such a message means the frontend is
+        // broken or compromised, not a state to serve.)
+        //
+        // The two plugin:event commands are not ours: the
+        // Tauri API package uses them internally for listen()
+        // and unlisten(). They are scoped to the one event the
+        // UI may subscribe to, so the page cannot listen in on
+        // anything else Rust emits, now or later.
+        const ALLOWED = new Set([
+            "vault_list",
+            "vault_pick_folder",
+            "vault_create",
+            "vault_unlock",
+            "vault_unlock_touch_id",
+            "touch_id_status",
+            "touch_id_enroll",
+            "touch_id_disable",
+            "vault_lock",
+            "vault_lock_ready",
+            "lock_notice_take",
+            "vault_activity",
+            "vault_forget",
+            "vault_relocate",
+            "vault_fork_import",
+            "vault_change_passphrase",
+            "vault_regenerate_recovery",
+            "vault_rotate_master_key",
+            "export_markdown",
+            "export_json",
+            "import_markdown",
+            "import_json",
+            "entry_list",
+            "calendar_days",
+            "on_this_day",
+            "entry_get",
+            "entry_save",
+            "entry_delete",
+            "search",
+            "tag_list",
+            "tag_rename",
+            "tag_merge",
+            "tag_delete",
+            "open_link",
+            "clipboard_note_copy",
+            "backup_now",
+            "settings_get",
+            "settings_set",
+            "settings_pick_backup_dir",
+            "settings_clear_backup_dir",
+            "sync_overview",
+            "sync_pick_folder",
+            "sync_clear_folder",
+            "sync_emit",
+            "sync_apply",
+            "sync_prune",
+            "sync_reemit",
+            "sync_dismiss_ack_ahead",
+            "restamp_device",
+            "attachment_begin",
+            "attachment_chunk",
+            "attachment_finish",
+            "attachment_abort",
+            "attachment_info",
+            "attachment_import",
+            "attachment_open",
+        ]);
+        const EVENT_COMMANDS = new Set([
+            "plugin:event|listen",
+            "plugin:event|unlisten",
+        ]);
+        const KNOWN_EVENTS = new Set(["vault-status", "rotation-started", "lock-requested"]);
+
+        // Invoke arguments are always a plain object (a string
+        // map), never an array or a primitive. No prototype
+        // check: the object was created in the app frame's
+        // realm, so its prototype is not this frame's Object.
+        function isPlainObject(x) {
+            return typeof x === "object" && x !== null && !Array.isArray(x);
+        }
+
+        // Callback and error ids are Tauri-generated counters:
+        // safe non-negative integers, never NaN or fractions.
+        function isId(x) {
+            return Number.isSafeInteger(x) && x >= 0;
+        }
+
+        function reject(reason, cmd) {
+            // Make rejections visible without ever logging
+            // arguments (vault_unlock carries the passphrase).
+            // Only a well-shaped command name is printed; any
+            // other string is page-controlled text and is
+            // reported as <invalid>, not echoed.
+            const name =
+                typeof cmd === "string" && /^[a-z0-9_|:-]{1,64}$/.test(cmd)
+                    ? cmd
+                    : "<invalid>";
+            console.error(`isolation: rejected ${reason} (cmd: ${name})`);
+            throw new Error(`isolation: ${reason}`);
+        }
+
+        window.__TAURI_ISOLATION_HOOK__ = (payload) => {
+            if (!isPlainObject(payload)) {
+                reject("payload is not an object", null);
             }
-
-            // Callback and error ids are Tauri-generated counters:
-            // safe non-negative integers, never NaN or fractions.
-            function isId(x) {
-                return Number.isSafeInteger(x) && x >= 0;
+            const cmd = payload.cmd;
+            if (typeof cmd !== "string") {
+                reject("command is not a string", cmd);
             }
-
-            function reject(reason, cmd) {
-                // Make rejections visible without ever logging
-                // arguments (vault_unlock carries the passphrase).
-                // Only a well-shaped command name is printed; any
-                // other string is page-controlled text and is
-                // reported as <invalid>, not echoed.
-                const name =
-                    typeof cmd === "string" && /^[a-z0-9_|:-]{1,64}$/.test(cmd)
-                        ? cmd
-                        : "<invalid>";
-                console.error(`isolation: rejected ${reason} (cmd: ${name})`);
-                throw new Error(`isolation: ${reason}`);
+            if (!isId(payload.callback) || !isId(payload.error)) {
+                reject("malformed envelope", cmd);
             }
+            const args = payload.payload;
+            if (args !== undefined && !isPlainObject(args)) {
+                reject("arguments are not an object", cmd);
+            }
+            if (EVENT_COMMANDS.has(cmd)) {
+                if (!isPlainObject(args) || !KNOWN_EVENTS.has(args.event)) {
+                    reject("event not allowed", cmd);
+                }
+            } else if (!ALLOWED.has(cmd)) {
+                reject("unknown command", cmd);
+            }
+            return payload;
+        };
+    </script>
+</body>
 
-            window.__TAURI_ISOLATION_HOOK__ = (payload) => {
-                if (!isPlainObject(payload)) {
-                    reject("payload is not an object", null);
-                }
-                const cmd = payload.cmd;
-                if (typeof cmd !== "string") {
-                    reject("command is not a string", cmd);
-                }
-                if (!isId(payload.callback) || !isId(payload.error)) {
-                    reject("malformed envelope", cmd);
-                }
-                const args = payload.payload;
-                if (args !== undefined && !isPlainObject(args)) {
-                    reject("arguments are not an object", cmd);
-                }
-                if (EVENT_COMMANDS.has(cmd)) {
-                    if (!isPlainObject(args) || !KNOWN_EVENTS.has(args.event)) {
-                        reject("event not allowed", cmd);
-                    }
-                } else if (!ALLOWED.has(cmd)) {
-                    reject("unknown command", cmd);
-                }
-                return payload;
-            };
-        </script>
-    </body>
 </html>
