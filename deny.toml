@@ -4,12 +4,18 @@
 # extend it deliberately, crate by crate, never wholesale.
 
 [advisories]
-vulnerability = "deny"
+# Vulnerabilities and notices always fail the build upstream,
+# so only the remaining knobs are set here: yanked crates fail,
+# unmaintained ones in the workspace graph are reported.
 yanked = "deny"
-unmaintained = "warn"
-notice = "warn"
+unmaintained = "workspace"
 
 [licenses]
+# The workspace's own crates are unpublished and carry no registry
+# license metadata; licensing them is the owner's call (see the
+# README), so the allow-list below applies to third-party crates
+# only and private crates are skipped.
+private = { ignore = true }
 allow = [
     "0BSD",
     "Apache-2.0",
@@ -37,7 +43,7 @@ unknown-git = "deny"
 # §12: dependencies are audited for every shipped target,
 # not just the host's — a crate that only fails on Windows
 # must fail here first.
-[targets]
+[graph]
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",

@@ -2,9 +2,10 @@
 name = "soirvu-cli"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [dependencies]
-soirvu-core = { path = "../soirvu-core" }
+soirvu-core = { path = "../soirvu-core", version = "0.1.0" }
 
 [dev-dependencies]
 tempfile = "3.27.0"

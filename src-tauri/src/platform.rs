@@ -28,16 +28,16 @@ pub fn open_external(url: &str) -> std::io::Result<()> {
     cmd.spawn().map(|_| ())
 }
 
-/// WER (Windows Error Reporting) exclusion: tells Windows
-/// never to write a crash dump for this executable (§9).
+// WER (Windows Error Reporting) exclusion: tells Windows
+// never to write a crash dump for this executable (§9).
 #[cfg(target_os = "windows")]
 #[link(name = "wer")]
 unsafe extern "C" {
     fn WerAddExcludedApplication(exe_name: *const u16, all_users: i32) -> i32;
 }
 
-/// libc does not export SetErrorMode for Windows; declared
-/// directly (kernel32), with its two mode constants (§9).
+// libc does not export SetErrorMode for Windows; declared
+// directly (kernel32), with its two mode constants (§9).
 #[cfg(target_os = "windows")]
 unsafe extern "C" {
     fn SetErrorMode(mode: u32) -> u32;
@@ -293,7 +293,7 @@ pub fn lock_events() -> Box<dyn LockEvents> {
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 struct NoLockEvents;
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 impl LockEvents for NoLockEvents {
     fn start(&mut self, _on_lock: Box<dyn Fn(LockReason) + Send + Sync>) -> Result<(), String> {
         Ok(())

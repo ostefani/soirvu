@@ -23,6 +23,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      # SQLCipher/OpenSSL are built from source (rusqlite's
+      # bundled-sqlcipher-vendored-openssl): the VC-WIN64A build needs
+      # a full perl plus nasm. The image ships both, but Git's own
+      # crippled perl shadows them, so put the working tools first.
+      - name: OpenSSL build tools (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
+          if (-not (Get-Command nasm -ErrorAction SilentlyContinue)) { choco install nasm -y --no-progress }
+          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Core and CLI tests
         run: cargo test -p soirvu-core -p soirvu-cli
       - name: Clippy (core and CLI)
@@ -37,6 +47,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: OpenSSL build tools (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
+          if (-not (Get-Command nasm -ErrorAction SilentlyContinue)) { choco install nasm -y --no-progress }
+          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: WebKitGTK system libraries (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -57,6 +73,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: OpenSSL build tools (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
+          if (-not (Get-Command nasm -ErrorAction SilentlyContinue)) { choco install nasm -y --no-progress }
+          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Create a fixture vault on this OS
         shell: bash
         env:
@@ -82,6 +104,12 @@ jobs:
         with:
           pattern: fixture-*
           path: ${{ runner.temp }}/incoming
+      - name: OpenSSL build tools (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
+          if (-not (Get-Command nasm -ErrorAction SilentlyContinue)) { choco install nasm -y --no-progress }
+          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Open every OS's fixture vault here
         shell: bash
         run: |
@@ -112,8 +140,14 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
+      # The Embark action bundles its own cargo-deny with no version
+      # pin, so a schema change in deny.toml breaks it silently.
+      # Install the pinned version instead; bump deliberately.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the pinned cargo-deny
+        run: cargo install cargo-deny --locked --version 0.20.2
       - name: Licenses, advisories, bans, sources
-        uses: EmbarkStudios/cargo-deny-action@v2
+        run: cargo deny --manifest-path ./Cargo.toml --all-features check
       - name: cargo audit
         run: |
           cargo install cargo-audit --locked
