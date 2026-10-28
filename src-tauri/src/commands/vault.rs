@@ -84,8 +84,9 @@ fn read_vault_id(path: &std::path::Path) -> Result<String, AppError> {
     Ok(header.vault_id)
 }
 
-/// Copies a vault's two files into an empty folder — the
-/// restore-as-import step. The source (a backup) is only read.
+/// Copies a vault — the database, the header and the encrypted
+/// attachment blobs — into an empty folder: the restore-as-import
+/// step. The source (a backup) is only read.
 fn import_copy(from: &std::path::Path, to: &std::path::Path) -> Result<(), AppError> {
     // A folder holding only .DS_Store counts as empty: Finder
     // writes that file into every folder it shows, so a folder
@@ -96,10 +97,7 @@ fn import_copy(from: &std::path::Path, to: &std::path::Path) -> Result<(), AppEr
             return Err(AppError::Code("destination_not_empty".into()));
         }
     }
-    for file in ["soirvu.db", "vault.header.json"] {
-        std::fs::copy(from.join(file), to.join(file))
-            .map_err(|_| AppError::Code("storage".into()))?;
-    }
+    soirvu_core::folder::copy_vault_files(from, to)?;
     Ok(())
 }
 
@@ -614,8 +612,20 @@ mod tests {
         std::fs::create_dir_all(&to).unwrap();
         std::fs::write(from.join("soirvu.db"), b"db").unwrap();
         std::fs::write(from.join("vault.header.json"), b"{}").unwrap();
+        std::fs::create_dir_all(from.join("attachments").join("ab")).unwrap();
+        std::fs::write(from.join("attachments").join("ab").join("blob-id"), b"blob").unwrap();
+        std::fs::write(
+            from.join("attachments").join("ab").join(".blob-id.tmp"),
+            b"partial",
+        )
+        .unwrap();
         import_copy(&from, &to).unwrap();
         assert_eq!(std::fs::read(to.join("soirvu.db")).unwrap(), b"db");
+        assert_eq!(
+            std::fs::read(to.join("attachments").join("ab").join("blob-id")).unwrap(),
+            b"blob"
+        );
+        assert!(!to.join("attachments").join("ab").join(".blob-id.tmp").exists());
         // And a non-empty destination is refused, untouched.
         let err = import_copy(&from, &to).unwrap_err();
         assert_eq!(err.to_ipc(), "destination_not_empty");

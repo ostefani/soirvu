@@ -2,7 +2,8 @@
 //!
 //!   MyVault/
 //!   ├── vault.header.json   key slots (no secrets); written last when creating
-//!   └── soirvu.db           encrypted SQLite database (plus -wal / -shm while open)
+//!   ├── soirvu.db           encrypted SQLite database (plus -wal / -shm while open)
+//!   └── attachments/ab/<id> encrypted attachment blobs, sharded by id prefix
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -352,6 +353,49 @@ fn create_files(
         device_id,
     };
     Ok((vault, recovery))
+}
+
+/// Copies a vault folder's content — the database, the header and the
+/// encrypted attachment blobs — into `to` (created when missing).
+/// Backups and restores both go through here, so a copy is always whole:
+/// entries without their blobs are worse than no copy at all.
+/// A missing `attachments/` tree copies as nothing (old copies predate it);
+/// unfinished `.tmp` uploads and dotfiles are skipped, like the sweep does.
+pub fn copy_vault_files(from: &Path, to: &Path) -> Result<()> {
+    fs::create_dir_all(to)?;
+    fs::copy(from.join(DB_FILE), to.join(DB_FILE))?;
+    fs::copy(from.join(HEADER_FILE), to.join(HEADER_FILE))?;
+    copy_attachments(from, to)?;
+    Ok(())
+}
+
+/// Copies finished attachment blobs, preserving the id sharding.
+fn copy_attachments(from: &Path, to: &Path) -> Result<()> {
+    let src = from.join("attachments");
+    if !src.exists() {
+        return Ok(());
+    }
+    for shard in fs::read_dir(&src)? {
+        let shard = shard?;
+        if !shard.file_type()?.is_dir() {
+            continue;
+        }
+        for file in fs::read_dir(shard.path())? {
+            let file = file?;
+            if !file.file_type()?.is_file() {
+                continue;
+            }
+            let name = file.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') {
+                continue;
+            }
+            let dest_dir = to.join("attachments").join(shard.file_name());
+            fs::create_dir_all(&dest_dir)?;
+            fs::copy(file.path(), dest_dir.join(name.as_ref()))?;
+        }
+    }
+    Ok(())
 }
 
 fn remove_our_files(dir: &Path) {
@@ -730,6 +774,32 @@ mod tests {
 
         let result = Vault::open_with_passphrase(&dir, PASSPHRASE);
         assert!(matches!(result, Err(Error::VaultMismatch)));
+    }
+
+    #[test]
+    fn copied_vault_keeps_attachments() {
+        let (tmp, mut vault, _recovery) = new_vault_with_note();
+        let entry = vault
+            .create_entry(&crate::entries::EntryDraft {
+                entry_date: "2026-10-15".into(),
+                title: Some("with file".into()),
+                body_md: "see attachment".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let att = vault
+            .add_attachment(&entry.id, "note.txt", "text/plain", b"attachment bytes")
+            .unwrap();
+        vault.checkpoint().unwrap();
+        vault.lock();
+
+        let dest = tmp.path().join("copy");
+        copy_vault_files(&tmp.path().join("v"), &dest).unwrap();
+
+        let copy = Vault::open_with_passphrase(&dest, PASSPHRASE).unwrap();
+        assert_eq!(copy.read_attachment(&att.id).unwrap(), b"attachment bytes");
+        assert!(copy.verify().unwrap().problems.is_empty());
+        copy.lock();
     }
 }
 
