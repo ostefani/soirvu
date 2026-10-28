@@ -277,6 +277,9 @@ impl Vault {
     /// Crash-safe: the new header is staged in a marker file
     /// before the database moves, so an interruption is finished
     /// on the next open instead of bricking the copy.
+    /// Caveat: a fork completed this way was never shown its new
+    /// recovery key, and the old one no longer works — unlock with
+    /// the passphrase and regenerate the recovery key afterwards.
     pub fn fork_identity(&mut self, passphrase: &str) -> Result<RecoveryKey> {
         let (header, recovery) = self.header.fork(passphrase, &self.master)?;
         write_atomic(&self.dir.join(FORK_MARKER), &header.to_json()?)?;
@@ -431,6 +434,16 @@ fn read_header(dir: &Path) -> Result<VaultHeader> {
 /// or one naming a different id — is a genuinely mixed folder
 /// and stays a mismatch, with the evidence renamed aside rather
 /// than destroyed: failed opens never delete.
+/// Moves a disproven marker out of the way for forensics. First
+/// evidence wins: if a previous rejection is already there, the
+/// marker stays put rather than destroying either copy.
+fn set_marker_aside(dir: &Path, marker: &Path) {
+    let rejected = dir.join(format!("{FORK_MARKER}.rejected"));
+    if !rejected.exists() {
+        let _ = fs::rename(marker, rejected);
+    }
+}
+
 fn complete_interrupted_fork(dir: &Path, db: &Database) -> Result<Option<VaultHeader>> {
     let marker = dir.join(FORK_MARKER);
     let bytes = match fs::read(&marker) {
@@ -441,12 +454,12 @@ fn complete_interrupted_fork(dir: &Path, db: &Database) -> Result<Option<VaultHe
     let header = match VaultHeader::from_json(&bytes) {
         Ok(header) => header,
         Err(_) => {
-            let _ = fs::rename(&marker, dir.join(format!("{FORK_MARKER}.rejected")));
+            set_marker_aside(dir, &marker);
             return Ok(None);
         }
     };
     if db.meta("vault_id")?.as_deref() != Some(header.vault_id.as_str()) {
-        let _ = fs::rename(&marker, dir.join(format!("{FORK_MARKER}.rejected")));
+        set_marker_aside(dir, &marker);
         return Ok(None);
     }
     write_atomic(&dir.join(HEADER_FILE), &bytes)?;

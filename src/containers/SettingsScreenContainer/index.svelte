@@ -396,7 +396,7 @@
     const backupErrors = {
         backup_unavailable: 'The backup folder is not available.',
         vault_mismatch:
-            'The open vault no longer matches this entry. Lock and re-open it, then try again.',
+            'The open vault no longer matches this folder. Lock and re-open it, then try again.',
     };
 
     async function backUpNow() {
@@ -404,7 +404,7 @@
         try {
             notify(EVENT_TYPE.SAVED, `Backed up to ${await api.backupNow()}.`);
         } catch (e) {
-            general.error = backupErrors[e] ?? somethingWrong(e);
+            general.error = Object.hasOwn(backupErrors, e) ? backupErrors[e] : somethingWrong(e);
         }
     }
 
