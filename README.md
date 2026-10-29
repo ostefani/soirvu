@@ -18,7 +18,9 @@
 
 # SoirVu
 
-*soir* + *vu* — "the evening, seen." A local-first, encrypted personal diary.
+`_the evening, see_`
+
+A local-first, encrypted personal diary.
 
 SoirVu keeps your diary in an encrypted vault on your own machine. There is no account, no cloud and no network access: your entries are unreadable to anything that reads the files, and readable only by you, with your passphrase.
 

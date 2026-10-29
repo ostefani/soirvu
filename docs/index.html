@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<!--
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Olha Stefanishyna
+-->
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SoirVu — the evening, see</title>
+    <meta name="description"
+        content="SoirVu is a local-first, encrypted diary for macOS, Linux and Windows. No account, no cloud, no network.">
+    <link rel="icon" href="assets/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" href="assets/favicon.png">
+    <link rel="apple-touch-icon" href="assets/favicon.png">
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+
+    <header class="site-header">
+        <a class="brand" href="#top" aria-label="SoirVu home">
+            <img data-themed data-dark="assets/soirvu-dark.svg" data-light="assets/soirvu-light.svg"
+                src="assets/soirvu-dark.svg" alt="" width="32" height="32">
+            <span>SoirVu</span>
+        </a>
+        <nav aria-label="Page">
+            <a href="#film">Watch</a>
+            <a href="#features">Features</a>
+            <a href="#security">Security</a>
+            <a href="#download">Download</a>
+        </nav>
+        <button id="theme-toggle" type="button" aria-label="Toggle color theme">◐</button>
+    </header>
+
+    <main id="top" class="main">
+
+        <section class="hero" aria-labelledby="hero-title">
+            <div class="hero-text">
+                <p class="kicker">_the evening, see_</p>
+                <h1 id="hero-title">A diary that keeps<br>its own counsel.</h1>
+                <p class="lede">SoirVu is a local-first, encrypted diary. Your entries are encrypted and live in a vault
+                    on your own machine.</p>
+                <div class="actions">
+                    <a class="button primary" href="#download">Download</a>
+                    <a class="button" href="#security">How it protects you</a>
+                </div>
+                <p class="platforms">macOS · Linux · Windows — free and open source (MIT)</p>
+            </div>
+        </section>
+
+        <section id="film" aria-labelledby="film-title">
+            <h2 id="film-title">Watch it work</h2>
+            <p>A short walkthrough: entries, attachments, search, lock. 70 seconds.</p>
+            <div class="video-frame">
+                <button id="video-facade" type="button" aria-label="Play the walkthrough video">
+                    <span class="play" aria-hidden="true">▶</span>
+                    <span class="facade-note">35&nbsp;MB · loads only when you press play</span>
+                </button>
+                <video id="walkthrough" controls preload="none" hidden>
+                    <source src="assets/personal-diary-presentation.mp4" type="video/mp4">
+                    Your browser can’t play this video.
+                </video>
+            </div>
+        </section>
+
+        <section class="features" id="features" aria-labelledby="features-title">
+            <h2 id="features-title">What it does</h2>
+            <ol class="feature-list">
+                <li>
+                    <h3>Encrypted vault</h3>
+                    <p>Entries live in a SQLCipher database; attachments are stored as
+                        separately encrypted files. Keys are derived with Argon2id and
+                        wrapped in LUKS-style key slots — changing your passphrase
+                        never re-encrypts your diary.</p>
+                </li>
+                <li>
+                    <h3>Recovery key</h3>
+                    <p>A randomly generated key, shown once at setup, lets you back in
+                        if the passphrase is forgotten. If you lose both, the diary cannot be recovered - by design</p>
+                </li>
+                <li>
+                    <h3>Markdown, always</h3>
+                    <p>Entries are written in Markdown and stored in the encrypted
+                        vault. No proprietary format: export everything to a folder of
+                        <code>.md</code> files in one click: the app can also verify,
+                        export, or rekey a vault.
+                    </p>
+                </li>
+                <li>
+                    <h3>Your choice of location</h3>
+                    <p>The vault is an ordinary folder: keep it on an internal disk, an external drive, or a mounted
+                        encrypted disk image.</p>
+                </li>
+                <li>
+                    <h3>Encrypted full-text search</h3>
+                    <p>Search runs inside the encrypted database. Nothing is indexed
+                        in plaintext, anywhere.</p>
+                </li>
+                <li>
+                    <h3>Auto-lock</h3>
+                    <p>The vault locks when idle, sleep, screen lock - and
+                        the keys are wiped from memory.</p>
+                </li>
+            </ol>
+        </section>
+
+        <section id="security" aria-labelledby="security-title">
+            <h2 id="security-title">How it protects your data</h2>
+            <p>The Rust core owns all keys, all file access, and all cryptography;
+                the interface never holds a decryption key or touches vault internals
+                directly. Encryption protects your diary <strong>at rest</strong>.</p>
+        </section>
+
+        <section class="download" id="download" aria-labelledby="download-title">
+            <h2 id="download-title">Take it home</h2>
+            <ul class="download-list">
+                <li><a href="https://github.com/ostefani/soirvu/releases/latest"><strong>macOS</strong> <span>.dmg,
+                            ad-hoc signed — Gatekeeper blocks it on first open: right-click → Open, or build from
+                            source</span></a></li>
+                <li><a href="https://github.com/ostefani/soirvu/releases/latest"><strong>Ubuntu</strong> <span>.deb
+                            package — installs directly</span></a></li>
+                <li><a href="https://github.com/ostefani/soirvu/releases/latest"><strong>Windows</strong> <span>per-user
+                            installer, unsigned — SmartScreen will warn: More info → Run anyway, or build from
+                            source</span></a></li>
+            </ul>
+            <p class="source-note">On macOS and Windows, building from source skips the
+                warnings entirely. Every release ships
+                <code>SHA256SUMS</code> with a minisign signature, and
+                <a href="https://github.com/ostefani/soirvu">the source</a> builds
+                from a tag — rebuilding is the trust anchor.
+            </p>
+        </section>
+
+    </main>
+
+    <footer>
+        <p>MIT © <span id="year">2026</span> Olha Stefanishyna ·
+            <a href="https://github.com/ostefani/soirvu">source</a>
+        </p>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
