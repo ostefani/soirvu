@@ -26,8 +26,13 @@ Page [https://ostefani.github.io/soirvu/](https://ostefani.github.io/soirvu/)
 
 SoirVu keeps your diary in an encrypted vault on your own machine. There is no account, no cloud and no network access: your entries are unreadable to anything that reads the files, and readable only by you, with your passphrase.
 
-[SoirVu dark theme](docs/assets/Screenshot%202026-10-29-dark.jpg)
-[SoirVu light theme](docs/assets/Screenshot%202026-10-29-light.jpg)
+<table>
+  <tr>
+    <td><img src="docs/assets/Screenshot%202026-10-29-dark.jpg" alt="SoirVu dark theme" width="600"></td>
+    <td><img src="docs/assets/Screenshot%202026-10-29-light.jpg" alt="SoirVu light theme" width="600"></td>
+  </tr>
+</table>
+
 ## Features
 
 - [x] **Encrypted vault** — entries live in a SQLCipher database; attachments are stored as separately encrypted files. Keys are derived with Argon2id and wrapped in LUKS-style key slots, so changing your passphrase doesn't re-encrypt your diary.
