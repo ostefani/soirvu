@@ -1,0 +1,87 @@
+#Requires -Version 5.1
+<#
+  soirvu Windows OpenSSL build tools (DESIGN §12).
+
+  SQLCipher/OpenSSL are built from source (rusqlite's
+  bundled-sqlcipher-vendored-openssl): the VC-WIN64A build needs
+  a full perl plus nasm. The runner image ships both, but Git's
+  own crippled MSYS perl shadows them on PATH, so openssl-src's
+  `./Configure` dies with exit code 2
+  (Locale::Maketext::Simple missing from @INC).
+
+  This script installs what is missing via Chocolatey, then
+  PREPENDS the working directories to PATH for all subsequent
+  steps (via $GITHUB_ENV, which wins over GITHUB_PATH ordering),
+  and proves both tools run: a silent PATH miss fails here in
+  seconds, not in the OpenSSL build minutes later.
+
+  nasm is used where it is found (an isolated copy under
+  RUNNER_TEMP), so no mingw toolchain leaks onto PATH next to
+  MSVC.
+#>
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+function Ensure-ChocoPackage([string]$Name, [string]$ProbePath) {
+  if (Test-Path $ProbePath) { return }
+  Write-Host "installing $Name via choco..."
+  choco install $Name -y --no-progress
+  if (-not (Test-Path $ProbePath)) {
+    # Strawberry drops perl.exe at a fixed path; NASM's choco
+    # package registers its install dir — re-read the machine
+    # PATH (choco updates it) before falling back to a search.
+    $machinePath = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine')
+    foreach ($dir in ($machinePath -split ';')) {
+      if ($dir -and (Test-Path (Join-Path $dir 'nasm.exe')) -and $Name -eq 'nasm') {
+        $ProbePath = Join-Path $dir 'nasm.exe'
+        break
+      }
+    }
+  }
+}
+
+$perlExe = 'C:\Strawberry\perl\bin\perl.exe'
+Ensure-ChocoPackage 'strawberryperl' $perlExe
+& $perlExe -MLocale::Maketext::Simple -e "print 'perl-ok'"
+Write-Host ''
+
+# Prepend (not append): Git's MSYS perl must never win.
+$perlBin = 'C:\Strawberry\perl\bin'
+$env:PATH = "$perlBin;$env:PATH"
+"$perlBin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+"PATH=$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+Write-Host 'perl resolution (must be Strawberry):'
+where.exe perl
+perl -MLocale::Maketext::Simple -e "print ""perl-ok`n"""
+
+$nasmOnPath = Get-Command nasm -ErrorAction SilentlyContinue
+if ($nasmOnPath) {
+  & nasm -v
+} else {
+  $known = @('C:\Program Files\NASM\nasm.exe', 'C:\Strawberry\c\bin\nasm.exe') |
+    Where-Object { Test-Path $_ } |
+    Select-Object -First 1
+  if (-not $known) {
+    choco install nasm -y --no-progress
+    $known = @('C:\Program Files\NASM\nasm.exe') |
+      Where-Object { Test-Path $_ } |
+      Select-Object -First 1
+    if (-not $known) {
+      $machinePath = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine')
+      foreach ($dir in ($machinePath -split ';')) {
+        $candidate = if ($dir) { Join-Path $dir 'nasm.exe' } else { $null }
+        if ($candidate -and (Test-Path $candidate)) { $known = $candidate; break }
+      }
+    }
+  }
+  if (-not $known) { throw 'nasm not found anywhere; the OpenSSL build would fail' }
+  $bin = Join-Path $env:RUNNER_TEMP 'nasm-bin'
+  New-Item -ItemType Directory -Force $bin | Out-Null
+  Copy-Item $known (Join-Path $bin 'nasm.exe') -Force
+  $env:PATH = "$bin;$env:PATH"
+  $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+  "PATH=$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+  & (Join-Path $bin 'nasm.exe') -v
+}
+Write-Host 'OpenSSL build tools OK'

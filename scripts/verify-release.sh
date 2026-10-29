@@ -7,9 +7,12 @@
 # - the signature is ad-hoc (identity "-"), as designed
 set -eu
 APP="${1:?usage: verify-release.sh /path/to/SoirVu.app}"
+[ -d "$APP" ] || { echo "FAIL: no such app bundle: $APP"; exit 2; }
 INFO="$(codesign -dv --verbose=4 "$APP" 2>&1)"
 echo "$INFO" | grep -q "flags=.*runtime" || {
     echo "FAIL: hardened runtime flag missing"
+    echo "--- codesign output ---"
+    echo "$INFO"
     exit 1
 }
 ENT="$(codesign -d --entitlements - "$APP" 2>/dev/null || true)"
@@ -17,12 +20,16 @@ for bad in get-task-allow disable-library-validation allow-dyld-environment-vari
     case "$ENT" in
         *"$bad"*)
             echo "FAIL: entitlement present: $bad"
+            echo "--- entitlements ---"
+            echo "$ENT"
             exit 1
             ;;
     esac
 done
 echo "$INFO" | grep -q "Signature=adhoc" || {
     echo "FAIL: expected an ad-hoc signature"
+    echo "--- codesign output ---"
+    echo "$INFO"
     exit 1
 }
 echo "OK: hardened runtime, no exemptions, ad-hoc signature"

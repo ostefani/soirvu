@@ -8,7 +8,7 @@ jobs:
   lint:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Platform cfg stays in the platform files (§12)
         run: sh scripts/check-platform-cfg.sh
 
@@ -19,20 +19,19 @@ jobs:
         os: [ubuntu-26.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       # SQLCipher/OpenSSL are built from source (rusqlite's
       # bundled-sqlcipher-vendored-openssl): the VC-WIN64A build needs
-      # a full perl plus nasm. The image ships both, but Git's own
-      # crippled perl shadows them, so put the working tools first.
+      # a full perl plus nasm, and Git's own crippled MSYS perl
+      # shadows them on PATH. The script installs what is missing,
+      # PREPENDS the working dirs to PATH for later steps, and
+      # proves both tools run.
       - name: OpenSSL build tools (Windows)
         if: runner.os == 'Windows'
-        run: |
-          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
-          if (-not (Get-Command nasm -ErrorAction SilentlyContinue)) { choco install nasm -y --no-progress }
-          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        run: pwsh -NoProfile -File scripts/windows-openssl-tools.ps1
       - name: Core and CLI tests
         run: cargo test -p soirvu-core -p soirvu-cli
       - name: Clippy (core and CLI)
@@ -45,14 +44,17 @@ jobs:
         os: [ubuntu-26.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      # SQLCipher/OpenSSL are built from source (rusqlite's
+      # bundled-sqlcipher-vendored-openssl): the VC-WIN64A build needs
+      # a full perl plus nasm, and Git's own crippled MSYS perl
+      # shadows them on PATH. The script installs what is missing,
+      # PREPENDS the working dirs to PATH for later steps, and
+      # proves both tools run.
       - name: OpenSSL build tools (Windows)
         if: runner.os == 'Windows'
-        run: |
-          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
-          if (-not (Get-Command nasm -ErrorAction SilentlyContinue)) { choco install nasm -y --no-progress }
-          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        run: pwsh -NoProfile -File scripts/windows-openssl-tools.ps1
       - name: WebKitGTK system libraries (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -71,20 +73,23 @@ jobs:
         os: [ubuntu-26.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      # SQLCipher/OpenSSL are built from source (rusqlite's
+      # bundled-sqlcipher-vendored-openssl): the VC-WIN64A build needs
+      # a full perl plus nasm, and Git's own crippled MSYS perl
+      # shadows them on PATH. The script installs what is missing,
+      # PREPENDS the working dirs to PATH for later steps, and
+      # proves both tools run.
       - name: OpenSSL build tools (Windows)
         if: runner.os == 'Windows'
-        run: |
-          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
-          if (-not (Get-Command nasm -ErrorAction SilentlyContinue)) { choco install nasm -y --no-progress }
-          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        run: pwsh -NoProfile -File scripts/windows-openssl-tools.ps1
       - name: Create a fixture vault on this OS
         shell: bash
         env:
           SOIRVU_MAKE_FIXTURE: ${{ runner.temp }}/fixture
         run: cargo test -p soirvu-core --test cross_os -- --exact cross_os_fixture
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: fixture-${{ matrix.os }}
           path: ${{ runner.temp }}/fixture
@@ -98,18 +103,21 @@ jobs:
         os: [ubuntu-26.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: fixture-*
           path: ${{ runner.temp }}/incoming
+      # SQLCipher/OpenSSL are built from source (rusqlite's
+      # bundled-sqlcipher-vendored-openssl): the VC-WIN64A build needs
+      # a full perl plus nasm, and Git's own crippled MSYS perl
+      # shadows them on PATH. The script installs what is missing,
+      # PREPENDS the working dirs to PATH for later steps, and
+      # proves both tools run.
       - name: OpenSSL build tools (Windows)
         if: runner.os == 'Windows'
-        run: |
-          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
-          if (-not (Get-Command nasm -ErrorAction SilentlyContinue)) { choco install nasm -y --no-progress }
-          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        run: pwsh -NoProfile -File scripts/windows-openssl-tools.ps1
       - name: Open every OS's fixture vault here
         shell: bash
         run: |
@@ -121,14 +129,18 @@ jobs:
   frontend:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
       - name: Install exactly as the lockfile says, no scripts
         run: npm ci --ignore-scripts
+      # Only production dependencies ship in the bundle; dev-only
+      # findings stay visible in a local `npm audit` but cannot fail
+      # the gate. (vite-plugin-svelte's deepmerge has no fixed
+      # release and runs at build time only, never in the app.)
       - name: Audit the frontend dependencies
-        run: npm audit --audit-level=high
+        run: npm audit --omit=dev --audit-level=high
       - name: The {@html} rule
         run: npm run check
       - name: Build
@@ -139,7 +151,7 @@ jobs:
   deny:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # The Embark action bundles its own cargo-deny with no version
       # pin, so a schema change in deny.toml breaks it silently.
       # Install the pinned version instead; bump deliberately.
@@ -156,8 +168,8 @@ jobs:
   macos-release:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
       - uses: dtolnay/rust-toolchain@stable
@@ -167,5 +179,7 @@ jobs:
         run: npm run tauri build
       - name: Verify the signature (§9)
         run: sh scripts/verify-release.sh src-tauri/target/release/bundle/macos/SoirVu.app
-      - name: Plaintext-leak test (§10)
-        run: sh scripts/leak-test.sh
+      # The plaintext-leak test (§10) is manual by design: it asks
+      # for two canary entries in a scratch vault, then scans the
+      # disk after quit. It cannot run headless in CI; see
+      # README.md ("run leak test").
