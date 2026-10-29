@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     let { field, value = '', disabled = false, class: className = '', onenter = null, oninput = null, onupdate = null } = $props();
 

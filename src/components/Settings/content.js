@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 /**
  * Static content and structure of the Settings screen.
  *

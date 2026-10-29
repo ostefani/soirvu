@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 fn main() {
     // §6.3: by default every registered command is callable by
     // every window. Restrict the IPC surface to exactly the

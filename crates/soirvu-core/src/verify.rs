@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Vault verification: is everything that should be there really there,
 //! and does it all still decrypt?
 //!

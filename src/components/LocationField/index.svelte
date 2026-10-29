@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     /**
      * Read-only path display: a label, the value in a monospace box, and

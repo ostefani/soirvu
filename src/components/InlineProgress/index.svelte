@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     /**
      * Spinner with a status line, for operations that are running.

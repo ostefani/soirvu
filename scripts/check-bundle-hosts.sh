@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Olha Stefanishyna
 # §9/§11: the built frontend bundle must not reference external
 # hostnames — the app makes no network requests, ever, and a
 # compromised dependency would need a URL to phone home to.

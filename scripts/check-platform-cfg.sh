@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Olha Stefanishyna
 # §12 seam rule: OS-specific cfg lives in the platform
 # files (platform.rs, macos_lock.rs, keychain.rs). Anywhere
 # else it needs a `// platform-ok: <reason>` comment on the

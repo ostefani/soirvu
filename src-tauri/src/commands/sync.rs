@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Sync commands (§13 Phase 10b): the open vault emits and
 //! applies bundle files in its sync folder, and prunes what
 //! every peer has consumed. Another tool carries the folder

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! SoirVu's Tauri shell: a thin bridge between the webview and
 //! soirVu-core. All diary logic lives in the core; this crate owns
 //! the lock state machine, the command surface (§6.1) and the

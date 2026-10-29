@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 import { mount } from 'svelte';
 import App from './App.svelte';
 import './app.css';

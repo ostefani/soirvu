@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Olha Stefanishyna
 """soirvu Windows release checks (DESIGN §9, §12).
 
 Reads the PE optional header's DllCharacteristics directly

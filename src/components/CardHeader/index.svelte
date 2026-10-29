@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     import Description from '@/components/Description/index.svelte';
 

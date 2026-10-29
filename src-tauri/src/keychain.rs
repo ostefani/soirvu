@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! The device secret's home in the OS keychain (Phase 8).
 //!
 //! One item per vault: a random 32-byte secret, stored in the

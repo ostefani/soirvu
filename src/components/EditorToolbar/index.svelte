@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     let { editor, info, disabled = false, onAttach = null } = $props();
 

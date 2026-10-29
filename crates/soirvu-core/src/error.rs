@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 use std::fmt;
 
 /// Everything that can go wrong in this crate's vault and crypto code.

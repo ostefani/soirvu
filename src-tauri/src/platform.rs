@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Small per-OS helpers (§2 layout: platform/). v1 targets macOS;
 //! the other branches exist so the crate builds everywhere.
 

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     /**
      * Content area for one tab. `id` must match the tab's id: the panel gets

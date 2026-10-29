@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     import * as api from '@/api.js';
     import LockScreen from '@/components/LockScreen/index.svelte';

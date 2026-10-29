@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! A vault folder on disk: creating it, and opening it again.
 //!
 //!   MyVault/

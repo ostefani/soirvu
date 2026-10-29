@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // Markdown <-> document for the SoirVu editor (DESIGN §6.5).
 //
 // Parsing: markdown-it (HTML off) tokenizes the whole note. Before

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! open_link and settings (§6.1).
 
 use tauri::{AppHandle, State};

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Cross-OS vault exchange (DESIGN §12, Phase 9 step 1):
 //! a vault created on one OS must open on every other OS.
 //!

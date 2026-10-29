@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Bundle sync (DESIGN §13 Phase 10a): the transport-free
 //! core. A device EMITS its changes since the last emit as
 //! one encrypted bundle file in a sync folder; a device

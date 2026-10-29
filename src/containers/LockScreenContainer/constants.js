@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 /**
  * LockScreenContainer — Domain constants and model factory.
  *

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Attachment blobs: encrypted files on disk, metadata in the database.
 //!
 //! Everything here is a method on `Vault`, so none of it can be used without

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 export function createAutosave({ snapshot, send, delay = 900 }) {
     /** @type {'idle' | 'dirty' | 'saving' | 'saved' | 'error'} */
     let state = $state('idle');

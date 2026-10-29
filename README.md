@@ -9,27 +9,29 @@
 ![Argon2id](https://img.shields.io/badge/KDF-Argon2id-4B275F)
 ![XChaCha20-Poly1305](https://img.shields.io/badge/AEAD-XChaCha20--Poly1305-darkgreen)
 ![Markdown](https://img.shields.io/badge/format-Markdown-000000)
-![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
+![platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey)
 
 ![CLI](https://img.shields.io/badge/type-Desktop%20App-informational)
 ![Interface](https://img.shields.io/badge/interface-GUI-informational)
 ![Visitors](https://visitor-badge.laobi.icu/badge?page_id=ostefani.soirvu)
-<!-- ![License](https://img.shields.io/badge/license-MIT-green) -->
+![License](https://img.shields.io/badge/license-MIT-green)
 
-# soirvu
+# SoirVu
 
-*soir* + *vu* — "the evening, seen." A local-first, encrypted personal diary.
+`_the evening, see_`
 
-soirvu keeps your diary in an encrypted vault on your own machine. There is no account, no cloud and no network access: your entries are unreadable to anything that reads the files, and readable only by you, with your passphrase.
+A local-first, encrypted personal diary.
+
+SoirVu keeps your diary in an encrypted vault on your own machine. There is no account, no cloud and no network access: your entries are unreadable to anything that reads the files, and readable only by you, with your passphrase.
 
 ## Features
 
-- [ ] **Encrypted vault** — entries live in a SQLCipher database; attachments are stored as separately encrypted files. Keys are derived with Argon2id and wrapped in LUKS-style key slots, so changing your passphrase doesn't re-encrypt your diary.
-- [ ] **Recovery key** — a randomly generated key shown once at setup lets you back in if the passphrase is forgotten. Without either, the diary is unrecoverable — by design.
-- [ ] **Markdown, always** — entries are stored as plain Markdown and edited in a WYSIWYG editor built on ProseMirror. No proprietary format: export everything to a folder of `.md` files in one click, or use the `diary-cli` tool to verify, export or rekey a vault without the app.
-- [ ] **Your choice of location** — the vault is an ordinary folder: internal disk, external drive, or a mounted encrypted disk image.
-- [ ] **Encrypted full-text search** — search runs inside the encrypted database; nothing is indexed in plaintext.
-- [ ] **Auto-lock** — the vault locks on idle, sleep, screen lock or manual shortcut, and the keys are wiped from memory.
+- [x] **Encrypted vault** — entries live in a SQLCipher database; attachments are stored as separately encrypted files. Keys are derived with Argon2id and wrapped in LUKS-style key slots, so changing your passphrase doesn't re-encrypt your diary.
+- [x] **Recovery key** — a randomly generated key shown once at setup lets you back in if the passphrase is forgotten. Without either, the diary is unrecoverable — by design.
+- [x] **Markdown, always** — entries are stored as plain Markdown and edited in a WYSIWYG editor built on ProseMirror. No proprietary format: export everything to a folder of `.md` files in one click, or use the `soirvu-cli` tool to verify, export or rekey a vault without the app.
+- [x] **Your choice of location** — the vault is an ordinary folder: internal disk, external drive, or a mounted encrypted disk image.
+- [x] **Encrypted full-text search** — search runs inside the encrypted database; nothing is indexed in plaintext.
+- [x] **Auto-lock** — the vault locks on idle, sleep, screen lock or manual shortcut, and the keys are wiped from memory.
 
 ## Security model
 
@@ -41,23 +43,29 @@ Tauri v2 · Rust core (SQLCipher, XChaCha20-Poly1305, Argon2id) · Svelte 5 UI �
 
 ## Status
 
-In design / early development. macOS first; Linux and Windows later.
+Early development. CI builds and tests on macOS, Linux and Windows, and tagged releases ship installers for all three (see [BUILDING.md](BUILDING.md)); macOS is the maintainer's daily driver.
 
 ## Building
 
-Prerequisites: Rust toolchain and Node.js.
+Prerequisites: Rust toolchain (via [rustup](https://rustup.rs)) and Node.js 24 LTS. Full per-OS instructions live in [BUILDING.md](BUILDING.md).
 
 ```sh
-npm install
-npm run tauri dev
+npm ci --ignore-scripts
+npm run tauri build    # local use: installers land under src-tauri/target/release/bundle/
+npm run tauri dev      # development with hot reload
 
-# run leak test
-sh scripts/leak-test.sh <path-to-test_diar-folder>
-# run test
-INSTA_UPDATE=always cargo test -p soirvu --lib
+# checks and tests
+npm run check
+npm test
+cargo test -p soirvu-core -p soirvu-cli
+
+# manual plaintext-leak test (needs a scratch vault)
+sh scripts/leak-test.sh <path-to-test-vault-folder>
+
+# build for local use
+npm run tauri build
 ```
 
 ## License
 
-Copyright (c) 2026 Olha Stefanishyna
-All rights reserved.
+MIT © 2026 Olha Stefanishyna

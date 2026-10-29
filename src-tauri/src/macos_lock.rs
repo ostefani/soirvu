@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! macOS lock signals (§9): NSWorkspace notifications for sleep
 //! and display sleep, distributed notifications for screen lock
 //! and screensaver start — behind the platform LockEvents

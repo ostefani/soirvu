@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Error codes across the IPC boundary.
 //!
 //! Commands return `Result<T, String>` where the string is a stable

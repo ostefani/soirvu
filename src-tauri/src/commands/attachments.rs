@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Attachment commands and the soirvu-asset:// protocol (§6.1, §6.4).
 //!
 //! Uploads arrive in slices through attachment_chunk (base64 — the

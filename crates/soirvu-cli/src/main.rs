@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! soirvu-cli — the recovery escape hatch (DESIGN §2, §8).
 //!
 //! It runs the same `soirvu-core` code as the app, so a vault can be

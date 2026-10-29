@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // Spike 9, executable form (DESIGN §13, Phase 0): does a note
 // survive parse -> serialize with its meaning intact, does the
 // second round trip change nothing (normalized form is stable),
