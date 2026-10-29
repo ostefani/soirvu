@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // Our own undo history (substitute for prosemirror-history).
 //
 // The plugin field keeps two stacks of events. An event is the

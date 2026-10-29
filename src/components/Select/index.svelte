@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     let { field, value = $bindable(''), disabled = false, onchange = null } = $props();
 </script>

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // The SoirVu editor schema (DESIGN §6.5), as a spike: the
 // prosemirror-markdown basic schema plus what v1 adds — raw_block,
 // attachment, strike, and task items (list_item with a checked attr).

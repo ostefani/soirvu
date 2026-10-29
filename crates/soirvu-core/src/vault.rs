@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! The vault header: `vault.header.json`.
 //!
 //! The header is plain JSON and holds no secrets. It stores the master key

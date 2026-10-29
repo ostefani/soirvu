@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Lock handshake (§6.2): Rust asks the UI to flush, then waits for
 //! the ack or a cap before the keys drop. Separate from AppState so
 //! it can be tested without a vault.

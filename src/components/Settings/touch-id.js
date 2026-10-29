@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 /**
  * What the Touch ID card shows for a given backend status.
  *

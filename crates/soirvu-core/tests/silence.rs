@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! §9 logging audit, as a test: opening a vault whose database
 //! fails its HMAC check must print NOTHING. SQLCipher's own
 //! logger and SQLite's sqlite3_log both write to stderr by

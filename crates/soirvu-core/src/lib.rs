@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 pub mod attachments;
 pub mod crypto;
 pub mod entries;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Markdown export (DESIGN §8): the whole vault as plain files.
 //!
 //! ```text

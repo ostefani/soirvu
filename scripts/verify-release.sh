@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Olha Stefanishyna
 # §9 release checks for a built SoirVu.app (macOS, local build):
 # - the hardened runtime flag survived ad-hoc signing
 # - no get-task-allow (debugger) entitlement

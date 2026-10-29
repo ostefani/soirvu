@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     import Button from '@/components/Button/index.svelte';
     import Input from '@/components/Input/index.svelte';

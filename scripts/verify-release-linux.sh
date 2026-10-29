@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Olha Stefanishyna
 # soirvu Linux release checks (DESIGN §9, §12): the shipped
 # binary must be a position-independent executable with a
 # non-executable stack and RELRO, and the .deb must not

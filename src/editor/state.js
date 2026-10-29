@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // Our own editor state (substitute for prosemirror-state).
 //
 // A state is immutable: a document, a selection, the marks that

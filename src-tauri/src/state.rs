@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! App state and the lock state machine (DESIGN §6.2), plus the
 //! app.json registry and settings (§3).
 //!

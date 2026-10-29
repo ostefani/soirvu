@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! End-to-end checks for the hand-parsed verb surface.
 //! The two verbs added with the ack work (fix8) shipped
 //! with a wrong arity guard on one of them, and nothing

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Low-level crypto: random bytes, Argon2id, key wrapping, sub-key derivation.
 //! Nothing here knows about vaults or files.
 

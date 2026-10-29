@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Import (DESIGN §8): bring entries INTO a vault from plain
 //! files — a Markdown folder (our own export, or another app's
 //! notes; front matter optional) or a SoirVu JSON export.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Entries, tags and search. Everything here is a method on `Vault`, so none of
 //! it can be used without unlocking the vault first.
 //!

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Vault lifecycle commands (§6.1). Paths never leave Rust: the UI
 //! picks folders through the native dialog and afterwards works
 //! only with vault ids.

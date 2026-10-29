@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 /**
  * LockScreenContainer — UI text data and user-visible messages.
  *

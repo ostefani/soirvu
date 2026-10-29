@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // The editor component (§6.5): createEditor mounts our own view
 // over our own state, commands, rules and history. The only
 // borrowed pieces are the document model and the Markdown layer

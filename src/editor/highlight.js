@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // Syntax highlighting (Phase 7, §6.5) — view-only tokenizers.
 //
 // The document never changes: code text stays one plain text

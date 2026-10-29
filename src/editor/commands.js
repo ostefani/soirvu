@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // Our own editing commands (substitute for prosemirror-commands
 // and prosemirror-schema-list).
 //

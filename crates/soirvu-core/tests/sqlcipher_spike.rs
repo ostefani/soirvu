@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 

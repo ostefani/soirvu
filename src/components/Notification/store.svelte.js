@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 import { EVENT_TYPE } from '@/constants.js';
 
 /** Reactive list rendered by the stack, newest first. Mutated in place, never reassigned. */

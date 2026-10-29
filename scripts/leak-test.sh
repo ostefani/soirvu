@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Olha Stefanishyna
 # soirvu plaintext-leak test (DESIGN v6, §10). macOS, Linux,
 # Windows (under Git Bash).
 #

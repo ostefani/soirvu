@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! The encrypted SQLite database (`soirvu.db`), using SQLCipher, and its schema.
 
 use std::fs;

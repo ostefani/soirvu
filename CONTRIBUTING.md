@@ -51,4 +51,7 @@ fix can land before disclosure.
 ## License
 
 SoirVu is MIT-licensed. By contributing you agree that your contributions
-are released under the same [LICENSE](LICENSE).
+are released under the same [LICENSE](LICENSE). Every source file carries
+an `SPDX-License-Identifier: MIT` header plus its author's copyright line —
+new files need both. Include your name or nickname in
+[CONTRIBUTORS](CONTRIBUTORS) in the same pull request.

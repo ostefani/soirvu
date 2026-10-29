@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Entry, search and tag commands (§6.1). Every one of them runs
 //! through the state's guard: locked → the `locked` code.
 

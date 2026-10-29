@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! End-to-end tests: run the real `soirvu-cli` binary against real vaults.
 //! Vaults with content are made through `soirvu-core` directly — the CLI
 //! has no "add entry" command on purpose; it is a recovery tool.

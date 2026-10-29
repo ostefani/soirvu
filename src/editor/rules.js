@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // Input rules and the keymap (DESIGN §6.5) — our own code
 // (substitutes for prosemirror-inputrules and prosemirror-keymap).
 //

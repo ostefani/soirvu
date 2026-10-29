@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Scheduled and manual vault backups (§13 Phase 6).
 //!
 //! A backup is a plain copy of the open vault — the database

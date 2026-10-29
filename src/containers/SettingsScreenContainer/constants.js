@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 export const settingsText = {
     title: 'Settings',
     loading: 'Loading…',

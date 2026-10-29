@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Linux lock signals (DESIGN §12): logind and the GNOME
 //! screensaver over D-Bus, without a D-Bus crate — `gdbus
 //! monitor` subprocesses (gdbus ships with GLib, present

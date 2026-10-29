@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Windows lock signals (DESIGN §12): session lock and
 //! system suspend, via a message-only window on a dedicated
 //! thread — raw FFI, no windows crate. The window registers

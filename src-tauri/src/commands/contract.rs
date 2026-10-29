@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 //! Contract snapshots for the IPC boundary (§13, Phase 2).
 //!
 //! These tests pin the exact JSON the webview sees: field names,

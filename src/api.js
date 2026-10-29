@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // @ts-check
 // The only module that calls invoke() (§6.1). Every wrapper is a
 // thin, JSDoc-typed call to one Rust command. Errors arrive as

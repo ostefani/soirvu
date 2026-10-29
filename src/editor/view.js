@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // Our own editor view (substitute for prosemirror-view).
 //
 // The view renders the document as DOM under one contenteditable

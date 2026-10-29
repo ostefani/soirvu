@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // The selection toolbar's brain (§6.5): what the current
 // selection looks like (selectionInfo) and the commands its
 // buttons run (toolbarCommands). Both are pure functions of the

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // Our own small transform layer (substitute for prosemirror-transform).
 //
 // One step type does almost everything we need: replace a range of

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 // Table editing (Phase 7, §6.5) — our own commands over the
 // table nodes from schema.js. A cell holds exactly one
 // paragraph, so Enter and Tab are navigation, never splits:

@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: MIT
+   Copyright (c) 2026 Olha Stefanishyna */
 /* Sticky formatting bar: on long notes the toolbar follows
        the scroll, so every formatting action stays reachable.
        The translucent --bar-veil + backdrop blur lets the text

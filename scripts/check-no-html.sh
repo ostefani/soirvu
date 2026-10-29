@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Olha Stefanishyna
 # The {@html} lint rule (DESIGN v6, Phase 2).
 #
 # Svelte's {@html} renders a string as markup. Diary text must

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Olha Stefanishyna
 /**
  * Wording used by SyncPeers. Swap the whole object (the `copy` prop) to
  * localise it; functions receive the values that vary.
