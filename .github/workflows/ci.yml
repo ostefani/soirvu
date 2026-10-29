@@ -25,34 +25,13 @@ jobs:
           components: clippy
       # SQLCipher/OpenSSL are built from source (rusqlite's
       # bundled-sqlcipher-vendored-openssl): the VC-WIN64A build needs
-      # a full perl plus nasm. The image ships both, but Git's own
-      # crippled perl shadows them. Prefer the working tools and prove
-      # both run: a silent PATH miss fails here in seconds, not in
-      # the OpenSSL build minutes later. nasm is used where it is
-      # found (an isolated copy if needed), so no mingw toolchain
-      # leaks onto PATH next to MSVC.
+      # a full perl plus nasm, and Git's own crippled MSYS perl
+      # shadows them on PATH. The script installs what is missing,
+      # PREPENDS the working dirs to PATH for later steps, and
+      # proves both tools run.
       - name: OpenSSL build tools (Windows)
         if: runner.os == 'Windows'
-        run: |
-          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
-          & 'C:\Strawberry\perl\bin\perl.exe' -MLocale::Maketext::Simple -e "print 'perl-ok'"
-          'C:\Strawberry\perl\bin' | Add-Content -Path $env:GITHUB_PATH
-          $nasm = Get-Command nasm -ErrorAction SilentlyContinue
-          if ($nasm) { & nasm -v }
-          else {
-            $found = @('C:\Program Files\NASM\nasm.exe', 'C:\Strawberry\c\bin\nasm.exe') | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if (-not $found) {
-              choco install nasm -y --no-progress
-              $found = Get-ChildItem 'C:\ProgramData\chocolatey' -Recurse -Filter 'nasm.exe' -ErrorAction SilentlyContinue |
-                Sort-Object Length -Descending | Select-Object -ExpandProperty FullName -First 1
-            }
-            if (-not $found) { throw 'nasm not found anywhere; the OpenSSL build would fail' }
-            $bin = Join-Path $env:RUNNER_TEMP 'nasm-bin'
-            New-Item -ItemType Directory -Force $bin | Out-Null
-            Copy-Item $found (Join-Path $bin 'nasm.exe') -Force
-            $bin | Add-Content -Path $env:GITHUB_PATH
-            & (Join-Path $bin 'nasm.exe') -v
-          }
+        run: pwsh -NoProfile -File scripts/windows-openssl-tools.ps1
       - name: Core and CLI tests
         run: cargo test -p soirvu-core -p soirvu-cli
       - name: Clippy (core and CLI)
@@ -69,34 +48,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # SQLCipher/OpenSSL are built from source (rusqlite's
       # bundled-sqlcipher-vendored-openssl): the VC-WIN64A build needs
-      # a full perl plus nasm. The image ships both, but Git's own
-      # crippled perl shadows them. Prefer the working tools and prove
-      # both run: a silent PATH miss fails here in seconds, not in
-      # the OpenSSL build minutes later. nasm is used where it is
-      # found (an isolated copy if needed), so no mingw toolchain
-      # leaks onto PATH next to MSVC.
+      # a full perl plus nasm, and Git's own crippled MSYS perl
+      # shadows them on PATH. The script installs what is missing,
+      # PREPENDS the working dirs to PATH for later steps, and
+      # proves both tools run.
       - name: OpenSSL build tools (Windows)
         if: runner.os == 'Windows'
-        run: |
-          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
-          & 'C:\Strawberry\perl\bin\perl.exe' -MLocale::Maketext::Simple -e "print 'perl-ok'"
-          'C:\Strawberry\perl\bin' | Add-Content -Path $env:GITHUB_PATH
-          $nasm = Get-Command nasm -ErrorAction SilentlyContinue
-          if ($nasm) { & nasm -v }
-          else {
-            $found = @('C:\Program Files\NASM\nasm.exe', 'C:\Strawberry\c\bin\nasm.exe') | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if (-not $found) {
-              choco install nasm -y --no-progress
-              $found = Get-ChildItem 'C:\ProgramData\chocolatey' -Recurse -Filter 'nasm.exe' -ErrorAction SilentlyContinue |
-                Sort-Object Length -Descending | Select-Object -ExpandProperty FullName -First 1
-            }
-            if (-not $found) { throw 'nasm not found anywhere; the OpenSSL build would fail' }
-            $bin = Join-Path $env:RUNNER_TEMP 'nasm-bin'
-            New-Item -ItemType Directory -Force $bin | Out-Null
-            Copy-Item $found (Join-Path $bin 'nasm.exe') -Force
-            $bin | Add-Content -Path $env:GITHUB_PATH
-            & (Join-Path $bin 'nasm.exe') -v
-          }
+        run: pwsh -NoProfile -File scripts/windows-openssl-tools.ps1
       - name: WebKitGTK system libraries (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -119,34 +77,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # SQLCipher/OpenSSL are built from source (rusqlite's
       # bundled-sqlcipher-vendored-openssl): the VC-WIN64A build needs
-      # a full perl plus nasm. The image ships both, but Git's own
-      # crippled perl shadows them. Prefer the working tools and prove
-      # both run: a silent PATH miss fails here in seconds, not in
-      # the OpenSSL build minutes later. nasm is used where it is
-      # found (an isolated copy if needed), so no mingw toolchain
-      # leaks onto PATH next to MSVC.
+      # a full perl plus nasm, and Git's own crippled MSYS perl
+      # shadows them on PATH. The script installs what is missing,
+      # PREPENDS the working dirs to PATH for later steps, and
+      # proves both tools run.
       - name: OpenSSL build tools (Windows)
         if: runner.os == 'Windows'
-        run: |
-          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
-          & 'C:\Strawberry\perl\bin\perl.exe' -MLocale::Maketext::Simple -e "print 'perl-ok'"
-          'C:\Strawberry\perl\bin' | Add-Content -Path $env:GITHUB_PATH
-          $nasm = Get-Command nasm -ErrorAction SilentlyContinue
-          if ($nasm) { & nasm -v }
-          else {
-            $found = @('C:\Program Files\NASM\nasm.exe', 'C:\Strawberry\c\bin\nasm.exe') | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if (-not $found) {
-              choco install nasm -y --no-progress
-              $found = Get-ChildItem 'C:\ProgramData\chocolatey' -Recurse -Filter 'nasm.exe' -ErrorAction SilentlyContinue |
-                Sort-Object Length -Descending | Select-Object -ExpandProperty FullName -First 1
-            }
-            if (-not $found) { throw 'nasm not found anywhere; the OpenSSL build would fail' }
-            $bin = Join-Path $env:RUNNER_TEMP 'nasm-bin'
-            New-Item -ItemType Directory -Force $bin | Out-Null
-            Copy-Item $found (Join-Path $bin 'nasm.exe') -Force
-            $bin | Add-Content -Path $env:GITHUB_PATH
-            & (Join-Path $bin 'nasm.exe') -v
-          }
+        run: pwsh -NoProfile -File scripts/windows-openssl-tools.ps1
       - name: Create a fixture vault on this OS
         shell: bash
         env:
@@ -174,34 +111,13 @@ jobs:
           path: ${{ runner.temp }}/incoming
       # SQLCipher/OpenSSL are built from source (rusqlite's
       # bundled-sqlcipher-vendored-openssl): the VC-WIN64A build needs
-      # a full perl plus nasm. The image ships both, but Git's own
-      # crippled perl shadows them. Prefer the working tools and prove
-      # both run: a silent PATH miss fails here in seconds, not in
-      # the OpenSSL build minutes later. nasm is used where it is
-      # found (an isolated copy if needed), so no mingw toolchain
-      # leaks onto PATH next to MSVC.
+      # a full perl plus nasm, and Git's own crippled MSYS perl
+      # shadows them on PATH. The script installs what is missing,
+      # PREPENDS the working dirs to PATH for later steps, and
+      # proves both tools run.
       - name: OpenSSL build tools (Windows)
         if: runner.os == 'Windows'
-        run: |
-          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install strawberryperl -y --no-progress }
-          & 'C:\Strawberry\perl\bin\perl.exe' -MLocale::Maketext::Simple -e "print 'perl-ok'"
-          'C:\Strawberry\perl\bin' | Add-Content -Path $env:GITHUB_PATH
-          $nasm = Get-Command nasm -ErrorAction SilentlyContinue
-          if ($nasm) { & nasm -v }
-          else {
-            $found = @('C:\Program Files\NASM\nasm.exe', 'C:\Strawberry\c\bin\nasm.exe') | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if (-not $found) {
-              choco install nasm -y --no-progress
-              $found = Get-ChildItem 'C:\ProgramData\chocolatey' -Recurse -Filter 'nasm.exe' -ErrorAction SilentlyContinue |
-                Sort-Object Length -Descending | Select-Object -ExpandProperty FullName -First 1
-            }
-            if (-not $found) { throw 'nasm not found anywhere; the OpenSSL build would fail' }
-            $bin = Join-Path $env:RUNNER_TEMP 'nasm-bin'
-            New-Item -ItemType Directory -Force $bin | Out-Null
-            Copy-Item $found (Join-Path $bin 'nasm.exe') -Force
-            $bin | Add-Content -Path $env:GITHUB_PATH
-            & (Join-Path $bin 'nasm.exe') -v
-          }
+        run: pwsh -NoProfile -File scripts/windows-openssl-tools.ps1
       - name: Open every OS's fixture vault here
         shell: bash
         run: |
@@ -263,5 +179,7 @@ jobs:
         run: npm run tauri build
       - name: Verify the signature (§9)
         run: sh scripts/verify-release.sh src-tauri/target/release/bundle/macos/SoirVu.app
-      - name: Plaintext-leak test (§10)
-        run: sh scripts/leak-test.sh
+      # The plaintext-leak test (§10) is manual by design: it asks
+      # for two canary entries in a scratch vault, then scans the
+      # disk after quit. It cannot run headless in CI; see
+      # README.md ("run leak test").
