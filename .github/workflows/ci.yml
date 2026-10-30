@@ -11,9 +11,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Explicit least privilege: jobs that move artifacts restate the
-# `actions` scope they need (a job-level block replaces this one
-# wholesale); everything else reads the repo only.
+# Explicit least privilege. Same-run artifact upload/download
+# authenticates with the Actions runtime token rather than the
+# job's GITHUB_TOKEN, so every job inherits this read-only scope.
 permissions:
   contents: read
 
@@ -83,8 +83,8 @@ jobs:
         run: cargo check --manifest-path src-tauri/Cargo.toml --features touch-id
 
   bridge-tests:
-    # The 60+ vault, locking, backup, state and IPC-contract tests in
-    # the Tauri crate: compiling is not proof they pass.
+    # The Tauri crate's vault, locking, backup, state and IPC-contract
+    # tests: compiling is not proof they pass.
     strategy:
       fail-fast: false
       matrix:
@@ -114,9 +114,6 @@ jobs:
         os: [ubuntu-26.04, windows-2025, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
-    permissions:
-      contents: read
-      actions: write
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -158,9 +155,6 @@ jobs:
         os: [ubuntu-26.04, windows-2025, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
-    permissions:
-      contents: read
-      actions: read
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

@@ -49,9 +49,6 @@ jobs:
   build:
     needs: gate
     timeout-minutes: 60
-    permissions:
-      contents: read
-      actions: write
     strategy:
       fail-fast: false
       matrix:
@@ -136,7 +133,6 @@ jobs:
     environment: release
     permissions:
       contents: write
-      actions: read
     steps:
       - uses: actions/download-artifact@v7
         with:
