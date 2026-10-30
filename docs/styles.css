@@ -21,6 +21,7 @@
     --glow-wide: #0b0b78;
     --glow-core: #f6711f9e;
     --accent-bg: #f6711fd7;
+    --glow-accent: red;
 }
 
 :root[data-theme="light"] {
@@ -37,6 +38,7 @@
     --glow-wide: #cbcbfb;
     --glow-core: #f6711f66;
     --accent-bg: #f9b0839e;
+    --glow-accent: red;
 }
 
 * {
@@ -138,6 +140,30 @@ main>section:not(.hero) {
     border-top: 0;
     text-align: center;
     overflow: hidden;
+}
+
+/* .hero::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: -9rem;
+    width: 46rem;
+    height: 26rem;
+    transform: translateX(-50%);
+    border-radius: 50%;
+    background: radial-gradient(closest-side, var(--glow-accent), transparent);
+    pointer-events: none;
+} */
+
+
+.hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background:
+        radial-gradient(ellipse 45% 42% at 50% 100%, var(--glow-core), transparent 75%),
+        radial-gradient(ellipse 85% 70% at 50% 100%, var(--glow-wide), transparent 78%);
 }
 
 .hero::after {
