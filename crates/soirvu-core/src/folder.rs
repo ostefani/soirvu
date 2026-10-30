@@ -678,12 +678,11 @@ mod tests {
         // survive the change byte for byte.
         let distinctive = KdfParams { m_kib: 32, t: 2, p: 1 };
         let tmp = TempDir::new().unwrap();
-        let (mut vault, _recovery) =
-            Vault::create(&tmp.path().join("v"), PASSPHRASE, distinctive).unwrap();
+        let dir = tmp.path().join("v");
+        let (mut vault, _recovery) = Vault::create(&dir, PASSPHRASE, distinctive).unwrap();
         vault.change_passphrase(PASSPHRASE, "second passphrase").unwrap();
         vault.lock();
 
-        let dir = tmp.path().join("v");
         assert!(Vault::open_with_passphrase(&dir, PASSPHRASE).is_err());
         let reopened = Vault::open_with_passphrase(&dir, "second passphrase").unwrap();
         assert_eq!(reopened.header().passphrase_kdf().unwrap(), distinctive);
