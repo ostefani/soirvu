@@ -7,28 +7,64 @@ name: release
 # this repository's secrets (MINISIGN_SECRET_KEY); the
 # public key is in BUILDING.md, and building from source
 # remains the trust anchor (see BUILDING.md).
+# The installers themselves stay ad-hoc-signed (macOS) and
+# unsigned (Windows) by design for source-first distribution;
+# Developer ID / Authenticode signing is the step up if the
+# audience ever needs OS-vendor trust.
 on:
   push:
     tags: ["v*"]
 
+# Least privilege: build jobs only read and upload artifacts; only
+# `publish` can write (the release) and read back artifacts.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  gate:
+    # A tag can point at any commit, so a tag alone proves nothing.
+    # Publishing requires a green `ci` run on the exact tagged SHA;
+    # anything else — including an API error — refuses the release.
+    # (The tagged commit almost always already passed CI on main,
+    # so the common path finds that run immediately.)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+    steps:
+      - name: Require a green CI run on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          green="$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --limit 20 \
+            --json conclusion,status \
+            --jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length')"
+          test "${green:-0}" -gt 0 || {
+            echo "FAIL: no successful ci.yml run on $GITHUB_SHA — rerun this job after CI goes green"
+            exit 1
+          }
+          echo "OK: CI passed on the tagged commit"
+
   build:
+    needs: gate
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
     strategy:
       fail-fast: false
       matrix:
         include:
           # src-tauri is a member of the root workspace, so cargo builds
           # into the workspace-root target/, not src-tauri/target/.
-          - os: macos-latest
+          - os: macos-15
             overlay: ""
             verify: sh scripts/verify-release.sh target/release/bundle/macos/SoirVu.app
           - os: ubuntu-26.04
             overlay: "--config src-tauri/tauri.linux.conf.json"
             verify: sh scripts/verify-release-linux.sh target/release/soirvu
-          - os: windows-latest
+          - os: windows-2025
             overlay: "--config src-tauri/tauri.windows.conf.json"
             verify: python scripts/verify-release-windows.py target/release/soirvu.exe
     runs-on: ${{ matrix.os }}
@@ -92,24 +128,35 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    # Needs a `release` environment in the repo settings holding the
+    # Minisign secrets (and any required reviewers): until one exists
+    # this only names the intent, but with it configured the secrets
+    # stay withheld and the job gated until approval.
+    environment: release
+    permissions:
+      contents: write
+      actions: read
     steps:
-      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v7
         with:
           pattern: installers-*
           merge-multiple: true
           path: dist
+      - name: Install minisign (no secrets in this step)
+        run: sudo apt-get install -y minisign
       - name: Checksums and signature
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
-          sudo apt-get install -y minisign
           cd dist
           sha256sum * > SHA256SUMS
-          printf '%s' "$MINISIGN_SECRET_KEY" > /tmp/minisign.key
-          minisign -S -s /tmp/minisign.key -x SHA256SUMS.minisig -m SHA256SUMS <<< "$MINISIGN_PASSWORD"
-          rm /tmp/minisign.key
+          keyfile="$(mktemp "$RUNNER_TEMP/minisign.XXXXXX")"
+          chmod 600 "$keyfile"
+          trap 'rm -f "$keyfile"' EXIT
+          printf '%s' "$MINISIGN_SECRET_KEY" > "$keyfile"
+          minisign -S -s "$keyfile" -x SHA256SUMS.minisig -m SHA256SUMS <<< "$MINISIGN_PASSWORD"
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*

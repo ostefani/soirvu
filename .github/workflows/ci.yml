@@ -2,11 +2,25 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+# A branch push with an open PR would otherwise run twice (push +
+# pull_request); a newer push supersedes the older run in place.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Explicit least privilege: jobs that move artifacts restate the
+# `actions` scope they need (a job-level block replaces this one
+# wholesale); everything else reads the repo only.
+permissions:
+  contents: read
 
 jobs:
   lint:
     runs-on: ubuntu-26.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - name: Platform cfg stays in the platform files (§12)
@@ -16,8 +30,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-26.04, windows-latest, macos-latest]
+        os: [ubuntu-26.04, windows-2025, macos-15]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -41,8 +56,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-26.04, windows-latest, macos-latest]
+        os: [ubuntu-26.04, windows-2025, macos-15]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -66,12 +82,41 @@ jobs:
         if: runner.os == 'macOS'
         run: cargo check --manifest-path src-tauri/Cargo.toml --features touch-id
 
+  bridge-tests:
+    # The 60+ vault, locking, backup, state and IPC-contract tests in
+    # the Tauri crate: compiling is not proof they pass.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      # Same vendored OpenSSL as bridge-check; the default shell keeps
+      # the tools step's PATH ordering (no Git Bash shadowing here).
+      - name: OpenSSL build tools (Windows)
+        if: runner.os == 'Windows'
+        run: pwsh -NoProfile -File scripts/windows-openssl-tools.ps1
+      - name: WebKitGTK system libraries (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      - name: Tauri crate tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
   vault-exchange:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-26.04, windows-latest, macos-latest]
+        os: [ubuntu-26.04, windows-2025, macos-15]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -110,8 +155,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-26.04, windows-latest, macos-latest]
+        os: [ubuntu-26.04, windows-2025, macos-15]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -145,6 +194,7 @@ jobs:
 
   frontend:
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -152,6 +202,8 @@ jobs:
           node-version: 24
       - name: Install exactly as the lockfile says, no scripts
         run: npm ci --ignore-scripts
+      - name: Frontend tests
+        run: npm test
       # Only production dependencies ship in the bundle; dev-only
       # findings stay visible in a local `npm audit` but cannot fail
       # the gate. (vite-plugin-svelte's deepmerge has no fixed
@@ -167,6 +219,7 @@ jobs:
 
   deny:
     runs-on: ubuntu-26.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       # The Embark action bundles its own cargo-deny with no version
@@ -176,14 +229,14 @@ jobs:
       - name: Install the pinned cargo-deny
         run: cargo install cargo-deny --locked --version 0.20.2
       - name: Licenses, advisories, bans, sources
+        # Advisories included: deny.toml [advisories] fails on
+        # vulnerabilities and yanked crates, so a separate
+        # cargo-audit run would only duplicate it.
         run: cargo deny --manifest-path ./Cargo.toml --all-features check
-      - name: cargo audit
-        run: |
-          cargo install cargo-audit --locked
-          cargo audit
 
   macos-release:
-    runs-on: macos-latest
+    runs-on: macos-15
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

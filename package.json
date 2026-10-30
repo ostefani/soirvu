@@ -9,7 +9,7 @@
         "dev": "vite",
         "preview": "vite preview",
         "tauri": "tauri",
-        "test": "node --test test/*.test.js",
+        "test": "node --test src/editor/test/*.test.js",
         "check": "sh scripts/check-no-html.sh",
         "leak": "sh scripts/leak-test.sh crates/soirvu-core"
     },

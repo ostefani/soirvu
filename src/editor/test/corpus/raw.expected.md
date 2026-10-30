@@ -1,9 +1,9 @@
 Words before the table.
 
 | Day | Mood | Note |
-|-----|------|------|
-| Mon | 4    | сказала "да" |
-| Tue | 2    | — |
+| --- | --- | --- |
+| Mon | 4 | сказала "да" |
+| Tue | 2 | — |
 
 Words between.
 
