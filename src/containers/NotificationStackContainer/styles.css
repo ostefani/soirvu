@@ -7,7 +7,7 @@
     z-index: 1000;
     box-sizing: border-box;
     width: min(29rem, calc(100vw - 1rem));
-    max-height: calc(100vh - 1rem);
+    max-height: calc(100% - 1rem);
     padding: 0.5rem;
     /* room for shadows and the fly offset inside the scroll clip */
     overflow-y: auto;

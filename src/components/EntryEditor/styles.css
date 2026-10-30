@@ -9,9 +9,8 @@
 .editor-pane {
     display: flex;
     flex-direction: column;
-    /* gap: 0.75rem; */
     max-width: 100%;
-    /* padding: 16px 0 16px 0; */
+    height: 100%;
 }
 
 /* One meta row: back button + metadata chips. */
@@ -253,7 +252,6 @@
 /* Document-style title: big, bold, borderless — the first
    line of the page, not a form field. */
 :global(.title-input) {
-    flex: 1;
     min-width: 0;
     font-weight: 700;
     font-size: 1.45rem;
@@ -284,11 +282,9 @@
 .editor-mount {
     border: 1px solid transparent;
     padding: 1.0rem 1.5rem;
-    min-height: 40vh;
 
     background-color: var(--color-surface);
     border: 1px solid var(--color-border-subtle);
-    /* border-radius: 12px; */
     border-bottom-left-radius: 12px;
     border-bottom-right-radius: 12px;
     box-shadow: 0 1px 3px var(--elevation-shadow);
@@ -297,40 +293,26 @@
 .editor-foot {
     display: grid;
     grid-template-columns: repeat(12, 1fr);
-    /* position: fixed; */
     bottom: 0;
     right: 0;
-    /* background: var(--color-canvas); */
     background-color: #0000001a;
-    /* width: calc(100% - 28% - 16px); */
     width: 100%;
     margin-top: 16px;
     height: 46px;
     overflow-x: hidden;
     align-items: center;
     border-radius: 12px;
-
-    /* grid-template-areas: 'status keep delete'; */
 }
 
-/*
-.editor-foot:hover {
-    width: 50%;
-    transition: width 1s ease;
-} */
-
 :global(.keep-button) {
-    /* grid-area: keep; */
     grid-column: 10 / -1;
 }
 
 :global(.confirm-button) {
-    /* grid-area: delete; */
     grid-column: 6 / 10;
 }
 
 :global(.delete-button) {
-    /* grid-area: delete; */
     grid-column: 10 / -1;
 }
 
@@ -340,22 +322,14 @@
     grid-column: 4 / 6;
 }
 
-/* Spaces render as typed: with the default white-space a
-   trailing space collapses until the next letter lands, so
-   typing looks like spaces are being eaten. break-spaces
-   (pre-wrap as the older-engine fallback) keeps every space
-   visible, which is what a text editor owes the typist. */
+/* To do: move height components into vars */
 :global(.editor-mount.ProseMirror) {
     outline: none;
-    min-height: 38vh;
-    white-space: pre-wrap;
+    height: calc(100% - 78px - 30px - 16px - 2.4rem - 2.95rem);
     white-space: break-spaces;
+    overflow-y: auto;
 }
 
-/* Prose rhythm: hierarchy comes from type, not chrome.
-   The editor's DOM is rendered by editor/view.js, so these
-   rules stay :global but fenced under .editor-mount — this
-   component is their owner. */
 .editor-mount :global(p) {
     margin: 0.4em 0;
     line-height: 1.65;
