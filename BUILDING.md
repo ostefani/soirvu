@@ -31,7 +31,7 @@ npm run tauri build
 ```
 
 produces the app and a `.dmg` under
-`src-tauri/target/release/bundle/`. The build is ad-hoc
+`target/release/bundle/`. The build is ad-hoc
 signed with the hardened runtime and no entitlements;
 `scripts/verify-release.sh` checks a built app.
 
@@ -68,7 +68,7 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
 npm run tauri build
 ```
 
-produces a `.deb` under `src-tauri/target/release/bundle/deb/`.
+produces a `.deb` under `target/release/bundle/deb/`.
 Install with `sudo apt install ./<the file>.deb`.
 
 ## Windows
@@ -86,7 +86,7 @@ npm run tauri build
 ```
 
 produces a per-user NSIS installer under
-`src-tauri/target/release/bundle/nsis/` — it needs no admin
+`target/release/bundle/nsis/` — it needs no admin
 rights and never touches existing vaults, on install,
 upgrade or uninstall.
 

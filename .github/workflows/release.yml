@@ -20,15 +20,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # src-tauri is a member of the root workspace, so cargo builds
+          # into the workspace-root target/, not src-tauri/target/.
           - os: macos-latest
             overlay: ""
-            verify: sh scripts/verify-release.sh src-tauri/target/release/bundle/macos/SoirVu.app
+            verify: sh scripts/verify-release.sh target/release/bundle/macos/SoirVu.app
           - os: ubuntu-26.04
             overlay: "--config src-tauri/tauri.linux.conf.json"
-            verify: sh scripts/verify-release-linux.sh src-tauri/target/release/soirvu
+            verify: sh scripts/verify-release-linux.sh target/release/soirvu
           - os: windows-latest
             overlay: "--config src-tauri/tauri.windows.conf.json"
-            verify: python scripts/verify-release-windows.py src-tauri/target/release/soirvu.exe
+            verify: python scripts/verify-release-windows.py target/release/soirvu.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -61,7 +63,7 @@ jobs:
       - name: Install smoke test (Ubuntu .deb)
         if: runner.os == 'Linux'
         run: |
-          deb=$(ls src-tauri/target/release/bundle/deb/*.deb)
+          deb=$(ls target/release/bundle/deb/*.deb)
           mkdir -p /tmp/fakevault && touch /tmp/fakevault/keep.txt
           sudo dpkg -i "$deb"
           test -x /usr/bin/soirvu
@@ -71,7 +73,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $exe = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          $exe = Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1
           New-Item -ItemType Directory -Force "$env:TEMP\fakevault" | Out-Null
           New-Item -ItemType File -Force "$env:TEMP\fakevault\keep.txt" | Out-Null
           Start-Process $exe.FullName -ArgumentList "/S" -Wait
@@ -82,9 +84,9 @@ jobs:
         with:
           name: installers-${{ runner.os }}
           path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/nsis/*.exe
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/deb/*.deb
+            target/release/bundle/nsis/*.exe
           if-no-files-found: error
 
   publish:

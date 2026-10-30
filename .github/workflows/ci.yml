@@ -88,7 +88,17 @@ jobs:
         shell: bash
         env:
           SOIRVU_MAKE_FIXTURE: ${{ runner.temp }}/fixture
-        run: cargo test -p soirvu-core --test cross_os -- --exact cross_os_fixture
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Git Bash shadows the tools step's PATH with its MSYS dirs:
+            # restore the Strawberry perl first, and prove it before the
+            # minutes-long OpenSSL build.
+            # shellcheck disable=SC1091
+            . "$(cygpath "$RUNNER_TEMP/soirvu-openssl-path.sh")"
+            test "$(command -v perl)" = "/c/Strawberry/perl/bin/perl"
+            perl -MLocale::Maketext::Simple -e 'print "perl-ok\n"'
+          fi
+          cargo test -p soirvu-core --test cross_os -- --exact cross_os_fixture
       - uses: actions/upload-artifact@v6
         with:
           name: fixture-${{ matrix.os }}
@@ -121,6 +131,13 @@ jobs:
       - name: Open every OS's fixture vault here
         shell: bash
         run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Same MSYS shadowing as the fixture-creation step above.
+            # shellcheck disable=SC1091
+            . "$(cygpath "$RUNNER_TEMP/soirvu-openssl-path.sh")"
+            test "$(command -v perl)" = "/c/Strawberry/perl/bin/perl"
+            perl -MLocale::Maketext::Simple -e 'print "perl-ok\n"'
+          fi
           for d in "${RUNNER_TEMP}"/incoming/*/; do
             echo "opening $d"
             SOIRVU_OPEN_FIXTURE="$d" cargo test -p soirvu-core --test cross_os -- --exact cross_os_fixture
@@ -178,7 +195,9 @@ jobs:
       - name: Build the app (ad-hoc signed, hardened runtime)
         run: npm run tauri build
       - name: Verify the signature (§9)
-        run: sh scripts/verify-release.sh src-tauri/target/release/bundle/macos/SoirVu.app
+        # src-tauri is a member of the root workspace, so cargo builds
+        # into the workspace-root target/, not src-tauri/target/.
+        run: sh scripts/verify-release.sh target/release/bundle/macos/SoirVu.app
       # The plaintext-leak test (§10) is manual by design: it asks
       # for two canary entries in a scratch vault, then scans the
       # disk after quit. It cannot run headless in CI; see

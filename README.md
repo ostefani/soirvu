@@ -60,7 +60,7 @@ Prerequisites: Rust toolchain (via [rustup](https://rustup.rs)) and Node.js 24 L
 
 ```sh
 npm ci --ignore-scripts
-npm run tauri build    # local use: installers land under src-tauri/target/release/bundle/
+npm run tauri build    # local use: installers land under target/release/bundle/
 npm run tauri dev      # development with hot reload
 
 # checks and tests
