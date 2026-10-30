@@ -877,8 +877,9 @@ pub async fn vault_fork_import(app: AppHandle, mut passphrase: String) -> Result
 }
 
 /// Changes the open vault's passphrase (§13 Phase 6). The
-/// core verifies the current one; the KDF for the new slot is
-/// calibrated like at creation.
+/// core verifies the current one; the new slot reuses the
+/// vault's stored KDF parameters, so a change never
+/// recalibrates unlock cost.
 #[tauri::command]
 pub async fn vault_change_passphrase(
     app: AppHandle,
@@ -889,8 +890,7 @@ pub async fn vault_change_passphrase(
         let mut current = current_passphrase;
         let mut new = new_passphrase;
         let result = state.with_vault(|vault| {
-            let kdf = KdfParams::calibrate(Duration::from_millis(750))?;
-            vault.change_passphrase(&current, &new, kdf)?;
+            vault.change_passphrase(&current, &new)?;
             Ok(())
         });
         current.zeroize();

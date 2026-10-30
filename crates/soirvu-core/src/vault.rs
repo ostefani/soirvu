@@ -145,6 +145,20 @@ impl VaultHeader {
         Ok((header, recovery, master))
     }
 
+    /// The Argon2id settings of the passphrase slot: the
+    /// vault's unlock-cost policy, chosen by calibration at
+    /// creation. Passphrase changes reuse these verbatim, so a
+    /// change never retunes what an unlock costs or which
+    /// machines can afford it.
+    pub fn passphrase_kdf(&self) -> Result<KdfParams> {
+        for slot in &self.slots {
+            if let Slot::Passphrase { kdf, .. } = slot {
+                return Ok(*kdf);
+            }
+        }
+        Err(Error::InvalidHeader("no passphrase slot".into()))
+    }
+
     /// This header with its passphrase slot re-wrapped under
     /// a new passphrase (fresh salt, the given KDF parameters).
     /// The recovery slot is carried over byte for byte — its
@@ -164,7 +178,12 @@ impl VaultHeader {
         let slot_aad = aad(FORMAT_VERSION, SUITE, &self.vault_id, &passphrase_description(&kdf));
         let (nonce, wrapped) = wrap_key(&kek, master.key(), &slot_aad)?;
         let mut header = self.clone();
-        header.slots[0] = Slot::Passphrase {
+        let at = header
+            .slots
+            .iter()
+            .position(|slot| matches!(slot, Slot::Passphrase { .. }))
+            .ok_or_else(|| Error::InvalidHeader("no passphrase slot".into()))?;
+        header.slots[at] = Slot::Passphrase {
             kdf,
             salt: HEXLOWER.encode(&salt),
             nonce: HEXLOWER.encode(&nonce),
