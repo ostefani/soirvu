@@ -5,7 +5,7 @@
 </script>
 
 {#snippet control()}
-    <select name={field.name} {disabled} value onchange={(e) => onchange?.(e)}>
+    <select name={field.name} {disabled} value={value} onchange={(e) => onchange?.(e)}>
         {#each field.options as option (option.value)}
             <option value={option.value}>{option.label}</option>
         {/each}

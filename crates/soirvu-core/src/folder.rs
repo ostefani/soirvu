@@ -212,13 +212,21 @@ impl Vault {
     /// is rewritten — the master key does not change, so no
     /// entry, attachment or database page is re-encrypted,
     /// and this open session simply continues.
+    ///
+    /// The vault keeps its stored Argon2id settings: the new
+    /// slot re-wraps the same master key under the new
+    /// passphrase with the existing KDF parameters. A change
+    /// never recalibrates — calibrating here could silently
+    /// weaken the vault on a throttled machine, strand it on
+    /// weaker devices after tuning up elsewhere, and move
+    /// unlock cost as a side effect of an unrelated action.
     pub fn change_passphrase(
         &mut self,
         current_passphrase: &str,
         new_passphrase: &str,
-        kdf: KdfParams,
     ) -> Result<()> {
         self.header.unlock_with_passphrase(current_passphrase)?;
+        let kdf = self.header.passphrase_kdf()?;
         let header = self
             .header
             .with_new_passphrase(new_passphrase, &self.master, kdf)?;
@@ -646,9 +654,9 @@ mod tests {
     fn passphrase_change_and_recovery_regeneration() {
         let (tmp, mut vault, recovery) = new_vault_with_note();
         vault
-            .change_passphrase("not the passphrase", "second passphrase", fast())
+            .change_passphrase("not the passphrase", "second passphrase")
             .expect_err("the current passphrase is the proof");
-        vault.change_passphrase(PASSPHRASE, "second passphrase", fast()).unwrap();
+        vault.change_passphrase(PASSPHRASE, "second passphrase").unwrap();
 
         let new_recovery = vault.regenerate_recovery("second passphrase").unwrap();
         vault.lock();
@@ -660,6 +668,25 @@ mod tests {
         assert_eq!(read_note(&by_new_pass), CANARY); // data untouched
         by_new_pass.lock();
         assert!(Vault::open_with_recovery(&dir, &new_recovery).is_ok());
+    }
+
+    #[test]
+    fn passphrase_change_keeps_the_vaults_kdf_params() {
+        // A change re-wraps the master key under the new
+        // passphrase with the STORED Argon2id settings — it
+        // never recalibrates, so unlock cost and portability
+        // survive the change byte for byte.
+        let distinctive = KdfParams { m_kib: 32, t: 2, p: 1 };
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("v");
+        let (mut vault, _recovery) = Vault::create(&dir, PASSPHRASE, distinctive).unwrap();
+        vault.change_passphrase(PASSPHRASE, "second passphrase").unwrap();
+        vault.lock();
+
+        assert!(Vault::open_with_passphrase(&dir, PASSPHRASE).is_err());
+        let reopened = Vault::open_with_passphrase(&dir, "second passphrase").unwrap();
+        assert_eq!(reopened.header().passphrase_kdf().unwrap(), distinctive);
+        reopened.lock();
     }
 
 

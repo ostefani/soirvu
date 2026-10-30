@@ -52,9 +52,9 @@ pub async fn settings_set(app: AppHandle, settings: Settings) -> Result<(), Stri
 
 /// Picks the backup folder with the native dialog and stores
 /// the PATH in Rust (app.json). The UI gets back the updated
-/// settings, whose backup_location is a display name only —
-/// the one settings value that cannot travel through
-/// settings_set, because paths never cross the IPC boundary.
+/// settings, whose backup_location is the full path (read-only:
+/// settings_set ignores the value it is sent back) — the user
+/// should always know where the backups are.
 #[tauri::command]
 pub async fn settings_pick_backup_dir(app: AppHandle) -> Result<Option<Settings>, String> {
     let Some(path) = crate::commands::vault::pick_folder(&app).await else {

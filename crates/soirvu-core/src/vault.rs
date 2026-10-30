@@ -73,6 +73,10 @@ fn passphrase_description(kdf: &KdfParams) -> String {
 const RECOVERY_DESCRIPTION: &str = "recovery";
 const DEVICE_DESCRIPTION: &str = "device";
 
+fn no_passphrase_slot() -> Error {
+    Error::InvalidHeader("no passphrase slot".into())
+}
+
 /// Hex text -> exactly N bytes.
 fn decode_fixed<const N: usize>(text: &str, field: &str) -> Result<[u8; N]> {
     let bytes = HEXLOWER
@@ -145,6 +149,21 @@ impl VaultHeader {
         Ok((header, recovery, master))
     }
 
+    /// The Argon2id settings of the passphrase slot: the
+    /// vault's unlock-cost policy, chosen by calibration at
+    /// creation. Passphrase changes reuse these verbatim, so a
+    /// change never retunes what an unlock costs or which
+    /// machines can afford it.
+    pub fn passphrase_kdf(&self) -> Result<KdfParams> {
+        self.slots
+            .iter()
+            .find_map(|slot| match slot {
+                Slot::Passphrase { kdf, .. } => Some(*kdf),
+                _ => None,
+            })
+            .ok_or_else(no_passphrase_slot)
+    }
+
     /// This header with its passphrase slot re-wrapped under
     /// a new passphrase (fresh salt, the given KDF parameters).
     /// The recovery slot is carried over byte for byte — its
@@ -164,7 +183,12 @@ impl VaultHeader {
         let slot_aad = aad(FORMAT_VERSION, SUITE, &self.vault_id, &passphrase_description(&kdf));
         let (nonce, wrapped) = wrap_key(&kek, master.key(), &slot_aad)?;
         let mut header = self.clone();
-        header.slots[0] = Slot::Passphrase {
+        let slot = header
+            .slots
+            .iter_mut()
+            .find(|slot| matches!(slot, Slot::Passphrase { .. }))
+            .ok_or_else(no_passphrase_slot)?;
+        *slot = Slot::Passphrase {
             kdf,
             salt: HEXLOWER.encode(&salt),
             nonce: HEXLOWER.encode(&nonce),
@@ -525,6 +549,24 @@ mod tests {
             changed.unlock_with_passphrase(PASSPHRASE),
             Err(Error::Unlock)
         ));
+    }
+
+    #[test]
+    fn rewrap_finds_the_passphrase_slot_wherever_it_is() {
+        let (header, recovery, master) = new_vault();
+        // The passphrase slot is not always first: the lookup
+        // must follow the variant, not the index.
+        let mut reordered = header.clone();
+        reordered.slots.swap(0, 1);
+        let rewrapped = reordered
+            .with_new_passphrase("new passphrase", &master, fast())
+            .unwrap();
+        // The new passphrase opens with the original master key,
+        // and the recovery slot survived the rewrite untouched.
+        let opened = rewrapped.unlock_with_passphrase("new passphrase").unwrap();
+        assert!(opened.as_bytes() == master.as_bytes());
+        assert!(rewrapped.unlock_with_recovery(&recovery).is_ok());
+        assert_eq!(rewrapped.passphrase_kdf().unwrap(), fast());
     }
 
     #[test]

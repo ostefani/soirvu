@@ -106,10 +106,12 @@ pub struct Settings {
     #[serde(default)]
     pub backup_schedule: BackupSchedule,
     pub caps: Caps,
-    /// Display name of the backup folder (never a path — paths
-    /// stay in Rust). Derived from AppConfig::backup_dir whenever
-    /// settings are read; the value sent back by settings_set is
-    /// ignored. Null until a folder is picked.
+    /// Where backups go, as a full path. Derived from
+    /// AppConfig::backup_dir whenever settings are read; the
+    /// value sent back by settings_set is ignored. The full
+    /// path is shown on purpose, like the diary's own home:
+    /// the user should always know where the backups are.
+    /// Null until a folder is picked.
     #[serde(default)]
     pub backup_location: Option<String>,
     /// Where the open diary lives, as a full path (derived like
@@ -359,7 +361,11 @@ impl AppState {
     pub fn settings(&self) -> Settings {
         let inner = self.inner.lock().unwrap();
         let mut settings = inner.config.settings.clone();
-        settings.backup_location = inner.config.backup_dir.as_deref().map(folder_display_name);
+        settings.backup_location = inner
+            .config
+            .backup_dir
+            .as_deref()
+            .map(|path| path.to_string_lossy().into_owned());
         settings.platform = std::env::consts::OS.to_string();
         settings.vault_location = inner.current.as_ref().and_then(|id| {
             inner
@@ -1408,6 +1414,20 @@ mod tests {
         state.set_sync_dir(&id, None).unwrap();
         assert_eq!(stored_sync_dir(&state, &id), None);
         assert_eq!(state.settings().sync_location, None);
+    }
+
+    #[test]
+    fn the_backup_location_is_shown_as_a_full_path() {
+        let (dir, state, _id) = state_with_vault();
+        assert_eq!(state.settings().backup_location, None);
+        let root = dir.path().join("backups");
+        state.set_backup_dir(Some(root.clone())).unwrap();
+        assert_eq!(
+            state.settings().backup_location,
+            Some(root.to_string_lossy().into_owned())
+        );
+        state.set_backup_dir(None).unwrap();
+        assert_eq!(state.settings().backup_location, None);
     }
 
     #[test]

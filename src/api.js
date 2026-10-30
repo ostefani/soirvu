@@ -71,8 +71,8 @@ import { listen } from "@tauri-apps/api/event";
  * @property {number} lock_timeout_secs
  * @property {boolean} strip_exif
  * @property {{ image_mb: number, pdf_mb: number, audio_mb: number, video_mb: number }} caps
- * @property {string | null} backup_location Display name of the backup
- *   folder (never a path). Read-only here: it changes only through
+ * @property {string | null} backup_location Full path of the backup
+ *   folder. Read-only here: it changes only through
  *   settingsPickBackupDir / settingsClearBackupDir.
  * @property {string} platform The OS this build runs on
  *   ("macos", "linux", "windows"); the UI offers only what
