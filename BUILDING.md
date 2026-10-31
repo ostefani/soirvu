@@ -136,3 +136,11 @@ Verifying a downloaded release:
 sha256sum -c SHA256SUMS
 minisign -Vm SHA256SUMS -p soirvu.pub
 ```
+
+Without installing anything (macOS ships no `sha256sum`; Docker covers both tools):
+
+```sh
+cd <the folder holding SHA256SUMS>
+docker run --rm -v "$PWD:/work" -w /work debian:stable-slim \
+  bash -c "apt-get update -qq && apt-get install -y -qq minisign && minisign -Vm SHA256SUMS -P RWR7gXjtSq1lhJBJCuEa6CSPBBwsUuvK08vQ7K6OhR5ljSNCpymcNXGX && sha256sum -c SHA256SUMS"
+```

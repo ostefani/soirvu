@@ -1,11 +1,11 @@
 [package]
 name = "soirvu-cli"
-version = "1.0.2"
+version = "1.0.4"
 edition = "2024"
 publish = false
 
 [dependencies]
-soirvu-core = { path = "../soirvu-core", version = "1.0.2" }
+soirvu-core = { path = "../soirvu-core", version = "1.0.4" }
 
 [dev-dependencies]
 tempfile = "3.27.0"

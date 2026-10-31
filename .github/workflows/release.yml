@@ -178,6 +178,10 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           draft: true
+          # Auto-generated "What's Changed" (merged PRs since the last
+          # tag). Curated top matter — highlights, verify instructions —
+          # is added by editing the published notes once, by hand.
+          generate_release_notes: true
           files: dist/*
       - name: Publish the release (locked from here on)
         env:

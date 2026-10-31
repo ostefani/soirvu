@@ -46,6 +46,8 @@ want = [
     # publish flattens the merged artifact tree before checksumming
     # (v1.0.2 failed on `sha256sum *` over deb/ dmg/ nsis/ dirs).
     "rmdir deb dmg nsis",
+    # publish auto-generates the "What's Changed" PR list.
+    "generate_release_notes",
 ]
 missing = [w for w in want if w not in wf_text]
 if missing:
