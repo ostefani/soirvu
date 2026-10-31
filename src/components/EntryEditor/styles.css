@@ -325,7 +325,7 @@
 /* To do: move height components into vars */
 :global(.editor-mount.ProseMirror) {
     outline: none;
-    height: calc(100% - 78px - 30px - 16px - 2.4rem - 2.95rem);
+    height: calc(100% - 78px - 30px - 16px - 10px - 2.4rem - 2.95rem);
     white-space: break-spaces;
     overflow-y: auto;
 }

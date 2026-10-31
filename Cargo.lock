@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "SoirVu"
-version = "1.0.0"
+version = "1.0.2"
 dependencies = [
  "block2",
  "insta",
@@ -3405,7 +3405,7 @@ dependencies = [
 
 [[package]]
 name = "soirvu-cli"
-version = "1.0.0"
+version = "1.0.2"
 dependencies = [
  "soirvu-core",
  "tempfile",
@@ -3413,7 +3413,7 @@ dependencies = [
 
 [[package]]
 name = "soirvu-core"
-version = "1.0.0"
+version = "1.0.2"
 dependencies = [
  "argon2",
  "chacha20poly1305",

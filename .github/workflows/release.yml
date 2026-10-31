@@ -108,7 +108,9 @@ jobs:
         run: |
           deb=$(ls target/release/bundle/deb/*.deb)
           mkdir -p /tmp/fakevault && touch /tmp/fakevault/keep.txt
-          sudo dpkg -i "$deb"
+          # apt (not dpkg -i) so declared deps resolve from the
+          # archive — same flow BUILDING.md documents for users.
+          sudo apt-get install -y "./$deb"
           test -x /usr/bin/soirvu
           sudo dpkg -r soir-vu
           test -f /tmp/fakevault/keep.txt

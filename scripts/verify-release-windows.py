@@ -66,6 +66,9 @@ def main() -> int:
     # directory index 10) must exist and its GuardFlags must
     # carry CF instrumented (0x100) — the DllCharacteristics
     # GUARD_CF bit alone only says the image is CF-aware.
+    # GuardFlags is the DWORD after GuardCFFunctionCount:
+    # offset 0x90 in a 64-bit load config (0x48 there is
+    # ProcessAffinityMask, not GuardFlags).
     dd_base = opt + 112
     load_cfg_rva, load_cfg_size = struct.unpack_from("<II", data, dd_base + 10 * 8)
     sections = []
@@ -83,10 +86,10 @@ def main() -> int:
         return None
 
     guard_ok = False
-    if load_cfg_rva and load_cfg_size >= 0x48:
+    if load_cfg_rva and load_cfg_size >= 0x94:
         off = rva_to_off(load_cfg_rva)
         if off is not None:
-            (guard_flags,) = struct.unpack_from("<I", data, off + 0x48)
+            (guard_flags,) = struct.unpack_from("<I", data, off + 0x90)
             guard_ok = bool(guard_flags & 0x100)
     if guard_ok:
         print("ok: Control Flow Guard instrumented")

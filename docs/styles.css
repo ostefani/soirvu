@@ -140,6 +140,7 @@ main>section:not(.hero) {
     border-top: 0;
     text-align: center;
     overflow: hidden;
+    height: calc(100vh - 60px);
 }
 
 /* .hero::before {
