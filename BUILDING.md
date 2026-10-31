@@ -73,8 +73,10 @@ Install with `sudo apt install ./<the file>.deb`.
 
 ## Windows
 
-Not tested by the maintainer ( CI builds and tests it; the
-editor and lock behaviour on Windows await a Windows user).
+Windows is CI-supported: every release is built, tested, and
+install/uninstall smoke-tested on Windows in CI. The maintainer
+has no Windows machine, so editor and lock behaviour there is
+verified by user reports rather than daily use.
 Prerequisites:
 
 - Visual Studio Build Tools with the C++ workload (MSVC)

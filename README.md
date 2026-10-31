@@ -52,7 +52,9 @@ Tauri v2 · Rust core (SQLCipher, XChaCha20-Poly1305, Argon2id) · Svelte 5 UI �
 
 ## Status
 
-Early development. CI builds and tests on macOS, Linux and Windows, and tagged releases ship installers for all three (see [BUILDING.md](BUILDING.md)); macOS is the maintainer's daily driver.
+1.0. Vaults, JSON exports, and CLI commands stay compatible within `1.x`: anything written by an older `1.x` release opens in a newer one. Database migrations are append-only, so old vaults upgrade automatically.
+
+macOS and Ubuntu LTS are maintainer-verified. Windows installers are built, tested, and install/uninstall smoke-tested in CI for every release and ship alongside the others (see [BUILDING.md](BUILDING.md)); the maintainer has no Windows machine, so day-to-day Windows behavior is verified by user reports.
 
 ## Building
 
