@@ -9,7 +9,7 @@ commit and compare, and each release publishes `SHA256SUMS`
 with a minisign signature:
 
 ```
-minisign -Vm SHA256SUMS -P <the public key from the release notes>
+minisign -Vm SHA256SUMS -P RWR7gXjtSq1lhJBJCuEa6CSPBBwsUuvK08vQ7K6OhR5ljSNCpymcNXGX
 sha256sum -c SHA256SUMS
 ```
 
@@ -127,7 +127,7 @@ has one). Put the public key here and in the README:
 
 ```
 minisign -G -p soirvu.pub -s soirvu.key
-# public key: RW… (paste yours here)
+# public key: RWR7gXjtSq1lhJBJCuEa6CSPBBwsUuvK08vQ7K6OhR5ljSNCpymcNXGX
 ```
 
 Verifying a downloaded release:

@@ -1,6 +1,6 @@
 [package]
 name = "SoirVu"
-version = "1.0.0"
+version = "1.0.2"
 publish = false
 description = "SoirVu - an encrypted personal diary"
 authors = ["Olha Stefanishyna"]
@@ -36,7 +36,7 @@ zeroize = "1"
 # statfs for the §3 filesystem warning (network shares).
 libc = "0.2"
 
-soirvu-core = { path = "../crates/soirvu-core", version = "1.0.0" }
+soirvu-core = { path = "../crates/soirvu-core", version = "1.0.2" }
 tauri-plugin-dialog = "2"
 
 [dev-dependencies]

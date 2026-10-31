@@ -24,7 +24,7 @@ A local-first, encrypted personal diary.
 
 Page [https://ostefani.github.io/soirvu/](https://ostefani.github.io/soirvu/)
 
-SoirVu keeps your diary in an encrypted vault on your own machine. There is no account, no cloud and no network access: your entries are unreadable to anything that reads the files, and readable only by you, with your passphrase.
+SoirVu keeps your diary in an encrypted vault on your own machine. It requires no account, runs no cloud service and makes no network connections. Unlock your vault with your passphrase or recovery key.
 
 <table>
   <tr>
@@ -33,28 +33,35 @@ SoirVu keeps your diary in an encrypted vault on your own machine. There is no a
   </tr>
 </table>
 
+## Getting started
+
+You can download unsigned installers or build from source. How to build from source see [Building](#building)
+
+Download an installer for your platform from [GitHub Releases](https://github.com/ostefani/soirvu/releases). Installers are unsigned; see [BUILDING.md](BUILDING.md) for platform instructions and release verification.
+
+Open SoirVu, choose a location for your vault and create a passphrase. Save the recovery key shown during setup somewhere safe: it is shown only once.
+
 ## Features
 
 - [x] **Encrypted vault** — entries live in a SQLCipher database; attachments are stored as separately encrypted files. Keys are derived with Argon2id and wrapped in LUKS-style key slots, so changing your passphrase doesn't re-encrypt your diary.
 - [x] **Recovery key** — a randomly generated key shown once at setup lets you back in if the passphrase is forgotten. Without either, the diary is unrecoverable — by design.
-- [x] **Markdown, always** — entries are stored as plain Markdown and edited in a WYSIWYG editor built on ProseMirror. No proprietary format: export everything to a folder of `.md` files in one click, or use the `soirvu-cli` tool to verify, export or rekey a vault without the app.
+- [x] **Markdown, always** — entries are stored as Markdown and edited in a WYSIWYG editor built on ProseMirror. Export entries and attachments to a folder, or use `soirvu-cli` to verify or export a vault without the app. Exports are unencrypted.
 - [x] **Your choice of location** — the vault is an ordinary folder: internal disk, external drive, or a mounted encrypted disk image.
+- [x] **Backups and sync** — make encrypted backups manually or on a schedule. Optional sync writes encrypted bundles to a separate folder that another tool or a USB drive can carry between devices.
 - [x] **Encrypted full-text search** — search runs inside the encrypted database; nothing is indexed in plaintext.
 - [x] **Auto-lock** — the vault locks on idle, sleep, screen lock or manual shortcut, and the keys are wiped from memory.
+- [x] **Key management** — change your passphrase, regenerate your recovery key or rotate the vault's master key in the app.
 
 ## Security model
 
-The Rust core owns all keys, all file access and all cryptography; the UI never sees a key or a filesystem path. Encryption protects your diary at rest — it cannot protect text while you are reading it, so auto-lock exists to shrink that window. Keyloggers, screen recorders and a compromised OS are explicitly out of scope.
+The Rust backend handles vault keys, cryptography and vault file operations. Encryption protects your diary at rest — it cannot protect text while you are reading it, so auto-lock exists to shrink that window. Keyloggers, screen recorders and a compromised OS are explicitly out of scope.
 
 ## Tech
 
-Tauri v2 · Rust core (SQLCipher, XChaCha20-Poly1305, Argon2id) · Svelte 5 UI · ProseMirror editor with Markdown as the only stored format.
-
-## Status
-
-1.0. Vaults, JSON exports, and CLI commands stay compatible within `1.x`: anything written by an older `1.x` release opens in a newer one. Database migrations are append-only, so old vaults upgrade automatically.
-
-macOS and Ubuntu LTS are maintainer-verified. Windows installers are built, tested, and install/uninstall smoke-tested in CI for every release and ship alongside the others (see [BUILDING.md](BUILDING.md)); the maintainer has no Windows machine, so day-to-day Windows behavior is verified by user reports.
+- Tauri v2
+- Rust core (SQLCipher, XChaCha20-Poly1305, Argon2id)
+- Svelte 5 UI
+- ProseMirror editor with Markdown as the only stored format.
 
 ## Building
 
@@ -73,9 +80,9 @@ cargo test -p soirvu-core -p soirvu-cli
 # manual plaintext-leak test (needs a scratch vault)
 sh scripts/leak-test.sh <path-to-test-vault-folder>
 
-# build for local use
-npm run tauri build
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development checks and contribution guidelines.
 
 ## License
 

@@ -27,6 +27,8 @@ jobs:
         run: sh scripts/check-platform-cfg.sh
       - name: Release paths match the cargo binary (§9)
         run: sh scripts/check-release-paths.sh
+      - name: Windows verifier parses a synthetic PE (§9)
+        run: python3 scripts/test-verify-windows.py
 
   core:
     strategy:
