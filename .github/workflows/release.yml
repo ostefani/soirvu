@@ -7,28 +7,63 @@ name: release
 # this repository's secrets (MINISIGN_SECRET_KEY); the
 # public key is in BUILDING.md, and building from source
 # remains the trust anchor (see BUILDING.md).
+# The installers themselves stay ad-hoc-signed (macOS) and
+# unsigned (Windows) by design for source-first distribution;
+# Developer ID / Authenticode signing is the step up if the
+# audience ever needs OS-vendor trust.
 on:
   push:
     tags: ["v*"]
 
+# Least privilege: build jobs only read and upload artifacts; only
+# `publish` can write (the release) and read back artifacts.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  gate:
+    # A tag can point at any commit, so a tag alone proves nothing.
+    # Publishing requires a green `ci` run on the exact tagged SHA;
+    # anything else — including an API error — refuses the release.
+    # (The tagged commit almost always already passed CI on main,
+    # so the common path finds that run immediately.)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+    steps:
+      - name: Require a green CI run on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          green="$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --limit 20 \
+            --json conclusion,status \
+            --jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length')"
+          test "${green:-0}" -gt 0 || {
+            echo "FAIL: no successful ci.yml run on $GITHUB_SHA — rerun this job after CI goes green"
+            exit 1
+          }
+          echo "OK: CI passed on the tagged commit"
+
   build:
+    needs: gate
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          # src-tauri is a member of the root workspace, so cargo builds
+          # into the workspace-root target/, not src-tauri/target/.
+          - os: macos-15
             overlay: ""
-            verify: sh scripts/verify-release.sh src-tauri/target/release/bundle/macos/SoirVu.app
+            verify: sh scripts/verify-release.sh target/release/bundle/macos/SoirVu.app
           - os: ubuntu-26.04
             overlay: "--config src-tauri/tauri.linux.conf.json"
-            verify: sh scripts/verify-release-linux.sh src-tauri/target/release/soirvu
-          - os: windows-latest
+            verify: sh scripts/verify-release-linux.sh target/release/soirvu
+          - os: windows-2025
             overlay: "--config src-tauri/tauri.windows.conf.json"
-            verify: python scripts/verify-release-windows.py src-tauri/target/release/soirvu.exe
+            verify: python scripts/verify-release-windows.py target/release/soirvu.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -61,7 +96,7 @@ jobs:
       - name: Install smoke test (Ubuntu .deb)
         if: runner.os == 'Linux'
         run: |
-          deb=$(ls src-tauri/target/release/bundle/deb/*.deb)
+          deb=$(ls target/release/bundle/deb/*.deb)
           mkdir -p /tmp/fakevault && touch /tmp/fakevault/keep.txt
           sudo dpkg -i "$deb"
           test -x /usr/bin/soirvu
@@ -71,7 +106,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $exe = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          $exe = Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1
           New-Item -ItemType Directory -Force "$env:TEMP\fakevault" | Out-Null
           New-Item -ItemType File -Force "$env:TEMP\fakevault\keep.txt" | Out-Null
           Start-Process $exe.FullName -ArgumentList "/S" -Wait
@@ -82,32 +117,42 @@ jobs:
         with:
           name: installers-${{ runner.os }}
           path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/nsis/*.exe
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/deb/*.deb
+            target/release/bundle/nsis/*.exe
           if-no-files-found: error
 
   publish:
     needs: build
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    # Needs a `release` environment in the repo settings holding the
+    # Minisign secrets (and any required reviewers): until one exists
+    # this only names the intent, but with it configured the secrets
+    # stay withheld and the job gated until approval.
+    environment: release
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v7
         with:
           pattern: installers-*
           merge-multiple: true
           path: dist
+      - name: Install minisign (no secrets in this step)
+        run: sudo apt-get install -y minisign
       - name: Checksums and signature
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
-          sudo apt-get install -y minisign
           cd dist
           sha256sum * > SHA256SUMS
-          printf '%s' "$MINISIGN_SECRET_KEY" > /tmp/minisign.key
-          minisign -S -s /tmp/minisign.key -x SHA256SUMS.minisig -m SHA256SUMS <<< "$MINISIGN_PASSWORD"
-          rm /tmp/minisign.key
+          keyfile="$(mktemp "$RUNNER_TEMP/minisign.XXXXXX")"
+          chmod 600 "$keyfile"
+          trap 'rm -f "$keyfile"' EXIT
+          printf '%s' "$MINISIGN_SECRET_KEY" > "$keyfile"
+          minisign -S -s "$keyfile" -x SHA256SUMS.minisig -m SHA256SUMS <<< "$MINISIGN_PASSWORD"
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*

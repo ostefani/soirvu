@@ -2,14 +2,16 @@
 // Copyright (c) 2026 Olha Stefanishyna
 // Markdown <-> document for the SoirVu editor (DESIGN §6.5).
 //
-// Parsing: markdown-it (HTML off) tokenizes the whole note. Before
-// tokenizing, unsupported TOP-LEVEL blocks (tables, raw HTML blocks,
-// footnote definitions — anything with no editor meaning) are cut out
-// by their source line ranges and replaced with a fenced block whose
-// info string is RAW_INFO; the parser turns those fences into
+// Parsing: markdown-it tokenizes the whole note. Before
+// tokenizing, unsupported TOP-LEVEL blocks (raw HTML blocks,
+// footnote definitions — anything with no editor meaning) are cut
+// out by their source line ranges and replaced with a fenced block
+// whose info string is RAW_INFO; the parser turns those fences into
 // raw_block nodes holding the original lines, and the serializer
-// writes them back unchanged. Reference links elsewhere in the note
-// still resolve, because the rest of the note is parsed in one pass.
+// writes them back unchanged. Pipe tables, by contrast, are
+// first-class nodes (Phase 7): they parse to table rows and cells
+// and serialize back normalized. Reference links elsewhere in the
+// note still resolve, because the rest of the note is parsed in one pass.
 //
 // Everything the parser cannot map becomes text or a raw_block.
 // Nothing is silently dropped: a construct the spike does not know
@@ -371,13 +373,27 @@ const serializer = new MarkdownSerializer(
             // the cell rendering below measures state.out, and a
             // flush landing mid-measure would corrupt the row.
             state.write();
-            const delim = { left: ":---", center: ":---:", right: "---:", none: "---" };
+            const aligns = { left: ":---", center: ":---:", right: "---:", none: "---" };
             node.forEach((row, _o, rowIndex) => {
                 let line = "|";
                 row.forEach((cell) => {
                     line += " ";
+                    // Measuring means the render must land in out
+                    // with nothing else interleaved — but nested in
+                    // a quote or a list, the cell's own write would
+                    // re-emit the line-prefix delimiter into the
+                    // measured segment (a bare newline from the
+                    // previous row ends the line, so the delimiter
+                    // fires again). Suppress it while measuring and
+                    // restore it before the row itself is written.
+                    const outer = state.delim;
+                    state.delim = "";
                     const start = state.out.length;
-                    if (cell.firstChild) state.renderInline(cell.firstChild);
+                    try {
+                        if (cell.firstChild) state.renderInline(cell.firstChild);
+                    } finally {
+                        state.delim = outer;
+                    }
                     const seg = state.out.slice(start);
                     state.out = state.out.slice(0, start);
                     // A literal pipe in cell text would split the
@@ -395,7 +411,7 @@ const serializer = new MarkdownSerializer(
                 if (rowIndex === 0) {
                     let marks = "|";
                     row.forEach((cell) => {
-                        marks += " " + delim[cell.attrs.align || "none"] + " |";
+                        marks += " " + aligns[cell.attrs.align || "none"] + " |";
                     });
                     state.write(marks);
                     state.write("\n");
@@ -450,10 +466,9 @@ export function parseMarkdown(source) {
         return parser.parse(extractRawBlocks(source));
     } catch (err) {
         // A diary must open every note it has ever saved. A construct
-        // nested where raw capture cannot reach it (a table inside a
-        // blockquote) fails the parse with "Token type ... not
-        // supported"; rather than refuse to open, keep the whole note
-        // as one raw block — every byte preserved, edited as text.
+        // the renderer cannot map fails the parse with "Token type ...
+        // not supported"; rather than refuse to open, keep the whole
+        // note as one raw block — every byte preserved, edited as text.
         if (!/^Token type /.test(err.message)) throw err;
         const text = source.replace(/\n+$/, "");
         const raw = schema.node(

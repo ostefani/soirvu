@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { parseMarkdown, serializeMarkdown } from "../src/index.js";
+import { parseMarkdown, serializeMarkdown } from "../index.js";
 
 const corpus = (name) =>
     readFileSync(
@@ -39,16 +39,21 @@ for (const name of ROUND_TRIP) {
     });
 }
 
-test("the table in raw.md is a raw_block, holding its exact lines", () => {
+test("the table in raw.md is a table node; HTML and footnotes stay raw", () => {
     const doc = parseMarkdown(corpus("raw.md"));
+    const tables = [];
     const raws = [];
     doc.descendants((node) => {
+        if (node.type.name === "table") tables.push(node);
         if (node.type.name === "raw_block") raws.push(node.textContent);
     });
-    assert.equal(raws.length, 3); // table, HTML block, footnote def
-    assert.ok(raws[0].startsWith("| Day | Mood | Note |"));
-    assert.ok(raws[1].startsWith('<div class="embed">'));
-    assert.ok(raws[2].startsWith("[^1]: The footnote text"));
+    assert.equal(tables.length, 1);
+    const head = [];
+    tables[0].firstChild.forEach((cell) => head.push(cell.textContent));
+    assert.deepEqual(head, ["Day", "Mood", "Note"]);
+    assert.equal(raws.length, 2); // HTML block, footnote def
+    assert.ok(raws[0].startsWith('<div class="embed">'));
+    assert.ok(raws[1].startsWith("[^1]: The footnote text"));
 });
 
 test("a deleted-entry danger never happens: footnote def with no recognized ref is kept", () => {
@@ -56,12 +61,14 @@ test("a deleted-entry danger never happens: footnote def with no recognized ref 
     assert.equal(serializeMarkdown(parseMarkdown(src)), src);
 });
 
-test("a table inside a blockquote degrades to one raw block, byte exact", () => {
+test("a table inside a blockquote keeps its cells and restabilizes", () => {
     const src = "> quote\n>\n> | A |\n> |---|\n> | 1 |";
-    const doc = parseMarkdown(src);
-    assert.equal(doc.childCount, 1);
-    assert.equal(doc.firstChild.type.name, "raw_block");
-    assert.equal(serializeMarkdown(doc), src);
+    const once = serializeMarkdown(parseMarkdown(src));
+    // Normalized like a top-level table, with no quote prefix
+    // leaking into the cells. The row writer ends the last row
+    // with a newline; reparse accepts it, so this is the stable form.
+    assert.equal(once, "> quote\n>\n> | A |\n> | --- |\n> | 1 |\n");
+    assert.equal(serializeMarkdown(parseMarkdown(once)), once);
 });
 
 test("CRLF input normalizes to LF and then is stable", () => {
