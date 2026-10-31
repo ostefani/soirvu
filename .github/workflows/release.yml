@@ -159,6 +159,12 @@ jobs:
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
           cd dist
+          # download-artifact preserves the bundles' directory tree
+          # (deb/, dmg/, nsis/), so flatten before checksumming —
+          # sha256sum over directories fails the publish.
+          shopt -s nullglob
+          mv deb/* dmg/* nsis/* ./
+          rmdir deb dmg nsis
           sha256sum * > SHA256SUMS
           keyfile="$(mktemp "$RUNNER_TEMP/minisign.XXXXXX")"
           chmod 600 "$keyfile"
