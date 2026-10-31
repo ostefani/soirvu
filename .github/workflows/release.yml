@@ -35,6 +35,10 @@ jobs:
       - name: Require a green CI run on the tagged commit
         env:
           GH_TOKEN: ${{ github.token }}
+          # No checkout in this job, so tell gh which repo to query —
+          # otherwise it shells out to git and dies with "failed to
+          # determine base repo ... not a git repository".
+          GH_REPO: ${{ github.repository }}
         run: |
           set -eu
           green="$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --limit 20 \
