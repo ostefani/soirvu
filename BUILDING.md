@@ -113,9 +113,12 @@ smoke tests assert exactly that.
 The installers are unsigned (except the macOS ad-hoc
 signature); the checksums plus the signature are how a
 download is verified, and building from source remains
-the trust anchor. The Touch ID macOS variant is not part
-of the release workflow — it needs the local provisioning
-profile, so it is built by hand (see above).
+the trust anchor. Releases are immutable (repo setting):
+once published, the tag and all assets are locked, so a
+published version can never be re-pointed or re-uploaded —
+fixes go out as a new version. The Touch ID macOS variant
+is not part of the release workflow — it needs the local
+provisioning profile, so it is built by hand (see above).
 
 One-time setup: create the signing keypair and add the
 secret half to the repository's Actions secrets

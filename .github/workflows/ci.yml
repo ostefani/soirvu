@@ -25,6 +25,8 @@ jobs:
       - uses: actions/checkout@v5
       - name: Platform cfg stays in the platform files (§12)
         run: sh scripts/check-platform-cfg.sh
+      - name: Release paths match the cargo binary (§9)
+        run: sh scripts/check-release-paths.sh
 
   core:
     strategy:

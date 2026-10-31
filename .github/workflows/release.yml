@@ -104,7 +104,7 @@ jobs:
           mkdir -p /tmp/fakevault && touch /tmp/fakevault/keep.txt
           sudo dpkg -i "$deb"
           test -x /usr/bin/soirvu
-          sudo dpkg -r soirvu
+          sudo dpkg -r soir-vu
           test -f /tmp/fakevault/keep.txt
       - name: Install smoke test (Windows NSIS)
         if: runner.os == 'Windows'
@@ -114,8 +114,8 @@ jobs:
           New-Item -ItemType Directory -Force "$env:TEMP\fakevault" | Out-Null
           New-Item -ItemType File -Force "$env:TEMP\fakevault\keep.txt" | Out-Null
           Start-Process $exe.FullName -ArgumentList "/S" -Wait
-          if (-not (Test-Path "$env:LOCALAPPDATA\soirvu\soirvu.exe")) { throw "install did not place the app" }
-          Start-Process "$env:LOCALAPPDATA\soirvu\uninstall.exe" -ArgumentList "/S" -Wait
+          if (-not (Test-Path "$env:LOCALAPPDATA\SoirVu\soirvu.exe")) { throw "install did not place the app" }
+          Start-Process "$env:LOCALAPPDATA\SoirVu\uninstall.exe" -ArgumentList "/S" -Wait
           if (-not (Test-Path "$env:TEMP\fakevault\keep.txt")) { throw "uninstall touched a vault folder" }
       - uses: actions/upload-artifact@v6
         with:
@@ -157,6 +157,16 @@ jobs:
           trap 'rm -f "$keyfile"' EXIT
           printf '%s' "$MINISIGN_SECRET_KEY" > "$keyfile"
           minisign -S -s "$keyfile" -x SHA256SUMS.minisig -m SHA256SUMS <<< "$MINISIGN_PASSWORD"
+      # Immutable releases (repo setting) refuse asset uploads to a
+      # published release, so everything lands on a draft first and
+      # publication is the final step — after that the tag and all
+      # assets are locked.
       - uses: softprops/action-gh-release@v3
         with:
+          draft: true
           files: dist/*
+      - name: Publish the release (locked from here on)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "${{ github.ref_name }}" --draft=false
