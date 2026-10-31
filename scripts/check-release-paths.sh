@@ -24,7 +24,19 @@ conf = json.load(open("src-tauri/tauri.conf.json"))
 product = conf["productName"]
 kebab = re.sub(r"(?<!^)(?=[A-Z])", "-", product).lower()
 
-wf = open(".github/workflows/release.yml").read()
+import yaml
+wf_text = open(".github/workflows/release.yml").read()
+wf = yaml.safe_load(wf_text)
+# The RUSTFLAGS step runs on Windows, where the default shell is pwsh:
+# `$GITHUB_ENV` there is $null and `>> $null` silently discards, so the
+# step must pin `shell: bash` (v1.0.0 shipped a CFG-less exe this way).
+for step in wf["jobs"]["build"]["steps"]:
+    if step.get("name") == "Control Flow Guard (Windows)":
+        if step.get("shell") != "bash":
+            sys.exit("FAIL: Control Flow Guard step must set shell: bash (pwsh eats $GITHUB_ENV)")
+        break
+else:
+    sys.exit("FAIL: Control Flow Guard step missing from release.yml")
 want = [
     f"target/release/{bname}",
     f"target/release/{bname}.exe",
@@ -32,7 +44,7 @@ want = [
     f"dpkg -r {kebab}",
     f"{product}\\{bname}.exe",
 ]
-missing = [w for w in want if w not in wf]
+missing = [w for w in want if w not in wf_text]
 if missing:
     sys.exit(f"FAIL: release.yml missing paths for binary {bname!r}: {missing}")
 print(f"OK: binary {bname!r}, deb package {kebab!r}, NSIS dir {product!r}")
