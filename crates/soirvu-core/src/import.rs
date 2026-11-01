@@ -537,6 +537,13 @@ impl Vault {
             report.folders += 1;
         }
         for entry in &data.entries {
+            // Untrusted ids must be canonical UUIDs, like folder ids
+            // above: downstream code slices `id[..8]` for export
+            // file names, which panics on short or multibyte ids.
+            if !crate::storage::is_canonical_uuid(&entry.id) {
+                report.skipped_entries += 1;
+                continue;
+            }
             if self.entry_exists(&entry.id)? {
                 report.skipped_entries += 1;
                 continue;
@@ -1647,6 +1654,32 @@ mod tests {
         assert_eq!(vault.get_entry(id).unwrap().folder_id, None);
     }
 
+    /// Entry ids from untrusted JSON need the same canonical-UUID
+    /// gate as folder ids: a short or multibyte id would otherwise
+    /// be stored and later panic the markdown export's `id[..8]`.
+    /// Skipped entries count, like skipped folders.
+    #[test]
+    fn json_import_skips_non_canonical_entry_ids() {
+        let tmp = TempDir::new().unwrap();
+        let mut vault = new_vault(&tmp);
+        let good = "01900000-0000-7000-8000-000000000001";
+        let file = tmp.path().join("bad-ids.json");
+        fs::write(
+            &file,
+            format!(
+                r#"{{"format":"soirvu-json-export","version":1,"entries":[{{"id":"é","entry_date":"2026-10-01","created_at":1,"updated_at":1,"title":"Bad","body_md":"text","tags":[],"deleted_at":null}},{{"id":"{good}","entry_date":"2026-10-01","created_at":1,"updated_at":1,"title":"Good","body_md":"text","tags":[],"deleted_at":null}}],"attachments":[]}}"#
+            ),
+        )
+        .unwrap();
+        let report = vault.import_json(&file).unwrap();
+        assert_eq!(report.entries, 1);
+        assert_eq!(report.skipped_entries, 1);
+        assert_eq!(
+            vault.get_entry(good).unwrap().title.as_deref(),
+            Some("Good")
+        );
+    }
+
     /// P2: byte-offset slicing panicked on multibyte input. Every
     /// case below panicked before checked slicing: a folder name,
     /// a link scan, a file stem and frontmatter dates.
@@ -1655,11 +1688,32 @@ mod tests {
         assert_eq!(strip_id_suffix("розробка"), "розробка");
         assert_eq!(strip_id_suffix("розробка-12345678"), "розробка");
         assert_eq!(strip_id_suffix("розробка-не-суфікс"), "розробка-не-суфікс");
+        // Emoji, short names and the exact suffix boundary: the
+        // tail only strips on `-` plus 8 ASCII hex digits.
+        assert_eq!(strip_id_suffix("🎉-12345678"), "🎉");
+        assert_eq!(strip_id_suffix("🎉-not-a-suffix"), "🎉-not-a-suffix");
+        assert_eq!(strip_id_suffix("short"), "short");
+        assert_eq!(strip_id_suffix("name-1234abcd"), "name");
+        assert_eq!(strip_id_suffix("name-1234abc"), "name-1234abc");
         let body = format!("entry:{}é", "x".repeat(35));
         assert!(entry_link_targets(&body).is_empty());
+        // A bad prefix scans on: the later valid target still counts.
+        let valid = "01900000-0000-7000-8000-000000000001";
+        let mixed = format!("entry:{}é then entry:{valid}!", "x".repeat(35));
+        assert_eq!(entry_link_targets(&mixed), vec![valid.to_string()]);
         assert_eq!(date_prefix("2026-12-3éx"), None);
+        assert_eq!(date_prefix("2026"), None);
         assert_eq!(parse_iso("\"abcdefghié\""), None);
         assert_eq!(parse_iso("2026-10-15T12:Xéyz"), None);
+        assert_eq!(parse_iso("2026"), None);
+        // The dash positions prove byte 36 is a boundary, so the
+        // UUID parse below cannot panic even with multibyte text
+        // in the prefix: it just misses.
+        assert_eq!(
+            uuid_prefix("12345678-1234-1234-1234-123456789012-x"),
+            Some(("12345678-1234-1234-1234-123456789012", "x"))
+        );
+        assert_eq!(uuid_prefix("12345678-1234-1234-1234-1234567890é-x"), None);
         // Well-formed values keep working through the same paths.
         assert_eq!(
             entry_link_targets("see entry:0190a1b2-7c3d-7abc-8def-0123456789ab!"),
