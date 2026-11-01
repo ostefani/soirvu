@@ -3,6 +3,7 @@
 <script>
     import { onDestroy, onMount, untrack } from 'svelte';
     import * as api from '@/api.js';
+    import { clearBacklinkCache } from '@/lib/links.js';
     import { searchScopeKey } from '@/lib/scope.js';
     import EntryList from '@/components/EntryList/index.svelte';
     import FolderTree from '@/components/FolderTree/index.svelte';
@@ -117,12 +118,15 @@
     const canGoBack = $derived(histIndex > 0);
     const canGoForward = $derived(histIndex < history.length - 1);
 
-    // A different vault is a different history.
+    // A different vault is a different history — and cached
+    // verifications belong to the vault they were computed in, so
+    // they leave with it on lock and on switch.
     $effect(() => {
         void vault?.id;
         history = [];
         histIndex = -1;
         navRestore = null;
+        return () => clearBacklinkCache();
     });
 
     function pushHistory() {

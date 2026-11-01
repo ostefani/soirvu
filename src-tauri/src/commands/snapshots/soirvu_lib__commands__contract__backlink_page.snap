@@ -9,7 +9,9 @@ expression: json
       "entry_date": "2026-01-03",
       "title": "Summary",
       "folder_id": null,
-      "body": "see [notes](entry:entry-1) for details"
+      "body": "see [notes](entry:entry-1) for details",
+      "body_size": 38,
+      "rev": 1
     }
   ],
   "next_cursor": null

@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { parseMarkdown, serializeMarkdown } from "../../editor/index.js";
 import {
     classifyHref,
+    clearBacklinkCache,
     isEntryHref,
     linksToTarget,
     outgoingEntryLinks,
@@ -138,9 +139,10 @@ test("verifyBacklinkCandidates keeps only genuinely linking sources", () => {
         cand(A, `Self [link](entry:${A}).`), // never shown, even if served
     ];
     assert.deepEqual(
-        verifyBacklinkCandidates(A, candidates).map((v) => v.id),
+        verifyBacklinkCandidates(A, candidates).verified.map((v) => v.id),
         ["s1"],
     );
+    assert.deepEqual(verifyBacklinkCandidates(A, candidates).pending, []);
 });
 
 test("verifyBacklinkCandidates preserves order and metadata", () => {
@@ -148,8 +150,76 @@ test("verifyBacklinkCandidates preserves order and metadata", () => {
         { id: "s2", entry_date: "2026-10-30", title: "Later", folder_id: "f1", body: `[t](entry:${B})` },
         { id: "s1", entry_date: "2026-10-29", title: null, folder_id: null, body: `[t](entry:${B})` },
     ];
-    assert.deepEqual(verifyBacklinkCandidates(B, candidates), [
+    assert.deepEqual(verifyBacklinkCandidates(B, candidates).verified, [
         { id: "s2", entry_date: "2026-10-30", title: "Later", folder_id: "f1" },
         { id: "s1", entry_date: "2026-10-29", title: null, folder_id: null },
     ]);
+});
+
+test("verifyBacklinkCandidates parks oversized bodies as pending", () => {
+    const big = {
+        id: "big",
+        entry_date: "2026-10-30",
+        title: "Long",
+        folder_id: null,
+        body: null,
+        body_size: 100_000,
+        rev: 7,
+    };
+    const small = {
+        id: "s1",
+        entry_date: "2026-10-29",
+        title: null,
+        folder_id: null,
+        body: `[t](entry:${B})`,
+        body_size: 20,
+        rev: 3,
+    };
+    const out = verifyBacklinkCandidates(B, [big, small]);
+    assert.deepEqual(
+        out.verified.map((v) => v.id),
+        ["s1"],
+    );
+    // Pending keeps the metadata the on-demand fetch needs; the
+    // unverifiable body is never guessed at.
+    assert.deepEqual(out.pending, [
+        {
+            id: "big",
+            entry_date: "2026-10-30",
+            title: "Long",
+            folder_id: null,
+            rev: 7,
+            body_size: 100_000,
+        },
+    ]);
+});
+
+test("backlink verification caches by source revision", () => {
+    clearBacklinkCache();
+    const linked = {
+        id: "s1",
+        entry_date: "2026-10-29",
+        title: null,
+        folder_id: null,
+        body: `[t](entry:${B})`,
+        body_size: 20,
+        rev: 3,
+    };
+    assert.deepEqual(
+        verifyBacklinkCandidates(B, [linked]).verified.map((v) => v.id),
+        ["s1"],
+    );
+    // Same id and rev, body now link-free: the cache still reports
+    // the verified row instead of re-parsing.
+    const edited = { ...linked, body: "Nothing here." };
+    assert.deepEqual(
+        verifyBacklinkCandidates(B, [edited]).verified.map((v) => v.id),
+        ["s1"],
+    );
+    // A new revision re-parses and drops the row.
+    const changed = { ...linked, body: "Nothing here.", rev: 4 };
+    assert.deepEqual(verifyBacklinkCandidates(B, [changed]).verified, []);
+    // Clearing forgets everything.
+    clearBacklinkCache();
+    assert.deepEqual(verifyBacklinkCandidates(B, [edited]).verified, []);
 });

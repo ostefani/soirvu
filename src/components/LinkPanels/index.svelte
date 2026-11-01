@@ -118,7 +118,9 @@
 
     /* ---- Backlinks: candidate pages verify one by one until a
        page of verified rows fills or the candidates run out.
-       Unverified sources never render. ---- */
+       Unverified sources never render. Oversized sources travel
+       as metadata and load whole one at a time, so peak memory
+       is one large document instead of a page of them. ---- */
 
     let backlinks = $state([]);
     let backCursor = $state(null);
@@ -127,6 +129,8 @@
     let scanning = $state(false);
     let scanStopped = $state(false);
     let scanError = $state('');
+    // Large bodies currently fetching whole (0 or 1: sequential).
+    let pendingLarge = $state(0);
 
     async function scanBacklinks(reset) {
         const target = entryId;
@@ -138,6 +142,7 @@
             backDone = false;
             checked = 0;
             scanStopped = false;
+            pendingLarge = 0;
         }
         scanning = true;
         scanError = '';
@@ -151,8 +156,35 @@
                 const page = await api.backlinkCandidates(target, { cursor, limit: PAGE });
                 if (mine !== scanRun) return;
                 count += page.candidates.length;
-                for (const v of verifyBacklinkCandidates(target, page.candidates)) {
+                const { verified, pending } = verifyBacklinkCandidates(target, page.candidates);
+                for (const v of verified) {
                     if (!collected.some((c) => c.id === v.id)) collected.push(v);
+                }
+                // Oversized sources arrived as metadata: fetch each
+                // whole body alone, verify it through the same path
+                // (which also caches the row), and drop sources that
+                // vanished mid-scan.
+                for (const p of pending) {
+                    if (mine !== scanRun) return;
+                    if (collected.some((c) => c.id === p.id)) continue;
+                    pendingLarge++;
+                    try {
+                        const full = await api.entryGet(p.id);
+                        if (mine !== scanRun) return;
+                        const retry = verifyBacklinkCandidates(target, [
+                            { ...p, body: full.body_md ?? '', rev: full.rev },
+                        ]);
+                        for (const v of retry.verified) {
+                            if (!collected.some((c) => c.id === v.id)) collected.push(v);
+                        }
+                        backlinks = collected;
+                    } catch {
+                        // The source vanished mid-scan; the count stands.
+                    } finally {
+                        // A reset or stop owns the counter from here;
+                        // only the live scan decrements it.
+                        if (mine === scanRun) pendingLarge--;
+                    }
                 }
                 cursor = page.next_cursor;
                 exhausted = !cursor;
@@ -173,6 +205,7 @@
         scanRun++;
         scanning = false;
         scanStopped = true;
+        pendingLarge = 0;
     }
 
     function toggleOut() {
@@ -284,7 +317,10 @@
                 </ul>
                 <div class="scan-foot">
                     {#if scanning}
-                        <span class="note" role="status">Checking {checked} {checked === 1 ? 'source' : 'sources'}…</span>
+                        <span class="note" role="status"
+                            >Checking {checked} {checked === 1 ? 'source' : 'sources'}…{#if pendingLarge > 0}
+                                Verifying a large entry…{/if}</span
+                        >
                         <button class="mini" onclick={stopScan}>Stop</button>
                     {:else}
                         <span class="note">

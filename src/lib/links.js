@@ -11,7 +11,7 @@
 // source text — so code samples, images and raw blocks cannot
 // fake an edge.
 
-import { parseMarkdown } from "../editor/index.js";
+import { parseMarkdown } from "../editor/markdown.js";
 
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 const ENTRY_HREF = new RegExp(`^entry:(${UUID})$`);
@@ -120,33 +120,85 @@ export function linksToTarget(markdown, targetId) {
 }
 
 /**
- * Keeps the candidate sources that genuinely link the target,
- * in candidate order, one row per source. Self-links never
- * list, even if served. Bodies were already bounded by the
- * command; parsing stays proportional to them.
+ * Verified backlink rows, keyed by source id and revision so a
+ * reopened panel does not re-parse. Bounded FIFO: the oldest
+ * entries leave first. Cleared on lock via `clearBacklinkCache`.
+ * @type {Map<string, { rev: number, row: object | null }>}
+ */
+const backlinkCache = new Map();
+const BACKLINK_CACHE_LIMIT = 200;
+
+/** Forgets every cached verification (lock, vault switch). */
+export function clearBacklinkCache() {
+    backlinkCache.clear();
+}
+
+function backlinkCacheGet(targetId, candidate) {
+    if (typeof candidate?.rev !== "number") return undefined;
+    const hit = backlinkCache.get(`${targetId}:${candidate.id}`);
+    return hit && hit.rev === candidate.rev ? hit.row : undefined;
+}
+
+function backlinkCachePut(targetId, candidate, row) {
+    if (typeof candidate?.rev !== "number") return;
+    if (backlinkCache.size >= BACKLINK_CACHE_LIMIT) {
+        backlinkCache.delete(backlinkCache.keys().next().value);
+    }
+    backlinkCache.set(`${targetId}:${candidate.id}`, { rev: candidate.rev, row });
+}
+
+/**
+ * Splits candidate sources into genuinely linking rows and
+ * oversized sources the command sent as metadata only (`body`
+ * null): the latter are never guessed at — the caller fetches
+ * them whole on demand. In candidate order, one row per source.
+ * Self-links never list, even if served. Parsing stays
+ * proportional to the inline bodies; cached revisions skip
+ * parsing entirely.
  * @param {string} targetId
- * @param {{ id: string, entry_date: string, title: string | null, folder_id: string | null, body: string }[]} candidates
+ * @param {{ id: string, entry_date: string, title: string | null, folder_id: string | null, body: string | null, body_size?: number, rev?: number }[]} candidates
+ * @returns {{ verified: { id: string, entry_date: string, title: string | null, folder_id: string | null }[], pending: { id: string, entry_date: string, title: string | null, folder_id: string | null, rev: number, body_size: number }[] }}
  */
 export function verifyBacklinkCandidates(targetId, candidates) {
     const want = parseEntryTarget(`entry:${targetId ?? ""}`);
-    if (want === null) return [];
+    if (want === null) return { verified: [], pending: [] };
     const seen = new Set();
     const verified = [];
+    const pending = [];
     for (const candidate of candidates ?? []) {
         const id = candidate?.id;
         if (typeof id !== "string" || seen.has(id)) continue;
         seen.add(id);
         if (id.toLowerCase() === want) continue;
-        if (linksToTarget(candidate.body ?? "", want)) {
-            verified.push({
+        if (candidate.body == null) {
+            pending.push({
                 id,
                 entry_date: candidate.entry_date,
                 title: candidate.title ?? null,
                 folder_id: candidate.folder_id ?? null,
+                rev: candidate.rev,
+                body_size: candidate.body_size ?? 0,
             });
+            continue;
         }
+        const cached = backlinkCacheGet(want, candidate);
+        if (cached !== undefined) {
+            if (cached !== null) verified.push(cached);
+            continue;
+        }
+        let row = null;
+        if (linksToTarget(candidate.body ?? "", want)) {
+            row = {
+                id,
+                entry_date: candidate.entry_date,
+                title: candidate.title ?? null,
+                folder_id: candidate.folder_id ?? null,
+            };
+            verified.push(row);
+        }
+        backlinkCachePut(want, candidate, row);
     }
-    return verified;
+    return { verified, pending };
 }
 
 export function outgoingEntryLinks(markdown) {

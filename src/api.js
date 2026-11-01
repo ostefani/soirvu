@@ -117,7 +117,11 @@ import { scopeToWire } from "./lib/scope.js";
  * @property {string} entry_date
  * @property {string | null} title
  * @property {string | null} folder_id
- * @property {string} body Bounded full body, for the verifier.
+ * @property {string | null} body Full body when it fits the inline
+ *   budget, null for oversized bodies — never truncated.
+ * @property {number} body_size Body length in characters; the fetch
+ *   budget and large-entry indicator read this, not the body.
+ * @property {number} rev Source revision, for the verify cache.
  */
 
 /**
@@ -441,8 +445,9 @@ export function entryLinkCandidates(query, args = {}) {
 }
 
 /**
- * Body-only UUID candidates for one link target: full bounded
- * bodies plus folder ids for the verifier. The target itself is
+ * Body-only UUID candidates for one link target: small bodies
+ * inline, metadata (size, revision) plus a null body for oversized
+ * ones, folder ids for the verifier. The target itself is
  * excluded; deleted sources never appear.
  * @param {string} id The link target.
  * @param {{ cursor?: string | null, limit?: number }} [args]

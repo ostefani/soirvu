@@ -213,7 +213,15 @@ pub struct BacklinkCandidate {
     pub entry_date: String,
     pub title: Option<String>,
     pub folder_id: Option<String>,
-    pub body: String,
+    /// The full body when it fits the inline budget, `None` for
+    /// oversized bodies (see `body_size`): never truncated, so a
+    /// link past any cut still verifies after an on-demand fetch.
+    pub body: Option<String>,
+    /// `LENGTH(body_md)` in characters: the frontend's fetch
+    /// budget and large-entry indicator read this, not the body.
+    pub body_size: i64,
+    /// The source revision: verification caches key on `(id, rev)`.
+    pub rev: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +229,13 @@ pub struct BacklinkPage {
     pub items: Vec<BacklinkCandidate>,
     pub next: Option<Cursor>,
 }
+
+/// Largest body inlined in a backlink candidate row, in
+/// characters. Typical diary entries are a few kilobytes; 64 KiB
+/// keeps ordinary pages self-contained (twenty rows worst case)
+/// while anything larger travels as metadata and is fetched whole
+/// on demand — an explicit fetch, never a silent cut.
+const BACKLINK_INLINE_CHARS: i64 = 65_536;
 
 /// Escapes a normalized key for a LIKE prefix match: a literal
 /// backslash, percent or underscore in a title must not act as a
@@ -879,12 +894,15 @@ impl Vault {
     /// with keyset paging: the quoted-UUID retrieval the link
     /// fixtures prove, over the body column only. Titles never match
     /// here, so a title-only mention is not a backlink candidate.
-    /// Bodies travel complete, never truncated: any cut can sever a
-    /// link from its UUID (or drop a reference definition), leaving
-    /// a real backlink unverifiable. The page limit still bounds
-    /// each roundtrip; the frontend verifies real link marks
-    /// (ignoring code, images and raw blocks) before showing
-    /// anything, and deduplicates by source elsewhere.
+    /// Metadata first: bodies travel inline only up to
+    /// `BACKLINK_INLINE_CHARS`; larger ones arrive as `None` with
+    /// their size and revision, and the frontend fetches them whole
+    /// on demand. Nothing is ever truncated — any cut could sever
+    /// a link from its UUID — so a page of small bodies plus one
+    /// large fetch at a time bounds working memory instead of the
+    /// response. The frontend verifies real link marks (ignoring
+    /// code, images and raw blocks) before showing anything, and
+    /// deduplicates by source elsewhere.
     pub fn backlink_candidates(
         &self,
         entry_id: &str,
@@ -906,12 +924,13 @@ impl Vault {
         let phrase = format!("body_md : \"{entry_id}\"");
         let mut stmt = self.db.connection().prepare(
             "SELECT e.id, e.entry_date, e.created_at, e.title, e.folder_id,
-                    e.body_md
+                    CASE WHEN LENGTH(e.body_md) <= ?5 THEN e.body_md ELSE NULL END,
+                    LENGTH(e.body_md), e.rev
                FROM entry_fts JOIN entry e ON e.rid = entry_fts.rowid
               WHERE entry_fts MATCH ?1 AND e.deleted_at IS NULL AND e.id != ?2
-                AND (?3 IS NULL OR (e.entry_date, e.created_at, e.id) < (?3, ?4, ?5))
+                AND (?3 IS NULL OR (e.entry_date, e.created_at, e.id) < (?3, ?4, ?6))
               ORDER BY e.entry_date DESC, e.created_at DESC, e.id DESC
-              LIMIT ?6",
+              LIMIT ?7",
         )?;
         let rows = stmt.query_map(
             params![
@@ -919,6 +938,7 @@ impl Vault {
                 entry_id,
                 after_date,
                 after_created,
+                BACKLINK_INLINE_CHARS,
                 after_id,
                 limit as i64 + 1
             ],
@@ -929,7 +949,9 @@ impl Vault {
                         entry_date: row.get(1)?,
                         title: row.get(3)?,
                         folder_id: row.get(4)?,
-                        body: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                        body: row.get(5)?,
+                        body_size: row.get(6)?,
+                        rev: row.get(7)?,
                     },
                     Cursor {
                         entry_date: row.get(1)?,
@@ -3131,7 +3153,11 @@ mod tests {
         assert!(ids.contains(&code.id.as_str()));
         assert_eq!(ids.len(), 3);
         assert!(page.next.is_none());
-        let bodies: Vec<&str> = page.items.iter().map(|hit| hit.body.as_str()).collect();
+        let bodies: Vec<&str> = page
+            .items
+            .iter()
+            .map(|hit| hit.body.as_deref().unwrap_or_default())
+            .collect();
         assert!(
             bodies
                 .iter()
@@ -3139,10 +3165,41 @@ mod tests {
         );
     }
 
-    /// P2: candidate bodies were cut at 20k chars, so a link past
-    /// the cut left the candidate unverifiable and the backlink
-    /// silently vanished. Candidates carry complete bodies now;
-    /// the page limit still bounds each roundtrip.
+    /// Metadata-first candidates: bodies larger than the inline
+    /// budget travel as `None` with their byte size and revision,
+    /// so the frontend fetches them whole on demand instead of the
+    /// command pushing unbounded batches.
+    #[test]
+    #[test]
+    fn backlink_candidates_report_metadata_for_oversized_bodies() {
+        let (_tmp, mut vault) = new_vault();
+        let target = vault
+            .create_entry(None, &draft("2026-10-31", "Training notes", "legs day"))
+            .unwrap();
+        let filler = "x".repeat(100_000);
+        let src = vault
+            .create_entry(
+                None,
+                &draft(
+                    "2026-10-31",
+                    "Long",
+                    &format!("{filler}\n\nsee [notes](entry:{})", target.id),
+                ),
+            )
+            .unwrap();
+        let page = vault.backlink_candidates(&target.id, 10, None).unwrap();
+        assert_eq!(page.items.len(), 1);
+        let hit = &page.items[0];
+        assert_eq!(hit.id, src.id);
+        assert_eq!(hit.body, None);
+        assert!(hit.body_size > 100_000);
+        assert_eq!(hit.rev, src.rev);
+    }
+
+    /// P2 follow-up: candidate bodies were cut at 20k chars, so a
+    /// link past the cut left the candidate unverifiable. Small
+    /// bodies travel inline now; larger ones arrive as metadata and
+    /// the frontend fetches them whole on demand.
     #[test]
     fn backlink_candidates_keep_links_past_the_old_truncation_point() {
         let (_tmp, mut vault) = new_vault();
@@ -3163,8 +3220,9 @@ mod tests {
         let page = vault.backlink_candidates(&target.id, 10, None).unwrap();
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].id, src.id);
-        assert!(page.items[0].body.contains(&format!("entry:{}", target.id)));
-        assert!(page.items[0].body.len() > 25_000);
+        let inline = page.items[0].body.as_deref().unwrap_or_default();
+        assert!(inline.contains(&format!("entry:{}", target.id)));
+        assert!(inline.len() > 25_000);
     }
 
     #[test]

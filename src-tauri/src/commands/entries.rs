@@ -399,7 +399,11 @@ pub struct BacklinkDto {
     pub entry_date: String,
     pub title: Option<String>,
     pub folder_id: Option<String>,
-    pub body: String,
+    /// The full body when it fits the inline budget, `None` for
+    /// oversized bodies (see `body_size`): never truncated.
+    pub body: Option<String>,
+    pub body_size: i64,
+    pub rev: i64,
 }
 
 impl From<&soirvu_core::entries::BacklinkCandidate> for BacklinkDto {
@@ -410,6 +414,8 @@ impl From<&soirvu_core::entries::BacklinkCandidate> for BacklinkDto {
             title: hit.title.clone(),
             folder_id: hit.folder_id.clone(),
             body: hit.body.clone(),
+            body_size: hit.body_size,
+            rev: hit.rev,
         }
     }
 }
