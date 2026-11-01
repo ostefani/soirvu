@@ -311,7 +311,18 @@ export function undoInputRule(state, dispatch) {
     return true;
 }
 
-export function inputRulesPlugin() {
+/** `[[` typed outside code and raw blocks opens the link picker
+ *  instead of staying literal text. Input rules only produce
+ *  transactions, so the opener travels as a callback: the typed
+ *  brackets stay in the document until the pick replaces them
+ *  (a cancelled pick leaves them for the user to delete). */
+function bracketTrigger(state, from, blockText) {
+    const $from = state.doc.resolve(from);
+    if (!$from.parent.isTextblock || $from.parent.type.spec.code) return false;
+    return blockText.endsWith("[[") && !blockText.endsWith("[[[");
+}
+
+export function inputRulesPlugin(onBracketLink = null) {
     return createPlugin({
         key: rulesKey,
         state: {
@@ -328,6 +339,18 @@ export function inputRulesPlugin() {
         },
         props: {
             handleTextInput(state, from, to, text, dispatch) {
+                if (text === "[" && onBracketLink) {
+                    const $from = state.doc.resolve(from);
+                    const sel = state.selection;
+                    if (sel.type === "text" && sel.empty && sel.from === from && sel.to === to) {
+                        const before = $from.parent.textContent.slice(0, $from.parentOffset) + text;
+                        if (bracketTrigger(state, from, before)) {
+                            // The second bracket inserts normally;
+                            // the picker replaces the pair on pick.
+                            onBracketLink({ bracketPos: from - 1 });
+                        }
+                    }
+                }
                 const tr = applyInputRules(state, from, to, text);
                 if (!tr) return false;
                 dispatch(tr);

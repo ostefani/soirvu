@@ -305,3 +305,40 @@ button.result.active {
     border-radius: 2px;
     padding: 0 0.15em;
 }
+
+/* Scope heading: which slice of the vault the rows below show. */
+.list-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0 0.6rem;
+}
+
+.list-title {
+    margin: 0;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-ink-muted);
+}
+
+.desc-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.78rem;
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.crumb {
+    font-size: 0.74rem;
+    color: var(--color-ink-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}

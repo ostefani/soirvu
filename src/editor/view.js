@@ -869,8 +869,13 @@ export class EditorView {
         }
         const link = e.target.closest ? e.target.closest("a[href]") : null;
         if (link && this.dom.contains(link)) {
-            e.preventDefault();
-            if (this.handleClickOn) this.handleClickOn(link.getAttribute("href"));
+            // Plain clicks only move the caret. Following a link —
+            // in-vault or external — takes an explicit modifier
+            // click, so reading never navigates by accident.
+            if (e.metaKey || e.ctrlKey) {
+                e.preventDefault();
+                if (this.handleClickOn) this.handleClickOn(link.getAttribute("href"), true);
+            }
             return;
         }
     }

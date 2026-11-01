@@ -1,0 +1,125 @@
+/* SPDX-License-Identifier: MIT
+   Copyright (c) 2026 Olha Stefanishyna */
+/* Verified link panels below the editor. Section headers read
+   like the list's scope heading; rows read like entry rows:
+   quiet, with hover tint instead of boxed chrome. */
+.link-panels {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--color-border-subtle);
+}
+
+.panel-head {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-ink-muted);
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.panel-head:hover {
+    color: var(--color-ink-primary);
+    background-color: var(--color-accent-soft);
+}
+
+.rows {
+    list-style: none;
+    margin: 0.25rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0.25rem;
+    border-radius: 6px;
+}
+
+.row:hover {
+    background-color: var(--color-accent-soft);
+}
+
+.go {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    row-gap: 0.05rem;
+    padding: 0.25rem 0.35rem;
+    text-align: left;
+    color: var(--color-ink-primary);
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.row-label {
+    font-weight: 600;
+    font-size: 0.87rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.row-meta {
+    font-size: 0.76rem;
+    color: var(--color-ink-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.row-meta.warn {
+    color: var(--feedback-danger);
+}
+
+.mini {
+    flex-shrink: 0;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.82rem;
+    color: var(--color-ink-primary);
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.mini:hover:not(:disabled) {
+    background-color: var(--color-accent-soft);
+}
+
+.note {
+    margin: 0.35rem 0.5rem;
+    font-size: 0.82rem;
+    color: var(--color-ink-muted);
+}
+
+.scan-foot {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0 0.5rem;
+}
+
+.scan-foot .note {
+    margin: 0.35rem 0;
+}

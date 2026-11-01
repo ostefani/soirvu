@@ -6,7 +6,9 @@
     import IconRight from '@/icons/arrow-right.svelte';
     import * as api from '@/api.js';
 
-    let { selectedDate = null, onSelect, version = 0, large = false } = $props();
+    // Folder scope: null counts the whole vault. Counts and day
+    // selection follow the list scope; "On this day" stays vault-wide.
+    let { selectedDate = null, onSelect, version = 0, large = false, scope = null } = $props();
 
     const now = new Date();
     let year = $state(now.getFullYear());
@@ -37,7 +39,7 @@
         const from = iso(year, month, 1);
         const to = month === 11 ? iso(year + 1, 0, 1) : iso(year, month + 1, 1);
         try {
-            const days = await api.calendarDays(from, to);
+            const days = await api.calendarDays(from, to, scope ?? null);
             counts = Object.fromEntries(days.map((d) => [d.date, d.entries]));
         } catch {
             counts = {};
@@ -48,6 +50,9 @@
         void year;
         void month;
         void version;
+        void scope?.kind;
+        void scope?.id;
+        void scope?.includeDescendants;
         load();
     });
 

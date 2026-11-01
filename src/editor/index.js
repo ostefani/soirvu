@@ -17,7 +17,7 @@ import { EditorView } from "./view.js";
 import { historyPlugin } from "./history.js";
 import { inputRulesPlugin, keymapPlugin } from "./rules.js";
 import { deleteSelectionIn, insertTextIn } from "./commands.js";
-import { selectionInfo, toolbarCommands, toggleTaskAt } from "./toolbar.js";
+import { locateLink, selectionInfo, toolbarCommands, toggleTaskAt } from "./toolbar.js";
 import { schema } from "./schema.js";
 import { parseMarkdown, serializeMarkdown } from "./markdown.js";
 
@@ -130,17 +130,22 @@ export function makePasteHandler() {
  * @param {(el: HTMLElement, id: string) => void} [options.onAttachmentView]
  *   An attachment block was rendered: the app fills the element
  *   with the right viewer for the attachment's type (§6.4).
- * @param {(href: string) => void} [options.onOpenLink] A link was
- *   clicked; the app routes https/mailto through open_link.
+ * @param {(href: string, modified: boolean) => void} [options.onOpenLink]
+ *   A link was modifier-clicked; `modified` is always true (plain
+ *   clicks only move the caret). The app routes https/mailto
+ *   through open_link and entry: links in-vault.
+ * @param {(info: { bracketPos: number }) => void} [options.onRequestLinkPicker]
+ *   `[[` was typed outside code and raw blocks; the app opens the
+ *   link picker, which replaces the bracket pair on pick.
  * @param {() => void} [options.onSelectionChange] Called after
  *   every transaction, doc or selection, so floating UI (the
  *   selection toolbar) can re-render from query().
  */
 export function createEditor(el, options = {}) {
-    const { markdown = "", onChange = () => {}, onOpenLink = null, onSelectionChange = null, onAttach = null, onAttachmentView = null } = options;
+    const { markdown = "", onChange = () => {}, onOpenLink = null, onRequestLinkPicker = null, onSelectionChange = null, onAttach = null, onAttachmentView = null } = options;
     let readonly = false;
 
-    const plugins = [inputRulesPlugin(), keymapPlugin(schema), historyPlugin()];
+    const plugins = [inputRulesPlugin(onRequestLinkPicker), keymapPlugin(schema), historyPlugin()];
 
     const view = new EditorView(el, {
         state: EditorState.create({ doc: parseMarkdown(markdown), plugins }),
@@ -155,8 +160,8 @@ export function createEditor(el, options = {}) {
         onTaskToggle: (itemPos) => {
             toggleTaskAt(view.state, (tr) => view.dispatch(tr), itemPos);
         },
-        handleClickOn: (href) => {
-            if (onOpenLink && href) onOpenLink(href);
+        handleClickOn: (href, modified) => {
+            if (onOpenLink && href) onOpenLink(href, modified === true);
         },
         onPasteText: makePasteHandler(),
         onAttachFile: (file) => {
@@ -229,6 +234,30 @@ export function createEditor(el, options = {}) {
         },
         getMarkdown() {
             return serializeMarkdown(view.state.doc);
+        },
+        /** Plain text of a range (for link labels and previews). */
+        readText(from, to) {
+            return view.state.doc.textBetween(from, to, "\n");
+        },
+        /**
+         * Current range of the link run with this href, re-resolved
+         * against the live document (for popover actions after an
+         * async gap). Null when the link moved beyond recognition.
+         */
+        locateLink(href, hintPos) {
+            return locateLink(view.state, href, hintPos);
+        },
+        /** Selects a range (history restores the source selection). */
+        setTextSelection(from, to) {
+            const tr = view.state.tr();
+            tr.setSelection(new TextSelection(from, to ?? from));
+            view.dispatch(tr);
+            view.focus();
+        },
+        /** Commits a pending IME composition before navigation. */
+        finishComposing() {
+            const active = document.activeElement;
+            if (active && view.dom.contains(active)) active.blur();
         },
         /** Replaces the document (switching entries). History resets. */
         setMarkdown(md) {

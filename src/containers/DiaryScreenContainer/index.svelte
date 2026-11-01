@@ -1,9 +1,11 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
-    import { onDestroy } from 'svelte';
+    import { onDestroy, onMount, untrack } from 'svelte';
     import * as api from '@/api.js';
+    import { searchScopeKey } from '@/lib/scope.js';
     import EntryList from '@/components/EntryList/index.svelte';
+    import FolderTree from '@/components/FolderTree/index.svelte';
     import Calendar from '@/components/Calendar/index.svelte';
     import EntryEditor from '@/components/EntryEditor/index.svelte';
     import Button from '@/components/Button/index.svelte';
@@ -15,6 +17,93 @@
     let listDate = $state(null);
     let navVersion = $state(0);
     let onThisDay = $state([]);
+    // In-memory navigation history: entry id plus the context to
+    // restore (folder scope, search, date, selection, list scroll).
+    // Cleared on unmount (lock) and on vault switch below.
+    let history = $state([]);
+    let histIndex = $state(-1);
+    let navRestore = $state(null);
+    let editorRef = $state(null);
+    let mainEl = $state(null);
+
+    // Folder scope for the list, calendar, tags and (optionally)
+    // search. Null reads the whole vault; the server defaults
+    // missing scopes to All, so only folder/root travel.
+    let scopeSel = $state({ kind: 'all' });
+    let folders = $state([]);
+    let foldersLoaded = $state(false);
+    let searchScoped = $state(false);
+    let filterEpoch = $state(0);
+
+    const byId = $derived(new Map(folders.map((f) => [f.id, f])));
+
+    const listScope = $derived(
+        scopeSel.kind === 'folder'
+            ? { kind: 'folder', id: scopeSel.id, includeDescendants: !!scopeSel.includeDescendants }
+            : scopeSel.kind === 'root'
+              ? { kind: 'root' }
+              : null,
+    );
+
+    const scopeFolderName = $derived(
+        scopeSel.kind === 'folder' ? (byId.get(scopeSel.id)?.name ?? '…') : null,
+    );
+
+    // The New-entry destination shown beside the action.
+    const destName = $derived(scopeFolderName ?? 'Root');
+
+    async function loadFolders() {
+        try {
+            folders = await api.folderList();
+            foldersLoaded = true;
+        } catch {
+            // Keep the last good tree: entry and folder counts may
+            // lag after a failed refresh, but the navigator must not
+            // vanish underneath the list.
+        }
+    }
+
+    onMount(loadFolders);
+
+    // A folder deleted elsewhere (or by this screen's tree) drops
+    // the scope back to the whole vault instead of erroring.
+    $effect(() => {
+        if (foldersLoaded && scopeSel.kind === 'folder' && !byId.has(scopeSel.id)) {
+            scopeSel = { kind: 'all' };
+        }
+    });
+
+    $effect(() => {
+        if (scopeSel.kind !== 'folder' && searchScoped) searchScoped = false;
+    });
+
+    // A visible search follows its scope inputs: checking the box,
+    // moving between folders or flipping the subtree flag re-runs
+    // it under the new scope instead of leaving stale hits. The
+    // query text is read untracked — typing stays on the debounced
+    // path and must not fire this — and the key recorded by the
+    // search itself keeps its own completion from looping it.
+    $effect(() => {
+        const key = searchScopeKey(searchScoped, listScope);
+        if (results === null || key === lastSearchKey) return;
+        const q = untrack(() => query.trim());
+        if (q) runSearch(q);
+    });
+
+    function handleScopeSelect(sel) {
+        scopeSel = sel;
+        if (sel.kind !== 'folder') searchScoped = false;
+    }
+
+    function toggleDescendants() {
+        if (scopeSel.kind !== 'folder') return;
+        scopeSel = { ...scopeSel, includeDescendants: !scopeSel.includeDescendants };
+    }
+
+    async function handleFoldersChanged() {
+        await loadFolders();
+        bumpNavigation();
+    }
 
     // Lifted from EntryList: the header owns the search and the
     // creation action, so their state lives next to their inputs.
@@ -24,6 +113,100 @@
     let searchTimer = null;
     let error = $state('');
     let creating = $state(false);
+
+    const canGoBack = $derived(histIndex > 0);
+    const canGoForward = $derived(histIndex < history.length - 1);
+
+    // A different vault is a different history.
+    $effect(() => {
+        void vault?.id;
+        history = [];
+        histIndex = -1;
+        navRestore = null;
+    });
+
+    function pushHistory() {
+        if (!selectedId) return;
+        history = [
+            ...history.slice(0, histIndex + 1),
+            {
+                entryId: selectedId,
+                scope: scopeSel,
+                scoped: searchScoped,
+                query,
+                date: listDate,
+                sel: editorRef?.navCapture?.() ?? null,
+                scroll: mainEl?.scrollTop ?? 0,
+            },
+        ];
+        histIndex = history.length - 1;
+    }
+
+    // The scope the last search ran under. The effect below
+    // re-runs a visible search when the scope inputs move under
+    // it — toggling the checkbox, changing folders, flipping the
+    // subtree flag — and the key recorded here keeps the search's
+    // own completion from re-firing it.
+    let lastSearchKey = '';
+
+    async function runSearch(q) {
+        lastSearchKey = searchScopeKey(searchScoped, listScope);
+        try {
+            const scoped = searchScoped && listScope !== null;
+            results = await api.search(q, scoped ? { scope: listScope } : {});
+            searchNote = results.length === 0 ? 'Nothing found.' : '';
+        } catch (e) {
+            results = null;
+            searchNote =
+                e === 'query_too_short'
+                    ? 'Type at least 3 characters (2 for Russian).'
+                    : `Search failed (${e}).`;
+        }
+    }
+
+    async function selectEntry(id, opts = {}) {
+        if (id === selectedId && !opts.restore) return true;
+        // The open entry settles uploads and flushes first; a
+        // failed save stays put with its error showing — and the
+        // history only records navigations that happen.
+        const ok = (await editorRef?.flushForNavigation?.()) ?? true;
+        if (!ok) return false;
+        if (opts.push) pushHistory();
+        if (opts.context) {
+            scopeSel = opts.context.scope;
+            searchScoped = opts.context.scoped && opts.context.scope.kind === 'folder';
+            query = opts.context.query;
+            listDate = opts.context.date;
+        }
+        navRestore = opts.restore ?? null;
+        selectedId = id;
+        if (opts.context && opts.context.query) {
+            clearTimeout(searchTimer);
+            await runSearch(opts.context.query);
+        }
+        if (navRestore && mainEl) {
+            // The remounted editor loads async; settle the scroll
+            // after it lands.
+            const scroll = navRestore.scroll ?? 0;
+            requestAnimationFrame(() =>
+                requestAnimationFrame(() => {
+                    if (selectedId === id) mainEl.scrollTop = scroll;
+                }),
+            );
+        }
+        return true;
+    }
+
+    async function goHistory(delta) {
+        const next = histIndex + delta;
+        if (next < 0 || next >= history.length) return;
+        const h = history[next];
+        const ok = await selectEntry(h.entryId, {
+            restore: { sel: h.sel, scroll: h.scroll },
+            context: { scope: h.scope, scoped: h.scoped, query: h.query, date: h.date },
+        });
+        if (ok) histIndex = next;
+    }
 
     // Same short texts as the other screens: codes, never prose
     // from below.
@@ -79,8 +262,11 @@
         if (creating) return;
         creating = true;
         try {
-            const created = await api.entrySave({
-                id: null,
+            // Files into the selected real folder, or the root in
+            // the All/Root views: the destination shows beside the
+            // action and stays put after creation.
+            const folderId = scopeSel.kind === 'folder' ? scopeSel.id : null;
+            const created = await api.entryCreate(folderId, {
                 entry_date: today(),
                 title: null,
                 body_md: '',
@@ -89,13 +275,19 @@
                 tags: [],
             });
             // A new entry belongs to the plain list, not to whatever
-            // the user was searching for a moment ago.
+            // the user was searching for a moment ago. Search, date
+            // and tag filters clear; the folder context is kept.
             query = '';
             results = null;
             searchNote = '';
+            listDate = null;
+            filterEpoch++;
             bumpNavigation();
-            selectedId = created.id;
             error = '';
+            await selectEntry(created.id, { push: true });
+            // Filing changes direct-entry counts: refresh the
+            // navigator or its badges lag the new entry.
+            await loadFolders();
         } catch (e) {
             error = describeError(e);
         } finally {
@@ -112,14 +304,9 @@
                 searchNote = '';
                 return;
             }
-            try {
-                results = await api.search(q);
-                searchNote = results.length === 0 ? 'Nothing found.' : '';
-            } catch (e) {
-                results = null;
-                searchNote =
-                    e === 'query_too_short' ? 'Type at least 3 characters (2 for Russian).' : `Search failed (${e}).`;
-            }
+            // Search defaults to the whole vault; the checkbox
+            // narrows it to what the list currently shows.
+            await runSearch(q);
         }, 250);
     }
 
@@ -130,12 +317,21 @@
     <header class="diary-head">
         <span class="vault-label">{vault?.name}</span>
         <div class="diary-menu">
-            <input
-                type="search"
-                placeholder="Search the diary…"
-                aria-label="Search the diary"
-                bind:value={query}
-                oninput={onSearchInput} />
+            <div class="search-block">
+                <input
+                    type="search"
+                    placeholder="Search the diary…"
+                    aria-label="Search the diary"
+                    bind:value={query}
+                    oninput={onSearchInput} />
+                {#if scopeFolderName}
+                    <label class="search-scope">
+                        <input type="checkbox" bind:checked={searchScoped} />
+                        Only in {scopeFolderName}
+                    </label>
+                {/if}
+            </div>
+            <span class="dest" title="New entries file here">in {destName}</span>
             <Button label="New entry" kind="texture-button" handler={newEntry} disabled={creating} />
             <Button label="Settings" kind="texture-button" handler={onSettings} />
             <Button label="Lock" kind="texture-button" handler={onLock} />
@@ -144,43 +340,67 @@
     </header>
     <div class="diary-body">
         <aside>
+            <FolderTree
+                {folders}
+                selection={scopeSel}
+                onSelect={handleScopeSelect}
+                onChanged={handleFoldersChanged} />
             <EntryList
                 version={navVersion}
                 {selectedId}
-                onSelect={(id) => (selectedId = id)}
+                onSelect={(id) => selectEntry(id, { push: true })}
                 date={listDate}
                 onClearDate={() => (listDate = null)}
                 {results}
                 {searchNote}
+                scope={listScope}
+                {folders}
+                {filterEpoch}
+                onToggleDescendants={toggleDescendants}
                 onClearSearch={() => {
                     query = '';
                     results = null;
                     searchNote = '';
                 }} />
         </aside>
-        <main>
+        <main bind:this={mainEl}>
             {#if selectedId}
                 {#key selectedId}
                     <EntryEditor
+                        bind:this={editorRef}
                         entryId={selectedId}
+                        {folders}
+                        {navRestore}
+                        {canGoBack}
+                        {canGoForward}
+                        onOpenEntry={({ id }) => selectEntry(id, { push: true })}
+                        onNavBack={() => goHistory(-1)}
+                        onNavForward={() => goHistory(1)}
                         onBack={() => (selectedId = null)}
-                        onDeleted={() => {
+                        onDeleted={async () => {
                             selectedId = null;
                             bumpNavigation();
+                            // Deleting changes direct-entry counts too.
+                            await loadFolders();
                         }}
                         onSaved={bumpNavigation} />
                 {/key}
             {:else}
                 <div class="calendar-home">
-                    <Calendar large selectedDate={listDate} onSelect={(d) => (listDate = d)} version={navVersion} />
+                    <Calendar
+                        large
+                        selectedDate={listDate}
+                        onSelect={(d) => (listDate = d)}
+                        version={navVersion}
+                        scope={listScope} />
                     <NoteComponent
                         variant="info"
                         text="Pick a day to see its entries in the list — or pick a recent entry on the left." />
                     {#if onThisDay.length}
                         <div class="on-this-day">
-                            <h3>On this day</h3>
+                            <h3>On this day <span class="vault-wide">· whole vault</span></h3>
                             {#each onThisDay as entry (entry.id)}
-                                <button class="otd-row" onclick={() => (selectedId = entry.id)}>
+                                <button class="otd-row" onclick={() => selectEntry(entry.id, { push: true })}>
                                     <span class="otd-year">{entry.entry_date.slice(0, 4)}</span>
                                     <span>{entry.title || 'Untitled'}</span>
                                 </button>

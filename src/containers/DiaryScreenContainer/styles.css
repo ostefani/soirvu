@@ -23,13 +23,43 @@
     align-items: center;
     padding: 0.5rem 1rem;
     background-color: #0000001a;
-    height: 60px;
+    min-height: 60px;
     box-shadow: 0 16px 0 0 var(--separator-shadow);
 }
 
 .diary-menu {
     display: flex;
+    align-items: center;
     gap: 8px;
+}
+
+.search-block {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.search-scope {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.75rem;
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.dest {
+    align-self: center;
+    font-size: 0.78rem;
+    color: var(--color-ink-muted);
+    white-space: nowrap;
+}
+
+.vault-wide {
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
 }
 
 .vault-label {
@@ -103,4 +133,27 @@
     color: var(--color-ink-muted);
     font-variant-numeric: tabular-nums;
     min-width: 3.2em;
+}
+
+/* Narrow windows stack the navigator above the editor instead of
+   squeezing three columns side by side. A full navigation drawer
+   is a later polish item; stacking keeps everything reachable. */
+@media (max-width: 700px) {
+    .diary-body {
+        flex-direction: column;
+        overflow-y: auto;
+    }
+
+    .diary-body aside {
+        width: 100%;
+        flex-shrink: 0;
+        overflow-y: visible;
+        box-shadow: none;
+        border-bottom: 1px solid var(--color-border-subtle);
+    }
+
+    .diary-body main {
+        overflow-y: visible;
+        padding: 16px;
+    }
 }

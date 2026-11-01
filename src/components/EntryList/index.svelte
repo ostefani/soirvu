@@ -2,6 +2,7 @@
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     import * as api from '@/api.js';
+    import { breadcrumb } from '@/lib/folders.js';
 
     let {
         selectedId,
@@ -13,6 +14,15 @@
         searchNote = '',
         onClearSearch,
         version = 0,
+        // Folder scope: null is the whole vault. Tag and date
+        // filters intersect it; the server applies the rest.
+        scope = null,
+        folders = [],
+        // Bumped after entry creation so the tag filter clears
+        // with the search and date filters (the new entry stays
+        // visible in the kept folder context).
+        filterEpoch = 0,
+        onToggleDescendants = null,
     } = $props();
 
     let entries = $state([]);
@@ -43,9 +53,9 @@
                 limit: 50,
                 tag: tagFilter,
                 date,
+                scope: scope ?? null,
             });
             entries = reset ? page.entries : [...entries, ...page.entries];
-            console.log('entries: ', entries);
             nextCursor = page.next_cursor;
             error = '';
         } catch (e) {
@@ -54,15 +64,47 @@
     }
 
     async function loadTags() {
-        tags = await api.tagList();
+        try {
+            tags = await api.tagList(scope ?? null);
+            tagNote = '';
+        } catch (e) {
+            // Unlike the entries load, the tag block owns no error
+            // slot of its own: a rejection here must not escape as
+            // an unhandled promise rejection.
+            tagNote = describeError(e);
+        }
     }
 
     async function refresh() {
         await Promise.all([load(true), loadTags()]);
     }
 
+    const byId = $derived(new Map(folders.map((f) => [f.id, f])));
+
+    const scopeLabel = $derived(
+        scope?.kind === 'folder'
+            ? (byId.get(scope.id)?.name ?? '…')
+            : scope?.kind === 'root'
+              ? 'Root entries'
+              : 'All entries',
+    );
+
+    function crumb(folderId) {
+        if (folderId == null) return '';
+        return breadcrumb(byId, folderId).join(' / ');
+    }
+
+    let lastFilterEpoch = 0;
+
     $effect(() => {
         void version;
+        void scope?.kind;
+        void scope?.id;
+        void scope?.includeDescendants;
+        if (filterEpoch !== lastFilterEpoch) {
+            lastFilterEpoch = filterEpoch;
+            tagFilter = null;
+        }
         refresh();
     });
 
@@ -113,6 +155,18 @@
 </script>
 
 <div class="entry-list">
+    <div class="list-head">
+        <h2 class="list-title">Entries · {scopeLabel}</h2>
+        {#if scope?.kind === 'folder'}
+            <label class="desc-toggle">
+                <input
+                    type="checkbox"
+                    checked={scope.includeDescendants}
+                    onchange={() => onToggleDescendants?.()} />
+                Include subfolders
+            </label>
+        {/if}
+    </div>
     {#if error}<p class="form-error">{error}</p>{/if}
 
     {#if date}
@@ -175,6 +229,7 @@
             {#each results as r (r.id)}
                 <button class="result" onclick={() => onSelect(r.id)}>
                     <span class="result-head">{r.entry_date} — {r.title ?? 'Untitled'}</span>
+                    {#if r.folder_id}<span class="crumb">{crumb(r.folder_id)}</span>{/if}
                     <span class="snippet">
                         {#each segments(r.snippet) as seg}
                             {#if seg.marked}<mark>{seg.text}</mark>{:else}{seg.text}{/if}
@@ -189,6 +244,7 @@
                 <button class="entry-row" class:active={selectedId === entry.id} onclick={() => onSelect(entry.id)}>
                     <span class="entry-date">{entry.entry_date}</span>
                     <span class="entry-title">{entry.title ?? entry.excerpt ?? 'Untitled'}</span>
+                    {#if entry.folder_id}<span class="crumb">{crumb(entry.folder_id)}</span>{/if}
                 </button>
             {/each}
             {#if entries.length === 0}<p class="note">No entries yet.</p>{/if}

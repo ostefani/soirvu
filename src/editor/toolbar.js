@@ -11,11 +11,13 @@ import {
     liftChild,
     liftListItem,
     markActive,
+    removeMarkInRange,
     setBlockType,
     toggleMark,
     wrapBlocks,
 } from "./commands.js";
-import { TextSelection, selectionNear } from "./state.js";
+import { cursorMarks, TextSelection, selectionNear } from "./state.js";
+import { parseEntryTarget } from "../lib/links.js";
 import {
     addColumnCommand,
     addRowCommand,
@@ -28,7 +30,9 @@ import {
 /** A plain description of the selection, for rendering the
  *  toolbar's active states. `block` is the textblock at the
  *  cursor; `list` is the kind of list the cursor sits in, where
- *  a task is a bullet item whose checked attr is set. */
+ *  a task is a bullet item whose checked attr is set; `link` is
+ *  the link mark under an empty cursor with its exact range, or
+ *  null (ranges are authored through the toolbar instead). */
 export function selectionInfo(state) {
     const sel = state.selection;
     const info = {
@@ -64,6 +68,7 @@ export function selectionInfo(state) {
         info.block = "paragraph";
     }
     info.inTable = Boolean(tableContext(state));
+    info.link = linkAt(state);
     for (let d = 1; d <= $from.depth; d++) {
         const node = $from.node(d);
         if (node.type === nodes.blockquote) info.quote = true;
@@ -79,6 +84,91 @@ export function selectionInfo(state) {
         }
     }
     return info;
+}
+
+/** The link mark under an empty cursor with its exact range —
+ *  the link popover's anchor. Adjacent text sharing the same href
+ *  merges into one run. Anything else (a range, a non-text
+ *  selection, a block without link text) reports nothing. */
+export function linkAt(state) {
+    const sel = state.selection;
+    if (sel.type !== "text" || !sel.empty) return null;
+    const { marks } = state.schema;
+    const $pos = state.doc.resolve(sel.from);
+    if (!$pos.parent.isTextblock) return null;
+    const runs = [];
+    state.doc.nodesBetween($pos.before($pos.depth), $pos.after($pos.depth), (node, pos) => {
+        if (!node.isText) return true;
+        const mark = node.marks.find((m) => m.type === marks.link);
+        if (!mark) return true;
+        const start = pos;
+        const end = pos + node.nodeSize;
+        const last = runs[runs.length - 1];
+        if (last && last.href === mark.attrs.href && last.to === start) last.to = end;
+        else runs.push({ href: mark.attrs.href, from: start, to: end });
+        return true;
+    });
+    return runs.find((r) => sel.from >= r.from && sel.from <= r.to) ?? null;
+}
+
+/** The current range of the link run with `href` holding
+ *  `hintPos`, or null. The resolution is strict on purpose: after
+ *  an async gap the captured range may be stale, and falling back
+ *  to another run with the same destination would write to a link
+ *  the user never pointed at. Callers cancel with a note instead.
+ *  Adjacent text sharing the href merges into one run, like
+ *  `linkAt`. */
+export function locateLink(state, href, hintPos) {
+    const { marks } = state.schema;
+    const runs = [];
+    state.doc.descendants((node, pos) => {
+        if (!node.isText) return true;
+        const mark = node.marks.find((m) => m.type === marks.link && m.attrs.href === href);
+        if (!mark) return true;
+        const last = runs[runs.length - 1];
+        if (last && last.to === pos) last.to = pos + node.nodeSize;
+        else runs.push({ from: pos, to: pos + node.nodeSize });
+        return true;
+    });
+    const at = Math.max(0, Math.min(hintPos, state.doc.content.size));
+    return runs.find((r) => at >= r.from && at <= r.to) ?? null;
+}
+
+/** Inserts (or replaces a range with) an entry link. The label is
+ *  the caller's: selected text, the target title, or "Untitled —
+ *  date". The target must be a canonical UUID — authoring
+ *  validation mirrors the parser gate, so a stored link always
+ *  verifies. Code blocks and code-marked text refuse. */
+export function insertEntryLink(state, dispatch, arg = {}) {
+    const targetId = parseEntryTarget(`entry:${arg.targetId ?? ""}`);
+    if (targetId === null) return false;
+    const sel = state.selection;
+    if (sel.type !== "text") return false;
+    const from = arg.from ?? sel.from;
+    const to = arg.to ?? sel.to;
+    if (from > to) return false;
+    const { marks } = state.schema;
+    const $from = state.doc.resolve(from);
+    if (!$from.parent.isTextblock || $from.parent.type.spec.code) return false;
+    const label = arg.label ?? "";
+    if (!label) return false;
+    // Keep the range's own emphasis; a link inside a link is never
+    // valid and code is not linkable text.
+    let marksAt = null;
+    state.doc.nodesBetween(from, to, (node) => {
+        if (marksAt === null && node.isText) marksAt = node.marks;
+        return marksAt === null;
+    });
+    const kept = (marksAt ?? cursorMarks(state)).filter(
+        (m) => m.type !== marks.code && m.type !== marks.link,
+    );
+    const link = marks.link.create({ href: `entry:${targetId}`, title: null });
+    const tr = state.tr();
+    tr.replaceWith(from, to, [state.schema.text(label, [...kept, link])]);
+    tr.setSelection(new TextSelection(from + label.length));
+    tr.setStoredMarks(null);
+    if (dispatch) dispatch(tr);
+    return true;
 }
 
 /** Rebuilds the nearest ancestor matching `pred` with `build`
@@ -155,6 +245,8 @@ export function toolbarCommands(schema) {
         em: toggleMark(marks.em),
         strike: toggleMark(marks.strike),
         code: toggleMark(marks.code),
+        insertEntryLink: (state, dispatch, arg) => insertEntryLink(state, dispatch, arg),
+        removeLink: removeMarkInRange(marks.link),
         paragraph: toParagraph,
         heading1: heading(1),
         heading2: heading(2),

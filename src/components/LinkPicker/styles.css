@@ -1,0 +1,95 @@
+/* SPDX-License-Identifier: MIT
+   Copyright (c) 2026 Olha Stefanishyna */
+/* The link picker: a focused dialog over the editor. Rows read
+   like entry rows (title, muted meta) with the active row tinted
+   instead of boxed. */
+.link-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.6rem;
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px var(--elevation-shadow);
+}
+
+.link-picker input[type='search'] {
+    font-size: 0.9rem;
+    padding: 0.35rem 0.6rem;
+    color: var(--color-ink-primary);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 8px;
+}
+
+.candidates {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 16rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.candidates button {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    row-gap: 0.1rem;
+    width: 100%;
+    text-align: left;
+    padding: 0.5rem 0.6rem;
+    color: var(--color-ink-primary);
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.candidates button:hover,
+.candidates button.active {
+    background-color: var(--color-accent-soft);
+    border-color: var(--color-border-subtle);
+}
+
+.cand-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.cand-meta {
+    font-size: 0.76rem;
+    color: var(--color-ink-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.note {
+    margin: 0.2rem 0.3rem;
+    font-size: 0.82rem;
+    color: var(--color-ink-muted);
+}
+
+.more {
+    align-self: center;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.85rem;
+    color: var(--color-ink-primary);
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 999px;
+    cursor: pointer;
+}
+
+.more:hover:not(:disabled) {
+    background-color: var(--color-accent-soft);
+}

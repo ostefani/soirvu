@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
-    let { editor, info, disabled = false, onAttach = null } = $props();
+    let { editor, info, disabled = false, onAttach = null, onLinkEntry = null } = $props();
 
     function run(name) {
         editor?.exec(name);
@@ -38,6 +38,14 @@
         onmousedown={keepFocus}
         onclick={() => run('code')}
         title="Inline code (Ctrl+E)">&lt;/&gt;</button>
+    {#if onLinkEntry}
+        <button
+            type="button"
+            class:active={!!info?.link}
+            onmousedown={keepFocus}
+            onclick={() => onLinkEntry()}
+            title="Link to entry">Link…</button>
+    {/if}
     {#if info?.block === 'code_block'}
         <input
             class="tb-lang"
