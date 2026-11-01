@@ -12,6 +12,7 @@
     import IconLeft from '@/icons/arrow-left.svelte';
     import Input from '@/components/Input/index.svelte';
     import { createAutosave } from '@/lib/autosave.svelte.js';
+    import { createEntryCommit } from '@/lib/entry-commit.js';
     import { registerFlushHook } from '@/lib/lock-hooks.js';
     import { notify } from '@/components/Notification/store.svelte.js';
     import { EVENT_TYPE } from '@/constants.js';
@@ -84,36 +85,23 @@
             : null;
     }
 
-    /* The newest entry rev our own uploads reported. A send that
-       left with an older rev and meets a conflict raced an upload
-       we started: the base moved under a known cause, so one resend
-       against the adopted rev is safe. A second conflict — or one
-       with no upload behind it — sticks, because another writer may
-       own the newer rev and must not be clobbered. */
-    let lastUploadRev = 0;
+    /* One entry's commit sequence: content saves and attachment
+       completions run exclusively, in submission order, each with
+       the newest committed base. Our own operations can no longer
+       race each other, so a conflict here is genuinely foreign —
+       surface it with the draft preserved instead of retrying. */
+    let commitSeq = null;
 
     const autosave = createAutosave({
         snapshot: takeSnapshot,
         send: async (payload) => {
-            const attemptedRev = entry.rev;
             try {
-                entry = await api.entryUpdate(entry.id, attemptedRev, payload);
+                entry = await commitSeq.commit((base) =>
+                    api.entryUpdate(entry.id, base, payload),
+                );
             } catch (e) {
-                if (e !== 'revision_conflict' || lastUploadRev <= attemptedRev) {
-                    if (e === 'revision_conflict') saveConflict = true;
-                    throw e;
-                }
-                // Our upload landed mid-send and its rev is already
-                // adopted below; resend the current document once.
-                // A null snapshot only happens mid-teardown, where
-                // the in-flight payload is the best available text.
-                const fresh = takeSnapshot() ?? payload;
-                try {
-                    entry = await api.entryUpdate(entry.id, entry.rev, fresh);
-                } catch (e2) {
-                    if (e2 === 'revision_conflict') saveConflict = true;
-                    throw e2;
-                }
+                if (e === 'revision_conflict') saveConflict = true;
+                throw e;
             }
             onSaved?.();
         },
@@ -214,6 +202,7 @@
     onMount(async () => {
         try {
             entry = await api.entryGet(entryId);
+            commitSeq = createEntryCommit(entry.rev);
         } catch (e) {
             loadFailed = true;
             // A followed link whose target is gone keeps its notice
@@ -356,17 +345,20 @@
                 const slice = await file.slice(offset, offset + ATTACH_CHUNK).arrayBuffer();
                 await api.attachmentChunk(uploadId, new Uint8Array(slice));
             }
-            // Settle our own saves first, so the expected rev is fresh
-            // and the server only refuses on genuinely foreign
-            // advances — not on a save still in flight.
+            // Settle our own saves first, so the attachment lands on
+            // saved text. The commit sequence owns the base either
+            // way: even a save still in flight cannot make this
+            // finish stale, so the server only refuses on genuinely
+            // foreign advances.
             await autosave.flush();
-            const added = await api.attachmentFinish(uploadId, entry.rev);
+            const added = await commitSeq.commit((base) =>
+                api.attachmentFinish(uploadId, base),
+            );
             uploadId = null;
             // The commit bumped the entry rev server-side; adopt it
-            // before dirtying the document so the next save — and a
-            // send racing this finish — builds on the fresh base.
+            // before dirtying the document so the next save builds
+            // on the fresh base.
             if (entry) entry = { ...entry, rev: added.rev };
-            lastUploadRev = added.rev;
             editor?.insertAttachment({ id: added.id, mime: added.mime, name: file.name });
             return null;
         } catch (e) {
