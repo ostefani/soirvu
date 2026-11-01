@@ -52,3 +52,17 @@ export function createEntryCommit(initialRev, revOf = (result) => result.rev) {
         commit,
     };
 }
+
+/**
+ * Whether an attachment completion may proceed after the
+ * pre-finish flush. A flush that leaves the draft unsaved because
+ * a save FAILED must stop the finish: the base may be foreign and
+ * the text is already behind, so committing would stack another
+ * write under an unsaved draft. Fresh edits that landed mid-flush
+ * ('dirty') are fine — the sequence gives the finish a fresh base
+ * and the new text saves right after. Deny only on proven
+ * failure; proceeding is always safe, just sometimes pointless.
+ */
+export function mayFinishAfterFlush(flushedClean, autosaveState) {
+    return flushedClean || autosaveState !== "error";
+}

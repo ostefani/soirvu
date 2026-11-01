@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { createEntryCommit } from "../entry-commit.js";
+import { createEntryCommit, mayFinishAfterFlush } from "../entry-commit.js";
 
 /** One deferred promise per test barrier. */
 function deferred() {
@@ -128,6 +128,19 @@ test("a foreign advance conflicts without retry or overwrite", async () => {
     const reopened = createEntryCommit(store.rev);
     const done = await reopened.commit((base) => store.save(base, "after-reopen"));
     assert.equal(done.rev, 3);
+});
+
+test("the finish gate stops only on failed saves, not fresh edits", () => {
+    // Clean flush: always proceed, whatever the state says.
+    assert.equal(mayFinishAfterFlush(true, "saved"), true);
+    assert.equal(mayFinishAfterFlush(true, "error"), true);
+    // Unsaved because a save FAILED: stop the finish instead of
+    // stacking a write under an unsaved (possibly foreign) draft.
+    assert.equal(mayFinishAfterFlush(false, "error"), false);
+    // Unsaved because edits landed mid-flush: proceed, the
+    // sequence still bases the finish on the newest commit.
+    assert.equal(mayFinishAfterFlush(false, "dirty"), true);
+    assert.equal(mayFinishAfterFlush(false, "saving"), true);
 });
 
 test("a failed task does not block the sequence", async () => {

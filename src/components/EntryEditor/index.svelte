@@ -12,7 +12,7 @@
     import IconLeft from '@/icons/arrow-left.svelte';
     import Input from '@/components/Input/index.svelte';
     import { createAutosave } from '@/lib/autosave.svelte.js';
-    import { createEntryCommit } from '@/lib/entry-commit.js';
+    import { createEntryCommit, mayFinishAfterFlush } from '@/lib/entry-commit.js';
     import { registerFlushHook } from '@/lib/lock-hooks.js';
     import { notify } from '@/components/Notification/store.svelte.js';
     import { EVENT_TYPE } from '@/constants.js';
@@ -346,11 +346,17 @@
                 await api.attachmentChunk(uploadId, new Uint8Array(slice));
             }
             // Settle our own saves first, so the attachment lands on
-            // saved text. The commit sequence owns the base either
-            // way: even a save still in flight cannot make this
-            // finish stale, so the server only refuses on genuinely
-            // foreign advances.
-            await autosave.flush();
+            // saved text. A flush that leaves the draft unsaved
+            // through a FAILED save stops the finish: proceeding
+            // would stack a write under text that is already behind
+            // (and possibly foreign). Fresh mid-flush edits are
+            // fine — the sequence still gives this finish a new base.
+            const saved = await autosave.flush();
+            if (!mayFinishAfterFlush(saved, autosave.state)) {
+                await api.attachmentAbort(uploadId).catch(() => {});
+                uploadId = null;
+                return `${file.name}: latest edits could not be saved — attach again after saving.`;
+            }
             const added = await commitSeq.commit((base) =>
                 api.attachmentFinish(uploadId, base),
             );
