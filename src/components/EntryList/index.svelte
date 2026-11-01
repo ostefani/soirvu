@@ -2,6 +2,7 @@
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     import * as api from '@/api.js';
+    import Checkbox from '@/components/Checkbox/index.svelte';
     import { breadcrumb } from '@/lib/folders.js';
 
     let {
@@ -158,13 +159,10 @@
     <div class="list-head">
         <h2 class="list-title">Entries · {scopeLabel}</h2>
         {#if scope?.kind === 'folder'}
-            <label class="desc-toggle">
-                <input
-                    type="checkbox"
-                    checked={scope.includeDescendants}
-                    onchange={() => onToggleDescendants?.()} />
-                Include subfolders
-            </label>
+            <Checkbox
+                checked={scope.includeDescendants}
+                onchange={() => onToggleDescendants?.()}
+                label="Include subfolders" />
         {/if}
     </div>
     {#if error}<p class="form-error">{error}</p>{/if}

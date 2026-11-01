@@ -10,6 +10,7 @@
     import Calendar from '@/components/Calendar/index.svelte';
     import EntryEditor from '@/components/EntryEditor/index.svelte';
     import Button from '@/components/Button/index.svelte';
+    import Checkbox from '@/components/Checkbox/index.svelte';
     import NoteComponent from '@/components/NoteComponent/index.svelte';
 
     let { vault, onLock, onSettings, importTick = 0 } = $props();
@@ -329,10 +330,10 @@
                     bind:value={query}
                     oninput={onSearchInput} />
                 {#if scopeFolderName}
-                    <label class="search-scope">
-                        <input type="checkbox" bind:checked={searchScoped} />
-                        Only in {scopeFolderName}
-                    </label>
+                    <Checkbox
+                        checked={searchScoped}
+                        onchange={(e) => (searchScoped = e.currentTarget.checked)}
+                        label={`Only in ${scopeFolderName}`} />
                 {/if}
             </div>
             <span class="dest" title="New entries file here">in {destName}</span>

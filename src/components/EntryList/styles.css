@@ -324,16 +324,6 @@ button.result.active {
     color: var(--color-ink-muted);
 }
 
-.desc-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    font-size: 0.78rem;
-    color: var(--color-ink-muted);
-    cursor: pointer;
-    white-space: nowrap;
-}
-
 .crumb {
     font-size: 0.74rem;
     color: var(--color-ink-muted);

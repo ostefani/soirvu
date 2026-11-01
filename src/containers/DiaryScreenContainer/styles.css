@@ -39,16 +39,6 @@
     gap: 2px;
 }
 
-.search-scope {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    font-size: 0.75rem;
-    color: var(--color-ink-muted);
-    cursor: pointer;
-    white-space: nowrap;
-}
-
 .dest {
     align-self: center;
     font-size: 0.78rem;
