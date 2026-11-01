@@ -33,7 +33,9 @@ pub struct Folder {
 }
 
 /// Maximum nesting depth, counting root-level folders as depth 1.
-const MAX_DEPTH: i64 = 32;
+/// Crate-visible: the scoped reads bound their recursive subtree
+/// one past this so legitimate trees never clip.
+pub(crate) const MAX_DEPTH: i64 = 32;
 /// Longest folder name, in Unicode scalar values.
 const MAX_NAME_CHARS: usize = 100;
 
@@ -288,41 +290,81 @@ impl Vault {
         }
     }
 
+    /// Shared rename/move/update core, so the revision gate, the
+    /// parent checks, the destination duplicate check and the
+    /// single-statement write live in exactly one place. A `None`
+    /// side keeps the stored value; `Some` on the parent assigns,
+    /// including back to the root. Fully unchanged calls are
+    /// no-ops that skip the revision check, like the wrappers
+    /// always did.
+    fn apply_folder_change(
+        &mut self,
+        id: &str,
+        expected_rev: i64,
+        name: Option<&str>,
+        parent: Option<Option<&str>>,
+    ) -> Result<Folder> {
+        let row = read_folder(self.db.connection(), id)?;
+        let row = match row {
+            Some(row) if row.deleted_at.is_none() => row.folder,
+            _ => return Err(Error::FolderNotFound),
+        };
+        let (display, key) = match name {
+            Some(name) => normalize_name(name)?,
+            None => (row.name.clone(), crate::entries::normalize_key(&row.name)),
+        };
+        let parent_id = parent
+            .unwrap_or(row.parent_id.as_deref())
+            .map(str::to_string);
+        if display == row.name && parent_id == row.parent_id {
+            return Ok(row);
+        }
+        if row.rev != expected_rev {
+            return Err(Error::RevisionConflict);
+        }
+        if parent_id != row.parent_id {
+            if let Some(parent) = parent_id.as_deref()
+                && !folder_is_live(self.db.connection(), parent)?
+            {
+                return Err(Error::FolderNotFound);
+            }
+            let chain = ancestors(self.db.connection(), parent_id.clone())?;
+            if chain.iter().any(|ancestor| ancestor == id) {
+                return Err(Error::FolderCycle);
+            }
+            if chain.len() as i64 + 1 > MAX_DEPTH {
+                return Err(Error::FolderTooDeep);
+            }
+        }
+        let now = now_ms().max(row.updated_at + 1);
+        let device = self.device_id.clone();
+        let tx = self.db.conn_mut().transaction()?;
+        reject_duplicate_sibling(&tx, parent_id.as_deref(), &key, id)?;
+        let lseq = next_lseq(&tx)?;
+        tx.execute(
+            "UPDATE folder
+                SET name = ?1, name_key = ?2, parent_id = ?3, updated_at = ?4, rev = rev + 1,
+                    device_id = ?5, lseq = ?6
+              WHERE id = ?7 AND deleted_at IS NULL",
+            params![display, key, parent_id, now, device, lseq, id],
+        )?;
+        tx.commit()?;
+        Ok(Folder {
+            id: id.to_string(),
+            parent_id,
+            name: display,
+            created_at: row.created_at,
+            updated_at: now,
+            rev: row.rev + 1,
+        })
+    }
+
     /// Renames a live folder. The name rules and the duplicate-sibling
     /// check are the same as on create. An unchanged name is a no-op:
     /// it is returned as-is without a revision bump. Any other change
     /// requires the revision the caller read, or fails revision_conflict.
     pub fn rename_folder(&mut self, id: &str, expected_rev: i64, name: &str) -> Result<Folder> {
-        let row = read_folder(self.db.connection(), id)?;
-        let row = match row {
-            Some(row) if row.deleted_at.is_none() => row,
-            _ => return Err(Error::FolderNotFound),
-        };
-        let (display, key) = normalize_name(name)?;
-        if display == row.folder.name {
-            return Ok(row.folder);
-        }
-        if row.folder.rev != expected_rev {
-            return Err(Error::RevisionConflict);
-        }
-        let now = now_ms().max(row.folder.updated_at + 1);
-        let device = self.device_id.clone();
-        let tx = self.db.conn_mut().transaction()?;
-        reject_duplicate_sibling(&tx, row.folder.parent_id.as_deref(), &key, id)?;
-        let lseq = next_lseq(&tx)?;
-        tx.execute(
-            "UPDATE folder
-                SET name = ?1, name_key = ?2, updated_at = ?3, rev = rev + 1,
-                    device_id = ?4, lseq = ?5
-              WHERE id = ?6 AND deleted_at IS NULL",
-            params![display, key, now, device, lseq, id],
-        )?;
-        tx.commit()?;
-        let mut folder = row.folder;
-        folder.name = display;
-        folder.updated_at = now;
-        folder.rev += 1;
-        Ok(folder)
+        self.apply_folder_change(id, expected_rev, Some(name), None)
     }
 
     /// Moves a live folder under a new parent (`None` is the vault
@@ -336,58 +378,17 @@ impl Vault {
         expected_rev: i64,
         parent_id: Option<&str>,
     ) -> Result<Folder> {
-        let row = read_folder(self.db.connection(), id)?;
-        let row = match row {
-            Some(row) if row.deleted_at.is_none() => row,
-            _ => return Err(Error::FolderNotFound),
-        };
-        if row.folder.parent_id.as_deref() == parent_id {
-            return Ok(row.folder);
-        }
-        if row.folder.rev != expected_rev {
-            return Err(Error::RevisionConflict);
-        }
-        if let Some(parent) = parent_id {
-            if !folder_is_live(self.db.connection(), parent)? {
-                return Err(Error::FolderNotFound);
-            }
-        }
-        let chain = ancestors(self.db.connection(), parent_id.map(str::to_string))?;
-        if chain.iter().any(|ancestor| ancestor == id) {
-            return Err(Error::FolderCycle);
-        }
-        if chain.len() as i64 + 1 > MAX_DEPTH {
-            return Err(Error::FolderTooDeep);
-        }
-        let now = now_ms().max(row.folder.updated_at + 1);
-        let device = self.device_id.clone();
-        let tx = self.db.conn_mut().transaction()?;
-        let name_key = crate::entries::normalize_key(&row.folder.name);
-        reject_duplicate_sibling(&tx, parent_id, &name_key, id)?;
-        let lseq = next_lseq(&tx)?;
-        tx.execute(
-            "UPDATE folder
-                SET parent_id = ?1, updated_at = ?2, rev = rev + 1,
-                    device_id = ?3, lseq = ?4
-              WHERE id = ?5 AND deleted_at IS NULL",
-            params![parent_id, now, device, lseq, id],
-        )?;
-        tx.commit()?;
-        let mut folder = row.folder;
-        folder.parent_id = parent_id.map(str::to_string);
-        folder.updated_at = now;
-        folder.rev += 1;
-        Ok(folder)
+        self.apply_folder_change(id, expected_rev, None, Some(parent_id))
     }
 
     /// Renames and moves a live folder in one revision. The
-    /// separate rename and move exist for callers that change one
-    /// thing, but a combined call must not commit one half and fail
-    /// the other — so everything is validated first (name, revision,
-    /// parent liveness, cycles, depth, duplicate siblings) and a
-    /// single statement writes both columns with one revision bump.
-    /// A fully unchanged call is a no-op and skips the revision
-    /// check, like the separate rename and move.
+    /// separate rename and move are thin wrappers for callers that
+    /// change one thing, but a combined call must not commit one
+    /// half and fail the other — so everything is validated first
+    /// (name, revision, parent liveness, cycles, depth, duplicate
+    /// siblings) and a single statement writes both columns with
+    /// one revision bump. A fully unchanged call is a no-op and
+    /// skips the revision check, like the separate rename and move.
     pub fn update_folder(
         &mut self,
         id: &str,
@@ -395,52 +396,7 @@ impl Vault {
         parent_id: Option<&str>,
         name: &str,
     ) -> Result<Folder> {
-        let row = read_folder(self.db.connection(), id)?;
-        let row = match row {
-            Some(row) if row.deleted_at.is_none() => row,
-            _ => return Err(Error::FolderNotFound),
-        };
-        let (display, key) = normalize_name(name)?;
-        let parent_changed = row.folder.parent_id.as_deref() != parent_id;
-        if display == row.folder.name && !parent_changed {
-            return Ok(row.folder);
-        }
-        if row.folder.rev != expected_rev {
-            return Err(Error::RevisionConflict);
-        }
-        if parent_changed {
-            if let Some(parent) = parent_id
-                && !folder_is_live(self.db.connection(), parent)?
-            {
-                return Err(Error::FolderNotFound);
-            }
-            let chain = ancestors(self.db.connection(), parent_id.map(str::to_string))?;
-            if chain.iter().any(|ancestor| ancestor == id) {
-                return Err(Error::FolderCycle);
-            }
-            if chain.len() as i64 + 1 > MAX_DEPTH {
-                return Err(Error::FolderTooDeep);
-            }
-        }
-        let now = now_ms().max(row.folder.updated_at + 1);
-        let device = self.device_id.clone();
-        let tx = self.db.conn_mut().transaction()?;
-        reject_duplicate_sibling(&tx, parent_id, &key, id)?;
-        let lseq = next_lseq(&tx)?;
-        tx.execute(
-            "UPDATE folder
-                SET name = ?1, name_key = ?2, parent_id = ?3, updated_at = ?4, rev = rev + 1,
-                    device_id = ?5, lseq = ?6
-              WHERE id = ?7 AND deleted_at IS NULL",
-            params![display, key, parent_id, now, device, lseq, id],
-        )?;
-        tx.commit()?;
-        let mut folder = row.folder;
-        folder.name = display;
-        folder.parent_id = parent_id.map(str::to_string);
-        folder.updated_at = now;
-        folder.rev += 1;
-        Ok(folder)
+        self.apply_folder_change(id, expected_rev, Some(name), Some(parent_id))
     }
 
     /// Deletes an empty live folder by writing a tombstone: the row
@@ -682,6 +638,71 @@ mod tests {
             .update_folder(&done.id, done.rev + 99, None, "Bee")
             .unwrap();
         assert_eq!(same.rev, done.rev);
+    }
+
+    /// A failed combined update writes nothing: name, parent,
+    /// revision and change sequence all stay put, so a later sync
+    /// never replays a half-applied rename. Success advances the
+    /// revision and the change sequence exactly once.
+    #[test]
+    fn failed_update_writes_nothing_success_bumps_once() {
+        let (_tmp, mut vault) = test_vault();
+        let a = vault.create_folder(None, "A").unwrap();
+        let b = vault.create_folder(Some(&a.id), "B").unwrap();
+        let lseq_of = |vault: &crate::Vault, id: &str| -> i64 {
+            vault
+                .database()
+                .connection()
+                .query_row("SELECT lseq FROM folder WHERE id = ?1", [id], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+        let lseq_before = lseq_of(&vault, &b.id);
+        let err = vault
+            .update_folder(&b.id, b.rev, Some(&b.id), "Bee")
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::FolderCycle));
+        let kept = vault.get_folder(&b.id).unwrap();
+        assert_eq!(kept.name, "B");
+        assert_eq!(kept.parent_id.as_deref(), Some(a.id.as_str()));
+        assert_eq!(kept.rev, b.rev);
+        assert_eq!(lseq_of(&vault, &b.id), lseq_before);
+        let done = vault.update_folder(&b.id, b.rev, None, "Bee").unwrap();
+        assert_eq!(done.rev, b.rev + 1);
+        assert_eq!(lseq_of(&vault, &b.id), lseq_before + 1);
+    }
+
+    /// The duplicate check runs against the destination, not the
+    /// source: a proposed name taken under the old parent but free
+    /// under the destination applies; a name taken under the
+    /// destination fails without writing anything.
+    #[test]
+    fn combined_update_validates_name_at_destination() {
+        let (_tmp, mut vault) = test_vault();
+        let m = vault.create_folder(None, "M").unwrap();
+        vault.create_folder(None, "N").unwrap();
+        let d = vault.create_folder(None, "D").unwrap();
+        let taken = vault.create_folder(Some(&d.id), "Taken").unwrap();
+        // "N" is taken at the root but free under D: applies.
+        let done = vault.update_folder(&m.id, m.rev, Some(&d.id), "N").unwrap();
+        assert_eq!(done.name, "N");
+        assert_eq!(done.parent_id.as_deref(), Some(d.id.as_str()));
+        assert_eq!(done.rev, m.rev + 1);
+        // "Taken" is free at the root but taken under D: moving
+        // another folder in under that name fails with the source
+        // row untouched.
+        let t = vault.create_folder(None, "T").unwrap();
+        let err = vault
+            .update_folder(&t.id, t.rev, Some(&d.id), "Taken")
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::FolderExists));
+        let kept = vault.get_folder(&t.id).unwrap();
+        assert_eq!(kept.name, "T");
+        assert_eq!(kept.parent_id, None);
+        assert_eq!(kept.rev, t.rev);
+        // The pre-existing "Taken" is undisturbed too.
+        assert_eq!(vault.get_folder(&taken.id).unwrap().rev, taken.rev);
     }
 
     #[test]
