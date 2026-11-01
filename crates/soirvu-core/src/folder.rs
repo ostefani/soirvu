@@ -82,11 +82,7 @@ impl Vault {
 
     /// Opens the vault AS the given device (the
     /// caller-assigned identity; see `create_with_device`).
-    pub fn open_with_passphrase_as(
-        dir: &Path,
-        passphrase: &str,
-        device_id: &str,
-    ) -> Result<Vault> {
+    pub fn open_with_passphrase_as(dir: &Path, passphrase: &str, device_id: &str) -> Result<Vault> {
         let header = read_header(dir)?;
         let master = header.unlock_with_passphrase(passphrase)?;
         finish_open(dir, header, master, Some(device_id))
@@ -165,7 +161,8 @@ impl Vault {
         let (header, recovery, master) =
             VaultHeader::create_with_id(&self.header.vault_id, passphrase, kdf)?;
         prepare_folder(dest_dir)?;
-        self.db.export_encrypted(&dest_dir.join(DB_FILE), &master.db_key())?;
+        self.db
+            .export_encrypted(&dest_dir.join(DB_FILE), &master.db_key())?;
         write_atomic(&dest_dir.join(HEADER_FILE), &header.to_json()?)?;
         // The blobs are files, not database pages: re-encrypt
         // every live one under the new master, keeping its id
@@ -179,7 +176,12 @@ impl Vault {
         };
         for id in &ids {
             let size = self.get_attachment(id)?.size as u64;
-            let mut reader = AttachmentReader { vault: self, id, pos: 0, len: size };
+            let mut reader = AttachmentReader {
+                vault: self,
+                id,
+                pos: 0,
+                len: size,
+            };
             let key = crate::attachments::blob_key(&master.attachment_key(), id);
             crate::attachments::write_blob(dest_dir, id, &key, &mut reader)?;
         }
@@ -187,7 +189,9 @@ impl Vault {
         let rows = |db: &Database, table: &str| -> Result<i64> {
             Ok(db
                 .connection()
-                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))?)
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })?)
         };
         if rows(&self.db, "entry")? != rows(&copy.db, "entry")?
             || rows(&self.db, "attachment")? != rows(&copy.db, "attachment")?
@@ -619,14 +623,17 @@ mod tests {
         let (tmp, mut vault, old_recovery) = new_vault_with_note();
         let vault_id = vault.header().vault_id.clone();
         let saved = vault
-            .create_entry(&crate::entries::EntryDraft {
-                entry_date: "2026-10-15".into(),
-                title: Some("rotation day".into()),
-                body_md: "rotate me".into(),
-                mood: None,
-                tz: None,
-                tags: vec![],
-            })
+            .create_entry(
+                None,
+                &crate::entries::EntryDraft {
+                    entry_date: "2026-10-15".into(),
+                    title: Some("rotation day".into()),
+                    body_md: "rotate me".into(),
+                    mood: None,
+                    tz: None,
+                    tags: vec![],
+                },
+            )
             .unwrap();
         let att = vault
             .add_attachment(&saved.id, "note.txt", "text/plain", b"hello rotation")
@@ -651,12 +658,88 @@ mod tests {
     }
 
     #[test]
+    fn rotation_and_backup_keep_folders_links_and_blobs() {
+        let (tmp, mut vault, _recovery) = new_vault_with_note();
+        let health = vault.create_folder(None, "Health").unwrap();
+        let target = vault
+            .create_entry(
+                Some(&health.id),
+                &crate::entries::EntryDraft {
+                    entry_date: "2026-10-15".into(),
+                    title: Some("training".into()),
+                    body_md: "lift heavy".into(),
+                    mood: None,
+                    tz: None,
+                    tags: vec![],
+                },
+            )
+            .unwrap();
+        let summary = vault
+            .create_entry(
+                None,
+                &crate::entries::EntryDraft {
+                    entry_date: "2026-10-16".into(),
+                    title: Some("summary".into()),
+                    body_md: format!("see [training](entry:{})", target.id),
+                    mood: None,
+                    tz: None,
+                    tags: vec![],
+                },
+            )
+            .unwrap();
+        let att = vault
+            .add_attachment(&target.id, "plan.txt", "text/plain", b"week 3")
+            .unwrap();
+
+        // A file-level backup roundtrips folders, membership,
+        // links and blobs (checkpoint first: recent writes sit in
+        // the -wal file, which the copy deliberately skips).
+        vault.checkpoint().unwrap();
+        let backup = tmp.path().join("backup");
+        copy_vault_files(&tmp.path().join("v"), &backup).unwrap();
+        let restored = Vault::open_with_passphrase(&backup, PASSPHRASE).unwrap();
+        assert_eq!(restored.get_folder(&health.id).unwrap().name, "Health");
+        assert_eq!(
+            restored.get_entry(&target.id).unwrap().folder_id.as_deref(),
+            Some(health.id.as_str())
+        );
+        assert!(
+            restored
+                .get_entry(&summary.id)
+                .unwrap()
+                .body_md
+                .contains(&format!("entry:{}", target.id))
+        );
+        assert_eq!(restored.read_attachment(&att.id).unwrap(), b"week 3");
+        restored.lock();
+
+        // So does a master-key rotation: same diary under a new key.
+        let dest = tmp.path().join("rotated");
+        vault.rotate_master_key(&dest, PASSPHRASE, fast()).unwrap();
+        let copy = Vault::open_with_passphrase(&dest, PASSPHRASE).unwrap();
+        assert_eq!(copy.get_folder(&health.id).unwrap().name, "Health");
+        assert_eq!(
+            copy.get_entry(&target.id).unwrap().folder_id.as_deref(),
+            Some(health.id.as_str())
+        );
+        assert!(
+            copy.get_entry(&summary.id)
+                .unwrap()
+                .body_md
+                .contains(&format!("entry:{}", target.id))
+        );
+        assert_eq!(copy.read_attachment(&att.id).unwrap(), b"week 3");
+    }
+
+    #[test]
     fn passphrase_change_and_recovery_regeneration() {
         let (tmp, mut vault, recovery) = new_vault_with_note();
         vault
             .change_passphrase("not the passphrase", "second passphrase")
             .expect_err("the current passphrase is the proof");
-        vault.change_passphrase(PASSPHRASE, "second passphrase").unwrap();
+        vault
+            .change_passphrase(PASSPHRASE, "second passphrase")
+            .unwrap();
 
         let new_recovery = vault.regenerate_recovery("second passphrase").unwrap();
         vault.lock();
@@ -676,11 +759,17 @@ mod tests {
         // passphrase with the STORED Argon2id settings — it
         // never recalibrates, so unlock cost and portability
         // survive the change byte for byte.
-        let distinctive = KdfParams { m_kib: 32, t: 2, p: 1 };
+        let distinctive = KdfParams {
+            m_kib: 32,
+            t: 2,
+            p: 1,
+        };
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join("v");
         let (mut vault, _recovery) = Vault::create(&dir, PASSPHRASE, distinctive).unwrap();
-        vault.change_passphrase(PASSPHRASE, "second passphrase").unwrap();
+        vault
+            .change_passphrase(PASSPHRASE, "second passphrase")
+            .unwrap();
         vault.lock();
 
         assert!(Vault::open_with_passphrase(&dir, PASSPHRASE).is_err());
@@ -688,7 +777,6 @@ mod tests {
         assert_eq!(reopened.header().passphrase_kdf().unwrap(), distinctive);
         reopened.lock();
     }
-
 
     #[test]
     fn data_survives_lock_and_reopen_with_passphrase() {
@@ -984,12 +1072,15 @@ mod tests {
     fn copied_vault_keeps_attachments() {
         let (tmp, mut vault, _recovery) = new_vault_with_note();
         let entry = vault
-            .create_entry(&crate::entries::EntryDraft {
-                entry_date: "2026-10-15".into(),
-                title: Some("with file".into()),
-                body_md: "see attachment".into(),
-                ..Default::default()
-            })
+            .create_entry(
+                None,
+                &crate::entries::EntryDraft {
+                    entry_date: "2026-10-15".into(),
+                    title: Some("with file".into()),
+                    body_md: "see attachment".into(),
+                    ..Default::default()
+                },
+            )
             .unwrap();
         let att = vault
             .add_attachment(&entry.id, "note.txt", "text/plain", b"attachment bytes")

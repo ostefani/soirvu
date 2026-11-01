@@ -7,9 +7,9 @@
 use std::fs;
 use std::process::{Command, Output};
 
+use soirvu_core::Vault;
 use soirvu_core::crypto::KdfParams;
 use soirvu_core::entries::EntryDraft;
-use soirvu_core::Vault;
 use tempfile::TempDir;
 
 const PASSPHRASE: &str = "correct horse battery staple";
@@ -46,12 +46,15 @@ fn vault_with_content() -> (TempDir, std::path::PathBuf, String) {
     let dir = tmp.path().join("v");
     let (mut vault, recovery) = Vault::create(&dir, PASSPHRASE, fast()).unwrap();
     let entry = vault
-        .create_entry(&EntryDraft {
-            entry_date: "2026-10-13".into(),
-            title: Some("Проверка".into()),
-            body_md: "текст про книгу".into(),
-            ..Default::default()
-        })
+        .create_entry(
+            None,
+            &EntryDraft {
+                entry_date: "2026-10-13".into(),
+                title: Some("Проверка".into()),
+                body_md: "текст про книгу".into(),
+                ..Default::default()
+            },
+        )
         .unwrap();
     vault
         .add_attachment(&entry.id, "a.bin", "application/octet-stream", b"bytes")
@@ -105,14 +108,45 @@ fn verify_and_export_work_with_the_recovery_key() {
         "wrong",
     );
     assert!(exported.status.success(), "{}", stdout(&exported));
-    assert!(stdout(&exported).contains("exported 1 entries and 1 attachments"));
+    assert!(stdout(&exported).contains("exported 1 entries in 0 folders and 1 attachments"));
 
-    let year = out.join("2026");
-    let files: Vec<_> = fs::read_dir(&year).unwrap().collect();
+    // No year directory in the folder-aware layout: the entry
+    // file sits at the export root next to the manifest.
+    assert!(!out.join("2026").exists());
+    let files: Vec<_> = fs::read_dir(&out)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "md")
+        })
+        .collect();
     assert_eq!(files.len(), 1);
     let md = fs::read_to_string(files[0].as_ref().unwrap().path()).unwrap();
     assert!(md.contains("текст про книгу"));
     assert!(md.contains("title: \"Проверка\""));
+
+    // The lossless path: one JSON file with folders and membership.
+    let json_out = _tmp.path().join("out.json");
+    let json_out_s = json_out.to_string_lossy().into_owned();
+    let exported_json = cli(
+        &[
+            "export-json",
+            &dir_s,
+            &json_out_s,
+            "--recovery",
+            &recovery_text,
+        ],
+        "wrong",
+    );
+    assert!(exported_json.status.success(), "{}", stdout(&exported_json));
+    assert!(stdout(&exported_json).contains("exported 1 entries in 0 folders"));
+    let json_text = fs::read_to_string(&json_out).unwrap();
+    assert!(json_text.contains("\"version\": 2"));
+    assert!(json_text.contains("\"vault_id\""));
+    assert!(json_text.contains("текст про книгу"));
 }
 
 #[test]
@@ -146,8 +180,18 @@ fn verify_reports_a_damaged_vault() {
     let (_tmp, dir, _recovery) = vault_with_content();
     // Damage the blob: flip its last byte.
     let attachments = dir.join("attachments");
-    let shard = fs::read_dir(&attachments).unwrap().next().unwrap().unwrap().path();
-    let blob = fs::read_dir(&shard).unwrap().next().unwrap().unwrap().path();
+    let shard = fs::read_dir(&attachments)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let blob = fs::read_dir(&shard)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     let mut bytes = fs::read(&blob).unwrap();
     let last = bytes.len() - 1;
     bytes[last] ^= 0x01;
@@ -156,5 +200,9 @@ fn verify_reports_a_damaged_vault() {
     let dir_s = dir.to_string_lossy().into_owned();
     let checked = cli(&["verify", &dir_s], PASSPHRASE);
     assert_eq!(checked.status.code(), Some(1));
-    assert!(stdout(&checked).contains("problem:"), "{}", stdout(&checked));
+    assert!(
+        stdout(&checked).contains("problem:"),
+        "{}",
+        stdout(&checked)
+    );
 }

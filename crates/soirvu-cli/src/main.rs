@@ -11,6 +11,7 @@
 //!   soirvu-cli header-info <vault-dir>
 //!   soirvu-cli verify <vault-dir> [--recovery <key>]
 //!   soirvu-cli export <vault-dir> <out-dir> [--recovery <key>]
+//!   soirvu-cli export-json <vault-dir> <out-file> [--recovery <key>]
 //!   soirvu-cli sync-emit <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
 //!   soirvu-cli sync-apply <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
 //!   soirvu-cli sync-prune <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
@@ -68,6 +69,7 @@ soirvu-cli — create, check and export a SoirVu vault without the app
   soirvu-cli header-info <vault-dir>
   soirvu-cli verify <vault-dir> [--recovery <key>]
   soirvu-cli export <vault-dir> <out-dir> [--recovery <key>]
+  soirvu-cli export-json <vault-dir> <out-file> [--recovery <key>]
   soirvu-cli sync-emit <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
   soirvu-cli sync-apply <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
   soirvu-cli sync-prune <vault-dir> <sync-dir> [--recovery <key>] [--device <uuid>]
@@ -97,6 +99,13 @@ fn run(args: &[String]) -> Result<(), RunError> {
                 return Err(RunError::Usage);
             }
             export(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
+        }
+        "export-json" if rest.len() >= 2 => {
+            let (dirs, recovery) = open_args(rest)?;
+            if dirs.len() != 2 {
+                return Err(RunError::Usage);
+            }
+            export_json(Path::new(&dirs[0]), Path::new(&dirs[1]), recovery)
         }
         "sync-emit" if rest.len() >= 2 => {
             let (dirs, recovery, device) = sync_args(rest)?;
@@ -235,11 +244,7 @@ fn sync_args(args: &[String]) -> Result<(&[String], Option<&str>, Option<&str>),
 /// note says so out loud: a copied vault used only
 /// through the CLI shares the original's identity
 /// until it is restamped or driven with `--device`.
-fn open_sync(
-    dir: &Path,
-    recovery: Option<&str>,
-    device: Option<&str>,
-) -> Result<Vault, RunError> {
+fn open_sync(dir: &Path, recovery: Option<&str>, device: Option<&str>) -> Result<Vault, RunError> {
     let vault = match (recovery, device) {
         (Some(text), Some(id)) => {
             let key = RecoveryKey::from_text(text).map_err(failed)?;
@@ -287,9 +292,32 @@ fn export(dir: &Path, out: &Path, recovery: Option<&str>) -> Result<(), RunError
     eprintln!("warning: export writes your diary as PLAINTEXT files.");
     let vault = open(dir, recovery)?;
     let report = vault.export_markdown(out).map_err(failed)?;
+    // Entry links stay canonical `entry:<id>` here: rewriting them
+    // into relative files needs the editor's Markdown parser (the
+    // desktop export does that); `soirvu-export.json` in the output
+    // maps every id to its file for tooling that follows.
     println!(
-        "exported {} entries and {} attachments to {}",
+        "exported {} entries in {} folders and {} attachments to {} (entry links kept canonical)",
         report.entries,
+        report.folders,
+        report.attachments,
+        report.dir.display()
+    );
+    Ok(())
+}
+
+/// The lossless path: folders, membership, tombstones and ids, in
+/// one JSON file. There is deliberately no CLI import: safe link
+/// remapping needs the parser-aware planning the desktop performs
+/// before core validates and writes.
+fn export_json(dir: &Path, out: &Path, recovery: Option<&str>) -> Result<(), RunError> {
+    eprintln!("warning: export writes your diary as a PLAINTEXT file.");
+    let vault = open(dir, recovery)?;
+    let report = vault.export_json(out).map_err(failed)?;
+    println!(
+        "exported {} entries in {} folders and {} attachments to {}",
+        report.entries,
+        report.folders,
         report.attachments,
         report.dir.display()
     );
@@ -328,7 +356,12 @@ fn read_passphrase(prompt: &str) -> Result<String, RunError> {
     Ok(line.trim_end_matches(['\n', '\r']).to_string())
 }
 
-fn sync_emit(dir: &Path, sync_dir: &Path, recovery: Option<&str>, device: Option<&str>) -> Result<(), RunError> {
+fn sync_emit(
+    dir: &Path,
+    sync_dir: &Path,
+    recovery: Option<&str>,
+    device: Option<&str>,
+) -> Result<(), RunError> {
     let mut vault = open_sync(dir, recovery, device)?;
     match vault.sync_emit(sync_dir).map_err(failed)? {
         Some(info) => {
@@ -345,7 +378,12 @@ fn sync_emit(dir: &Path, sync_dir: &Path, recovery: Option<&str>, device: Option
     }
 }
 
-fn sync_reemit(dir: &Path, sync_dir: &Path, recovery: Option<&str>, device: Option<&str>) -> Result<(), RunError> {
+fn sync_reemit(
+    dir: &Path,
+    sync_dir: &Path,
+    recovery: Option<&str>,
+    device: Option<&str>,
+) -> Result<(), RunError> {
     let mut vault = open_sync(dir, recovery, device)?;
     match vault.sync_reemit(sync_dir).map_err(failed)? {
         Some(info) => {
@@ -362,20 +400,31 @@ fn sync_reemit(dir: &Path, sync_dir: &Path, recovery: Option<&str>, device: Opti
     }
 }
 
-fn sync_dismiss_ack_ahead(dir: &Path, recovery: Option<&str>, device: Option<&str>) -> Result<(), RunError> {
+fn sync_dismiss_ack_ahead(
+    dir: &Path,
+    recovery: Option<&str>,
+    device: Option<&str>,
+) -> Result<(), RunError> {
     let mut vault = open_sync(dir, recovery, device)?;
     vault.clear_ack_ahead().map_err(failed)?;
     println!("ahead-of-vault flag cleared");
     Ok(())
 }
 
-fn sync_apply(dir: &Path, sync_dir: &Path, recovery: Option<&str>, device: Option<&str>) -> Result<(), RunError> {
+fn sync_apply(
+    dir: &Path,
+    sync_dir: &Path,
+    recovery: Option<&str>,
+    device: Option<&str>,
+) -> Result<(), RunError> {
     let mut vault = open_sync(dir, recovery, device)?;
     let report = vault.sync_apply(sync_dir).map_err(failed)?;
     println!(
-        "bundles: {} applied of {} seen; entries: {} applied, {} conflict copies; attachments: {} applied",
+        "bundles: {} applied of {} seen; folders: {} applied, {} conflicted; entries: {} applied, {} conflict copies; attachments: {} applied",
         report.bundles_applied,
         report.bundles_seen,
+        report.folders_applied,
+        report.folders_conflicted,
         report.entries_applied,
         report.entries_conflicted,
         report.attachments_applied
@@ -411,7 +460,12 @@ fn sync_apply(dir: &Path, sync_dir: &Path, recovery: Option<&str>, device: Optio
     }
 }
 
-fn sync_prune(dir: &Path, sync_dir: &Path, recovery: Option<&str>, device: Option<&str>) -> Result<(), RunError> {
+fn sync_prune(
+    dir: &Path,
+    sync_dir: &Path,
+    recovery: Option<&str>,
+    device: Option<&str>,
+) -> Result<(), RunError> {
     let mut vault = open_sync(dir, recovery, device)?;
     let report = vault.sync_prune(sync_dir).map_err(failed)?;
     println!(

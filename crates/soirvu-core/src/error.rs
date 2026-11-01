@@ -56,6 +56,23 @@ pub enum Error {
     /// the remedy is removing the file, and restamping
     /// for it would only strand a phantom identity.
     SyncUnreadable(String),
+    /// No live folder has this id.
+    FolderNotFound,
+    /// A live sibling folder already has this name.
+    FolderExists,
+    /// The folder still holds live entries or live subfolders.
+    /// Distinct from `FolderNotEmpty`, which is about the physical
+    /// vault directory on create.
+    FolderHasContents,
+    /// A move would place a folder inside itself or one of its
+    /// descendants.
+    FolderCycle,
+    /// The folder would nest deeper than the supported limit.
+    FolderTooDeep,
+    /// A write arrived with a stale revision: the item changed since
+    /// it was read. Never silently overwritten; the caller retries
+    /// against the fresh state.
+    RevisionConflict,
     /// No tag with this name is used by a live entry.
     TagNotFound,
     /// A rename would give a tag the name of a different tag that is in use.
@@ -97,6 +114,12 @@ impl fmt::Display for Error {
                 "a file at this bundle's name in the sync folder cannot be \
                  read as a sync bundle ({name}); remove it there and retry"
             ),
+            Error::FolderNotFound => write!(f, "folder not found"),
+            Error::FolderExists => write!(f, "a folder with that name already exists"),
+            Error::FolderHasContents => write!(f, "the folder is not empty"),
+            Error::FolderCycle => write!(f, "a folder cannot contain itself"),
+            Error::FolderTooDeep => write!(f, "folders nest at most 32 levels deep"),
+            Error::RevisionConflict => write!(f, "changed since it was opened"),
             Error::TagNotFound => write!(f, "tag not found"),
             Error::TagExists => write!(f, "a tag with that name already exists"),
             Error::QueryTooShort => write!(f, "search words need at least 3 characters"),

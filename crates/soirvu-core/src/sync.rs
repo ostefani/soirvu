@@ -8,12 +8,12 @@
 //! moves the folder — a synced folder, a USB stick, or a
 //! future Bluetooth/LAN transport are all just couriers.
 //!
-//! A bundle is the full records (entries incl. tombstones,
-//! attachment metadata) whose lseq passed the emit
-//! watermark, JSON-encoded and sealed with XChaCha20-
-//! Poly1305 under a key derived from the vault master
-//! (HKDF label "soirvu/v1/sync"); the header values (vault,
-//! device, lseq range) are bound as AAD. The filename
+//! A bundle is the full records (folders, entries incl.
+//! tombstones, attachment metadata) whose lseq passed the
+//! emit watermark, JSON-encoded and sealed with
+//! XChaCha20-Poly1305 under a key derived from the vault
+//! master (HKDF label "soirvu/v1/sync"); the header values
+//! (vault, device, lseq range) are bound as AAD. The filename
 //! carries the vault's first 8 characters and the FULL
 //! device id; at apply time the plaintext header line is
 //! read before any decryption, so a bundle dropped in the
@@ -65,7 +65,45 @@ use crate::entries::next_lseq;
 use crate::error::{Error, Result};
 use crate::folder::{Vault, rename_retry};
 
-const BUNDLE_FORMAT: u32 = 1;
+/// Bundle format 2 adds folder records and entry membership
+/// (format 1 has neither). A v2 client still READS v1 bundles —
+/// their records land at the root and never touch established
+/// membership — but only ever WRITES v2. A v1 client refuses a
+/// v2 bundle at the header gate with an upgrade error.
+const BUNDLE_FORMAT: u32 = 2;
+/// The last format without folders or membership: still accepted
+/// on read, never written.
+const BUNDLE_FORMAT_V1: u32 = 1;
+/// One-time v2 bootstrap owed by upgraded vaults (migration 5).
+/// Set in the same migration transaction as the schema change;
+/// cleared on fresh creates (no history to replay) and once an
+/// emission has covered the whole backlog.
+const BOOTSTRAP_PENDING_KEY: &str = "bootstrap_pending";
+
+/// True when a bootstrap is pending and `covered` reaches every
+/// lseq in the vault: no folder, entry or attachment row waits
+/// past it.
+fn bootstrap_covered(conn: &rusqlite::Connection, covered: i64) -> Result<bool> {
+    let pending: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            [BOOTSTRAP_PENDING_KEY],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if pending.is_none() {
+        return Ok(false);
+    }
+    let remaining: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM (
+             SELECT lseq FROM folder WHERE lseq > ?1
+             UNION ALL SELECT lseq FROM entry WHERE lseq > ?1
+             UNION ALL SELECT lseq FROM attachment WHERE lseq > ?1)",
+        [covered],
+        |row| row.get(0),
+    )?;
+    Ok(remaining == 0)
+}
 pub(crate) const EMITTED_KEY: &str = "sync_emitted_lseq";
 /// Bundle names already reported as a twin's (see
 /// sync_apply): the warning is loud ONCE per file, not on
@@ -98,6 +136,7 @@ pub struct SyncBundleInfo {
     pub file_name: String,
     pub from_lseq: i64,
     pub to_lseq: i64,
+    pub folders: usize,
     pub entries: usize,
     pub attachments: usize,
 }
@@ -107,6 +146,11 @@ pub struct SyncBundleInfo {
 pub struct SyncReport {
     pub bundles_seen: usize,
     pub bundles_applied: usize,
+    pub folders_applied: usize,
+    /// Folder divergences where one side's live state lost
+    /// (rename/move/delete races); the loser is reported in
+    /// `warnings`, never silently dropped.
+    pub folders_conflicted: usize,
     pub entries_applied: usize,
     pub entries_conflicted: usize,
     pub attachments_applied: usize,
@@ -202,8 +246,28 @@ struct BundleHeader {
 
 #[derive(Serialize, Deserialize)]
 struct Bundle {
+    /// Absent in v1 bundles; `default` keeps those readable.
+    #[serde(default)]
+    folders: Vec<FolderRecord>,
     entries: Vec<EntryRecord>,
     attachments: Vec<AttachmentRecord>,
+}
+
+/// A folder write, tombstone included. Parent and name travel
+/// raw: sync never repairs the tree on write, every device
+/// derives the same effective view at read time instead.
+#[derive(Serialize, Deserialize, Clone)]
+struct FolderRecord {
+    id: String,
+    parent_id: Option<String>,
+    name: String,
+    created_at: i64,
+    updated_at: i64,
+    deleted_at: Option<i64>,
+    rev: i64,
+    device_id: String,
+    base_rev: i64,
+    base_device: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -222,6 +286,13 @@ struct EntryRecord {
     mood: Option<i64>,
     tz: Option<String>,
     tags: Vec<String>,
+    /// Membership authority follows the bundle format, not this
+    /// field: only a format-2 record may write the local
+    /// `folder_id`. A v1 bundle has no such key (`default` reads
+    /// it as `None`) and never resets established membership —
+    /// not to root, not anywhere.
+    #[serde(default)]
+    folder_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -238,6 +309,31 @@ struct AttachmentRecord {
 
 fn header_line(header: &BundleHeader) -> Vec<u8> {
     serde_json::to_vec(header).expect("the bundle header always serializes")
+}
+
+/// Seals one bundle file body: the header line (also the AEAD's
+/// associated data), a newline, the nonce, then the ciphertext.
+fn seal_bundle(
+    cipher: &XChaCha20Poly1305,
+    header: &BundleHeader,
+    payload_json: &[u8],
+) -> Result<Vec<u8>> {
+    let nonce = random_bytes::<NONCE_LEN>()?;
+    let aad = header_line(header);
+    let sealed = cipher
+        .encrypt(
+            &XNonce::from(nonce),
+            Payload {
+                msg: payload_json,
+                aad: &aad,
+            },
+        )
+        .map_err(|_| Error::Unlock)?;
+    let mut bytes = aad;
+    bytes.push(b'\n');
+    bytes.extend_from_slice(&nonce);
+    bytes.extend_from_slice(&sealed);
+    Ok(bytes)
 }
 
 fn short(id: &str) -> &str {
@@ -431,7 +527,14 @@ fn conflict_digest(domain: &str, entry_id: &str, loser: &EntryRecord) -> String 
     hash.update(&content);
     let digest = hash.finalize();
     let h = hex(&digest[..16]);
-    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
 }
 
 /// The deterministic author of a conflict copy, derived
@@ -462,16 +565,35 @@ impl Vault {
     /// watermark. A failed emit — an identity collision, a
     /// disk error — changes nothing, which is what makes
     /// re-emit safe to retry.
-    fn emit_from(
-        &mut self,
-        sync_dir: &Path,
-        watermark: i64,
-    ) -> Result<Option<SyncBundleInfo>> {
-        let (entries, attachments, to_lseq) = {
+    fn emit_from(&mut self, sync_dir: &Path, watermark: i64) -> Result<Option<SyncBundleInfo>> {
+        let (folders, entries, attachments, to_lseq) = {
             let conn = self.db.connection();
             let mut stmt = conn.prepare(
+                "SELECT id, parent_id, name, created_at, updated_at, deleted_at, rev,
+                        device_id, base_rev, base_device
+                   FROM folder WHERE lseq > ?1 ORDER BY lseq",
+            )?;
+            let folders = stmt
+                .query_map([watermark], |row| {
+                    Ok(FolderRecord {
+                        id: row.get(0)?,
+                        parent_id: row.get(1)?,
+                        name: row.get(2)?,
+                        created_at: row.get(3)?,
+                        updated_at: row.get(4)?,
+                        deleted_at: row.get(5)?,
+                        rev: row.get(6)?,
+                        device_id: row.get(7)?,
+                        base_rev: row.get(8)?,
+                        base_device: row.get(9)?,
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            drop(stmt);
+            let mut stmt = conn.prepare(
                 "SELECT id, entry_date, created_at, updated_at, deleted_at, rev,
-                        device_id, title, body_md, mood, tz, base_rev, base_device
+                        device_id, title, body_md, mood, tz, base_rev, base_device,
+                        folder_id
                    FROM entry WHERE lseq > ?1 ORDER BY lseq",
             )?;
             let entries = stmt
@@ -490,6 +612,7 @@ impl Vault {
                         tz: row.get(10)?,
                         base_rev: row.get(11)?,
                         base_device: row.get(12)?,
+                        folder_id: row.get(13)?,
                         tags: Vec::new(),
                     })
                 })?
@@ -521,14 +644,20 @@ impl Vault {
             drop(stmt);
             let max_lseq: i64 = conn.query_row(
                 "SELECT COALESCE(MAX(lseq), ?1) FROM (
-                     SELECT lseq FROM entry WHERE lseq > ?1
+                     SELECT lseq FROM folder WHERE lseq > ?1
+                     UNION ALL SELECT lseq FROM entry WHERE lseq > ?1
                      UNION ALL SELECT lseq FROM attachment WHERE lseq > ?1)",
                 [watermark],
                 |row| row.get(0),
             )?;
-            (entries, attachments, max_lseq)
+            (folders, entries, attachments, max_lseq)
         };
-        if entries.is_empty() && attachments.is_empty() {
+        if folders.is_empty() && entries.is_empty() && attachments.is_empty() {
+            // Nothing new past the watermark. An upgraded vault
+            // waiting on its first v2 emission has no history to
+            // bootstrap: clear the pending flag here so a crash
+            // before any folder write cannot strand it.
+            self.clear_bootstrap_if_caught_up(watermark)?;
             return Ok(None);
         }
         let from_lseq = watermark + 1;
@@ -559,7 +688,11 @@ impl Vault {
             from_lseq,
             to_lseq,
         };
-        let bundle = Bundle { entries, attachments };
+        let bundle = Bundle {
+            folders,
+            entries,
+            attachments,
+        };
         let json = serde_json::to_vec(&bundle)?;
         if json.len() as u64 > MAX_BUNDLE_BYTES {
             return Err(Error::InvalidInput(
@@ -568,15 +701,7 @@ impl Vault {
         }
         let key = self.sync_key();
         let cipher = XChaCha20Poly1305::new_from_slice(&key[..]).expect("sync key is 32 bytes");
-        let nonce = random_bytes::<NONCE_LEN>()?;
-        let aad = header_line(&header);
-        let sealed = cipher
-            .encrypt(&XNonce::from(nonce), Payload { msg: &json, aad: &aad })
-            .map_err(|_| Error::Unlock)?;
-        let mut bytes = aad.clone();
-        bytes.push(b'\n');
-        bytes.extend_from_slice(&nonce);
-        bytes.extend_from_slice(&sealed);
+        let bytes = seal_bundle(&cipher, &header, &json)?;
 
         fs::create_dir_all(sync_dir)?;
         // The FULL device id goes in the name: its first 8
@@ -654,15 +779,36 @@ impl Vault {
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 params![EMITTED_KEY, to_lseq.to_string()],
             )?;
+            // The bootstrap boundary is behind us only when
+            // this emission covered everything outstanding:
+            // the watermark commit and the pending-flag
+            // clear are one transaction, so a crash retries
+            // the same boundary instead of leaving a
+            // half-upgraded stream.
+            if bootstrap_covered(&tx, to_lseq)? {
+                tx.execute("DELETE FROM meta WHERE key = ?1", [BOOTSTRAP_PENDING_KEY])?;
+            }
             tx.commit()?;
         }
         Ok(Some(SyncBundleInfo {
             file_name,
             from_lseq,
             to_lseq,
+            folders: bundle.folders.len(),
             entries: bundle.entries.len(),
             attachments: bundle.attachments.len(),
         }))
+    }
+
+    /// Clears a pending bootstrap when the watermark already covers
+    /// every row — the empty-vault edge of the upgrade path.
+    fn clear_bootstrap_if_caught_up(&mut self, watermark: i64) -> Result<()> {
+        let tx = self.db.conn_mut().transaction()?;
+        if bootstrap_covered(&tx, watermark)? {
+            tx.execute("DELETE FROM meta WHERE key = ?1", [BOOTSTRAP_PENDING_KEY])?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Re-emits this vault's whole sync state as one
@@ -793,14 +939,29 @@ impl Vault {
             let (header, bundle) = match open_bundle(&cipher, &bytes) {
                 Ok(opened) => opened,
                 Err(_) => {
-                    report
-                        .problems
-                        .push(format!("bundle {name}: cannot decrypt (wrong vault or damaged)"));
+                    report.problems.push(format!(
+                        "bundle {name}: cannot decrypt (wrong vault or damaged)"
+                    ));
                     continue;
                 }
             };
-            if header.format != BUNDLE_FORMAT || header.vault_id != my_vault {
-                report.problems.push(format!("bundle {name}: not for this vault"));
+            if header.vault_id != my_vault {
+                report
+                    .problems
+                    .push(format!("bundle {name}: not for this vault"));
+                continue;
+            }
+            // A v1 client refuses v2 bundles at this same gate;
+            // the error must name the upgrade, not the vault.
+            // Going forward a v2 client still reads v1 history
+            // (root-only, membership never written) but only
+            // ever writes v2.
+            let legacy = header.format == BUNDLE_FORMAT_V1;
+            if !legacy && header.format != BUNDLE_FORMAT {
+                report.problems.push(format!(
+                    "bundle {name}: requires a newer app version (format {})",
+                    header.format
+                ));
                 continue;
             }
             // AEAD authenticates the sender, but a buggy or newer peer can
@@ -845,6 +1006,11 @@ impl Vault {
             // can carry B-authored records to a device that
             // has never seen a bundle from B.
             let mut authors: Vec<&str> = vec![header.device_id.as_str()];
+            for record in &bundle.folders {
+                if !authors.contains(&record.device_id.as_str()) {
+                    authors.push(record.device_id.as_str());
+                }
+            }
             for record in &bundle.entries {
                 if !authors.contains(&record.device_id.as_str()) {
                     authors.push(record.device_id.as_str());
@@ -856,8 +1022,16 @@ impl Vault {
                     params![author, crate::storage::now_ms()],
                 )?;
             }
+            // Folders land before entries: an entry arriving
+            // with its folder in the same bundle resolves
+            // against a present row, and a child arriving
+            // before its parent still stores its raw
+            // references for the read-time view to resolve.
+            for record in &bundle.folders {
+                apply_folder(&tx, record, &mut report)?;
+            }
             for record in &bundle.entries {
-                apply_entry(&tx, record, &mut report)?;
+                apply_entry(&tx, record, !legacy, &mut report)?;
             }
             tx.commit()?;
             for record in &bundle.attachments {
@@ -943,42 +1117,42 @@ impl Vault {
                     }
                 };
                 {
-                // The report carries the detection first;
-                // persisting it durably is best-effort on
-                // top (see persist_ack_ahead).
-                // The warning names the claimed peers
-                // (short ids, at most five, known peers
-                // first): a claim about a peer this vault
-                // has never seen persists no row, so this
-                // message is the only place that says who
-                // must re-emit.
-                report.ack_ahead = Some(if ahead_peers.is_empty() {
-                    warning
-                } else {
-                    let mut named: Vec<&str> = Vec::new();
-                    for (peer, _) in ahead_peers
-                        .iter()
-                        .filter(|(p, _)| known.contains(p.as_str()))
-                        .chain(
-                            ahead_peers
-                                .iter()
-                                .filter(|(p, _)| !known.contains(p.as_str())),
-                        )
-                    {
-                        if named.len() == 5 {
-                            break;
+                    // The report carries the detection first;
+                    // persisting it durably is best-effort on
+                    // top (see persist_ack_ahead).
+                    // The warning names the claimed peers
+                    // (short ids, at most five, known peers
+                    // first): a claim about a peer this vault
+                    // has never seen persists no row, so this
+                    // message is the only place that says who
+                    // must re-emit.
+                    report.ack_ahead = Some(if ahead_peers.is_empty() {
+                        warning
+                    } else {
+                        let mut named: Vec<&str> = Vec::new();
+                        for (peer, _) in ahead_peers
+                            .iter()
+                            .filter(|(p, _)| known.contains(p.as_str()))
+                            .chain(
+                                ahead_peers
+                                    .iter()
+                                    .filter(|(p, _)| !known.contains(p.as_str())),
+                            )
+                        {
+                            if named.len() == 5 {
+                                break;
+                            }
+                            named.push(&peer[peer.len() - 8..]);
                         }
-                        named.push(&peer[peer.len() - 8..]);
-                    }
-                    let suffix = if ahead_peers.len() > 5 { ", …" } else { "" };
-                    format!("{warning} (claimed for: {}{suffix})", named.join(", "))
-                });
-                if let Err(e) = self.persist_ack_ahead(&known, &ahead_peers) {
-                    report.warnings.push(format!(
-                        "the ahead note could not be saved ({e}); \
+                        let suffix = if ahead_peers.len() > 5 { ", …" } else { "" };
+                        format!("{warning} (claimed for: {}{suffix})", named.join(", "))
+                    });
+                    if let Err(e) = self.persist_ack_ahead(&known, &ahead_peers) {
+                        report.warnings.push(format!(
+                            "the ahead note could not be saved ({e}); \
                          it is in this report, but will not be shown again"
-                    ));
-                }
+                        ));
+                    }
                 }
             }
             Err(e) => report.warnings.push(format!(
@@ -1005,9 +1179,7 @@ impl Vault {
             })?;
             for row in rows {
                 let (key, value) = row?;
-                if let (Some(peer), Ok(to)) =
-                    (key.strip_prefix(prefix), value.parse::<i64>())
-                {
+                if let (Some(peer), Ok(to)) = (key.strip_prefix(prefix), value.parse::<i64>()) {
                     let entry = seen.entry(peer.to_string()).or_insert(0);
                     *entry = (*entry).max(to);
                 }
@@ -1077,9 +1249,7 @@ impl Vault {
         })?;
         for row in rows {
             let (key, value) = row?;
-            if let (Some(peer), Ok(to)) =
-                (key.strip_prefix(APPLIED_PREFIX), value.parse::<i64>())
-            {
+            if let (Some(peer), Ok(to)) = (key.strip_prefix(APPLIED_PREFIX), value.parse::<i64>()) {
                 applied.insert(peer.to_string(), to);
             }
         }
@@ -1099,8 +1269,7 @@ impl Vault {
             peers: {
                 let applied = self.applied_cursors()?;
                 let seen = self.seen_emitted()?;
-                let mut ids: std::collections::BTreeSet<&String> =
-                    applied.keys().collect();
+                let mut ids: std::collections::BTreeSet<&String> = applied.keys().collect();
                 ids.extend(seen.keys());
                 ids.into_iter()
                     .map(|device_id| SyncPeerCursor {
@@ -1319,8 +1488,7 @@ impl Vault {
             .into_iter()
             .map(|ack| (ack.device_id.clone(), ack))
             .collect();
-        let mut peers: std::collections::BTreeSet<String> =
-            ack_by_device.keys().cloned().collect();
+        let mut peers: std::collections::BTreeSet<String> = ack_by_device.keys().cloned().collect();
         // An ack FILE that cannot be read — torn,
         // oversized, junk — still proves a peer: its
         // name is the device id. It counts below with
@@ -1472,137 +1640,175 @@ impl Vault {
         self.device_id = new_id;
         Ok(())
     }
-
 }
 
 fn apply_entry(
     tx: &Transaction,
     record: &EntryRecord,
+    v2: bool,
     report: &mut SyncReport,
 ) -> Result<()> {
     let local: Option<EntryRecord> = {
-            let found = tx
-                .query_row(
-                    "SELECT entry_date, created_at, updated_at, deleted_at, rev,
-                            device_id, title, body_md, mood, tz, base_rev, base_device
+        let found = tx
+            .query_row(
+                "SELECT entry_date, created_at, updated_at, deleted_at, rev,
+                            device_id, title, body_md, mood, tz, base_rev, base_device,
+                            folder_id
                        FROM entry WHERE id = ?1",
-                    [&record.id],
-                    |row| {
-                        Ok(EntryRecord {
-                            id: record.id.clone(),
-                            entry_date: row.get(0)?,
-                            created_at: row.get(1)?,
-                            updated_at: row.get(2)?,
-                            deleted_at: row.get(3)?,
-                            rev: row.get(4)?,
-                            device_id: row.get(5)?,
-                            title: row.get(6)?,
-                            body_md: row.get(7)?,
-                            mood: row.get(8)?,
-                            tz: row.get(9)?,
-                            base_rev: row.get(10)?,
-                            base_device: row.get(11)?,
-                            tags: Vec::new(),
-                        })
-                    },
-                )
-                .ok();
-            match found {
-                Some(mut row) => {
-                    row.tags = entry_tags(tx, &record.id)?;
-                    Some(row)
-                }
-                None => None,
+                [&record.id],
+                |row| {
+                    Ok(EntryRecord {
+                        id: record.id.clone(),
+                        entry_date: row.get(0)?,
+                        created_at: row.get(1)?,
+                        updated_at: row.get(2)?,
+                        deleted_at: row.get(3)?,
+                        rev: row.get(4)?,
+                        device_id: row.get(5)?,
+                        title: row.get(6)?,
+                        body_md: row.get(7)?,
+                        mood: row.get(8)?,
+                        tz: row.get(9)?,
+                        base_rev: row.get(10)?,
+                        base_device: row.get(11)?,
+                        folder_id: row.get(12)?,
+                        tags: Vec::new(),
+                    })
+                },
+            )
+            .ok();
+        match found {
+            Some(mut row) => {
+                row.tags = entry_tags(tx, &record.id)?;
+                Some(row)
             }
-        };
-        let Some(local) = local else {
-            insert_record(tx, record)?;
+            None => None,
+        }
+    };
+    let Some(local) = local else {
+        insert_record(tx, record, v2)?;
+        report.entries_applied += 1;
+        return Ok(());
+    };
+    if record.device_id == local.device_id {
+        // Same lineage: the higher rev is simply newer.
+        if record.rev > local.rev {
+            replace_content(tx, record, &local, v2, report)?;
             report.entries_applied += 1;
-            return Ok(());
-        };
-        if record.device_id == local.device_id {
-            // Same lineage: the higher rev is simply newer.
-            if record.rev > local.rev {
-                replace_record(tx, record)?;
-                report.entries_applied += 1;
-            }
-            return Ok(());
+        } else if v2
+            && record.rev == local.rev
+            && record.deleted_at.is_none()
+            && local.deleted_at.is_none()
+            && record.folder_id != local.folder_id
+        {
+            // Same author and revision but a different
+            // folder is impossible through local writes
+            // (placement is set once at creation): this is
+            // a replayed contradiction, not the bootstrap
+            // (the bootstrap meets only rows whose
+            // membership already agrees). Keep the local
+            // folder and say so; both sides report the
+            // same mismatch instead of flapping between
+            // two placements.
+            report.warnings.push(format!(
+                "entry {}: kept its folder against a same-revision mismatch",
+                short(&record.id)
+            ));
         }
-        // Different authors. A record whose base is exactly
-        // my current state descends from it: clean
-        // fast-forward, no conflict. Symmetrically, if my
-        // state descends from the record, it is stale.
-        if (record.base_device.as_str(), record.base_rev) == (local.device_id.as_str(), local.rev) {
-            replace_record(tx, record)?;
-            report.entries_applied += 1;
-            return Ok(());
-        }
-        if (local.base_device.as_str(), local.base_rev) == (record.device_id.as_str(), record.rev) {
-            return Ok(());
-        }
-        // Both sides moved away from their bases: a true
-        // divergence. The records apply in the order they
-        // happened: a delete removes whatever is there
-        // when its turn comes, and an edit can only act on
-        // an entry that still exists — so when exactly one
-        // side is a tombstone, the entry ends deleted
-        // whichever of them is newer, and the edit's text
-        // is preserved below as a conflict copy. Two live
-        // records (or two tombstones) keep the
-        // deterministic (rev, device_id) order; both
-        // devices compute the same winner.
-        let incoming_wins = match (record.deleted_at.is_some(), local.deleted_at.is_some()) {
-            (true, false) => true,
-            (false, true) => false,
-            _ => (record.rev, record.device_id.as_str()) > (local.rev, local.device_id.as_str()),
-        };
-        let loser = if incoming_wins { &local } else { record };
-        if incoming_wins {
-            replace_record(tx, record)?;
-            report.entries_applied += 1;
-        }
-        // The loser's text survives as a conflict copy
-        // (a losing tombstone holds no text to keep). If
-        // both texts are identical there is nothing to
-        // preserve — which is also what stops two devices'
-        // independently created copies of the SAME loser
-        // from breeding copies of copies: the twins merge.
-        // The copy starts its OWN lineage — a deterministic
-        // synthetic author and a base pointing at itself —
-        // because a base inside the original entry's
-        // history would share that entry's coordinates: an
-        // edit of such a copy would read as stale on one
-        // peer and as a fast-forward on the other, and
-        // vanish between them.
-        let winner_rec = if incoming_wins { record } else { &local };
-        let text_differs = loser.body_md != winner_rec.body_md
-            || loser.title != winner_rec.title
-            || loser.deleted_at.is_some() != winner_rec.deleted_at.is_some();
-        if loser.body_md.is_some() && text_differs {
-            let copy_id = conflict_id(&record.id, loser);
-            let exists: bool = tx
-                .query_row("SELECT 1 FROM entry WHERE id = ?1", [&copy_id], |_| Ok(true))
-                .unwrap_or(false);
-            if !exists {
-                let mut copy = loser.clone();
-                copy.id = copy_id;
-                copy.rev = 1;
-                copy.device_id = conflict_author(&record.id, loser);
-                copy.base_device = copy.device_id.clone();
-                copy.base_rev = 1;
-                copy.deleted_at = None;
-                copy.title = Some(match &loser.title {
-                    Some(title) => format!("{title} (conflict)"),
-                    None => "Conflict copy".to_string(),
-                });
-                tx.execute(
+        return Ok(());
+    }
+    // Different authors. A record whose base is exactly
+    // my current state descends from it: clean
+    // fast-forward, no conflict. Symmetrically, if my
+    // state descends from the record, it is stale.
+    if (record.base_device.as_str(), record.base_rev) == (local.device_id.as_str(), local.rev) {
+        replace_content(tx, record, &local, v2, report)?;
+        report.entries_applied += 1;
+        return Ok(());
+    }
+    if (local.base_device.as_str(), local.base_rev) == (record.device_id.as_str(), record.rev) {
+        return Ok(());
+    }
+    // Both sides moved away from their bases: a true
+    // divergence. The records apply in the order they
+    // happened: a delete removes whatever is there
+    // when its turn comes, and an edit can only act on
+    // an entry that still exists — so when exactly one
+    // side is a tombstone, the entry ends deleted
+    // whichever of them is newer, and the edit's text
+    // is preserved below as a conflict copy. Two live
+    // records (or two tombstones) keep the
+    // deterministic (rev, device_id) order; both
+    // devices compute the same winner.
+    let incoming_wins = match (record.deleted_at.is_some(), local.deleted_at.is_some()) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => (record.rev, record.device_id.as_str()) > (local.rev, local.device_id.as_str()),
+    };
+    let loser = if incoming_wins { &local } else { record };
+    if incoming_wins {
+        replace_content(tx, record, &local, v2, report)?;
+        report.entries_applied += 1;
+    } else if v2
+        && record.deleted_at.is_none()
+        && local.deleted_at.is_none()
+        && record.folder_id != local.folder_id
+    {
+        // The incoming assignment lost with its content:
+        // both sides keep their own folder and both say so.
+        report.warnings.push(format!(
+            "entry {}: kept its folder while applying a conflicting update",
+            short(&record.id)
+        ));
+    }
+    // The loser's text survives as a conflict copy
+    // (a losing tombstone holds no text to keep). If
+    // both texts are identical there is nothing to
+    // preserve — which is also what stops two devices'
+    // independently created copies of the SAME loser
+    // from breeding copies of copies: the twins merge.
+    // The copy starts its OWN lineage — a deterministic
+    // synthetic author and a base pointing at itself —
+    // because a base inside the original entry's
+    // history would share that entry's coordinates: an
+    // edit of such a copy would read as stale on one
+    // peer and as a fast-forward on the other, and
+    // vanish between them.
+    let winner_rec = if incoming_wins { record } else { &local };
+    let text_differs = loser.body_md != winner_rec.body_md
+        || loser.title != winner_rec.title
+        || loser.deleted_at.is_some() != winner_rec.deleted_at.is_some();
+    if loser.body_md.is_some() && text_differs {
+        let copy_id = conflict_id(&record.id, loser);
+        let exists: bool = tx
+            .query_row("SELECT 1 FROM entry WHERE id = ?1", [&copy_id], |_| {
+                Ok(true)
+            })
+            .unwrap_or(false);
+        if !exists {
+            let mut copy = loser.clone();
+            copy.id = copy_id;
+            copy.rev = 1;
+            copy.device_id = conflict_author(&record.id, loser);
+            copy.base_device = copy.device_id.clone();
+            copy.base_rev = 1;
+            copy.deleted_at = None;
+            // The copy inherits the source revision's folder:
+            // folder_id travels on the clone, and insert
+            // honors it on the same authority as the record
+            // that produced it.
+            copy.title = Some(match &loser.title {
+                Some(title) => format!("{title} (conflict)"),
+                None => "Conflict copy".to_string(),
+            });
+            tx.execute(
                     "INSERT OR IGNORE INTO device (id, name, created_at) VALUES (?1, 'conflict copy', ?2)",
                     params![copy.device_id, crate::storage::now_ms()],
                 )?;
-                insert_record(tx, &copy)?;
-                report.entries_conflicted += 1;
-            }
+            insert_record(tx, &copy, v2)?;
+            report.entries_conflicted += 1;
         }
+    }
     Ok(())
 }
 
@@ -1621,7 +1827,11 @@ impl Vault {
         let state = {
             let conn = self.db.connection();
             let deleted: Option<Option<i64>> = conn
-                .query_row("SELECT deleted_at FROM attachment WHERE id = ?1", [&record.id], |row| row.get(0))
+                .query_row(
+                    "SELECT deleted_at FROM attachment WHERE id = ?1",
+                    [&record.id],
+                    |row| row.get(0),
+                )
                 .ok();
             match deleted {
                 None => State::Missing,
@@ -1652,11 +1862,15 @@ impl Vault {
                     // A delete for something never held: keep
                     // a tombstone row so a later, older add
                     // cannot resurrect it.
-                    let entry_exists = self.db.connection().query_row(
-                        "SELECT 1 FROM entry WHERE id = ?1",
-                        [&record.entry_id],
-                        |_| Ok(true),
-                    ).unwrap_or(false);
+                    let entry_exists = self
+                        .db
+                        .connection()
+                        .query_row(
+                            "SELECT 1 FROM entry WHERE id = ?1",
+                            [&record.entry_id],
+                            |_| Ok(true),
+                        )
+                        .unwrap_or(false);
                     if entry_exists {
                         let tx = self.db.conn_mut().transaction()?;
                         let lseq = next_lseq(&tx)?;
@@ -1667,20 +1881,26 @@ impl Vault {
                 }
                 let src = sync_dir.join("blobs").join(&record.id);
                 if !src.exists() {
-                    report
-                        .problems
-                        .push(format!("attachment {}: its blob is missing from the sync folder", record.id));
+                    report.problems.push(format!(
+                        "attachment {}: its blob is missing from the sync folder",
+                        record.id
+                    ));
                     return Ok(());
                 }
-                let entry_exists = self.db.connection().query_row(
-                    "SELECT 1 FROM entry WHERE id = ?1",
-                    [&record.entry_id],
-                    |_| Ok(true),
-                ).unwrap_or(false);
+                let entry_exists = self
+                    .db
+                    .connection()
+                    .query_row(
+                        "SELECT 1 FROM entry WHERE id = ?1",
+                        [&record.entry_id],
+                        |_| Ok(true),
+                    )
+                    .unwrap_or(false);
                 if !entry_exists {
-                    report
-                        .problems
-                        .push(format!("attachment {}: its entry has not arrived yet", record.id));
+                    report.problems.push(format!(
+                        "attachment {}: its entry has not arrived yet",
+                        record.id
+                    ));
                     return Ok(());
                 }
                 let dest = crate::attachments::blob_path(self.dir(), &record.id);
@@ -1717,9 +1937,10 @@ impl Vault {
                     tx.execute("DELETE FROM attachment WHERE id = ?1", [&record.id])?;
                     tx.commit()?;
                     crate::attachments::remove_blob(self.dir(), &record.id);
-                    report
-                        .problems
-                        .push(format!("attachment {}: content does not match its hash; rejected", record.id));
+                    report.problems.push(format!(
+                        "attachment {}: content does not match its hash; rejected",
+                        record.id
+                    ));
                 }
             }
         }
@@ -1740,13 +1961,41 @@ fn open_bundle(cipher: &XChaCha20Poly1305, bytes: &[u8]) -> Result<(BundleHeader
     let (nonce, sealed) = rest.split_at(NONCE_LEN);
     let nonce: [u8; NONCE_LEN] = nonce.try_into().expect("split_at NONCE_LEN");
     let plain = cipher
-        .decrypt(&XNonce::from(nonce), Payload { msg: sealed, aad: line })
+        .decrypt(
+            &XNonce::from(nonce),
+            Payload {
+                msg: sealed,
+                aad: line,
+            },
+        )
         .map_err(|_| Error::Unlock)?;
     let bundle: Bundle = serde_json::from_slice(&plain).map_err(|_| Error::Unlock)?;
     Ok((header, bundle))
 }
 
 fn validate_bundle_records(bundle: &Bundle) -> std::result::Result<(), &'static str> {
+    for folder in &bundle.folders {
+        if !crate::storage::is_canonical_uuid(&folder.id)
+            || !crate::storage::is_canonical_uuid(&folder.device_id)
+            || (!folder.base_device.is_empty()
+                && !crate::storage::is_canonical_uuid(&folder.base_device))
+            || folder
+                .parent_id
+                .as_ref()
+                .is_some_and(|p| !crate::storage::is_canonical_uuid(p))
+        {
+            return Err("folder id or device id is invalid");
+        }
+        if folder.rev < 1 || folder.base_rev < 0 {
+            return Err("folder revision is invalid");
+        }
+        // Light rules here: the authoring device enforced the
+        // strict name policy at write time; sync must not brick
+        // on history, only on garbage.
+        if folder.name.is_empty() || folder.name.chars().count() > 100 {
+            return Err("folder name is invalid");
+        }
+    }
     for entry in &bundle.entries {
         if !crate::storage::is_canonical_uuid(&entry.id)
             || !crate::storage::is_canonical_uuid(&entry.device_id)
@@ -1761,15 +2010,27 @@ fn validate_bundle_records(bundle: &Bundle) -> std::result::Result<(), &'static 
         if crate::entries::validate_date(&entry.entry_date).is_err() {
             return Err("entry date is invalid");
         }
-        if entry.tz.as_ref().is_some_and(|tz| tz.is_empty() || tz.chars().count() > 64) {
+        if entry
+            .tz
+            .as_ref()
+            .is_some_and(|tz| tz.is_empty() || tz.chars().count() > 64)
+        {
             return Err("time zone is invalid");
         }
         if entry.tags.iter().any(|tag| {
-            tag.trim().is_empty()
-                || tag.chars().count() > 64
-                || tag.chars().any(char::is_control)
+            tag.trim().is_empty() || tag.chars().count() > 64 || tag.chars().any(char::is_control)
         }) {
             return Err("tag is invalid");
+        }
+        // Membership references resolve at read time (a child may
+        // arrive before its parent), but the reference itself must
+        // be well-formed.
+        if entry
+            .folder_id
+            .as_ref()
+            .is_some_and(|f| !crate::storage::is_canonical_uuid(f))
+        {
+            return Err("entry folder is invalid");
         }
     }
     for attachment in &bundle.attachments {
@@ -1818,19 +2079,31 @@ fn write_record_tags(tx: &Transaction, rid: i64, tags: &[String]) -> Result<()> 
             "INSERT INTO tag (name, name_key) VALUES (?1, ?2) ON CONFLICT(name_key) DO NOTHING",
             params![display, key],
         )?;
-        let tag_id: i64 = tx.query_row("SELECT id FROM tag WHERE name_key = ?1", [&key], |row| row.get(0))?;
-        tx.execute("INSERT INTO entry_tag (entry_rid, tag_id) VALUES (?1, ?2)", params![rid, tag_id])?;
+        let tag_id: i64 =
+            tx.query_row("SELECT id FROM tag WHERE name_key = ?1", [&key], |row| {
+                row.get(0)
+            })?;
+        tx.execute(
+            "INSERT INTO entry_tag (entry_rid, tag_id) VALUES (?1, ?2)",
+            params![rid, tag_id],
+        )?;
     }
     Ok(())
 }
 
-fn insert_record(tx: &Transaction, record: &EntryRecord) -> Result<()> {
+fn insert_record(tx: &Transaction, record: &EntryRecord, v2: bool) -> Result<()> {
     let lseq = next_lseq(tx)?;
+    // Membership authority follows the bundle format: a v1 record
+    // carries none and lands at the root, exactly as v1 history
+    // reads. The title key is maintained on both paths so the
+    // picker index stays complete for synced entries.
+    let title_key = record.title.as_deref().map(crate::entries::normalize_key);
+    let folder_id = if v2 { record.folder_id.clone() } else { None };
     tx.execute(
         "INSERT INTO entry
            (id, entry_date, created_at, updated_at, deleted_at, rev, device_id, lseq,
-            title, body_md, mood, tz, base_rev, base_device)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            folder_id, title, title_key, body_md, mood, tz, base_rev, base_device)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             record.id,
             record.entry_date,
@@ -1840,7 +2113,9 @@ fn insert_record(tx: &Transaction, record: &EntryRecord) -> Result<()> {
             record.rev,
             record.device_id,
             lseq,
+            folder_id,
             record.title,
+            title_key,
             record.body_md,
             record.mood,
             record.tz,
@@ -1855,32 +2130,100 @@ fn insert_record(tx: &Transaction, record: &EntryRecord) -> Result<()> {
     Ok(())
 }
 
-fn replace_record(tx: &Transaction, record: &EntryRecord) -> Result<()> {
+/// Applies an incoming content winner while keeping a live
+/// entry's permanent folder. A v2 record that disagrees on
+/// membership has its content converged but its placement pinned
+/// to the local folder, with a warning — never applied as a move
+/// or decided by vote. (A v1 record carries no membership at all,
+/// so keeping the local folder is the ordinary upgrade path, not
+/// a conflict.) Inserts and same-membership replaces are the only
+/// writers of `folder_id`.
+fn replace_content(
+    tx: &Transaction,
+    record: &EntryRecord,
+    local: &EntryRecord,
+    v2: bool,
+    report: &mut SyncReport,
+) -> Result<()> {
+    if v2
+        && record.deleted_at.is_none()
+        && local.deleted_at.is_none()
+        && record.folder_id != local.folder_id
+    {
+        let mut pinned = record.clone();
+        pinned.folder_id = local.folder_id.clone();
+        replace_record(tx, &pinned, v2)?;
+        report.warnings.push(format!(
+            "entry {}: kept its folder while applying a conflicting update",
+            short(&record.id)
+        ));
+    } else {
+        replace_record(tx, record, v2)?;
+    }
+    Ok(())
+}
+
+fn replace_record(tx: &Transaction, record: &EntryRecord, v2: bool) -> Result<()> {
     let lseq = next_lseq(tx)?;
-    tx.execute(
-        "UPDATE entry
-            SET entry_date = ?1, created_at = ?2, updated_at = ?3, deleted_at = ?4,
-                rev = ?5, device_id = ?6, lseq = ?7, title = ?8, body_md = ?9,
-                mood = ?10, tz = ?11, base_rev = ?12, base_device = ?13
-          WHERE id = ?14",
-        params![
-            record.entry_date,
-            record.created_at,
-            record.updated_at,
-            record.deleted_at,
-            record.rev,
-            record.device_id,
-            lseq,
-            record.title,
-            record.body_md,
-            record.mood,
-            record.tz,
-            record.base_rev,
-            record.base_device,
-            record.id
-        ],
-    )?;
-    let rid: i64 = tx.query_row("SELECT rid FROM entry WHERE id = ?1", [&record.id], |row| row.get(0))?;
+    // A v1 replace must never reset established v2 membership: the
+    // record carries none, so the local assignment stands.
+    let title_key = record.title.as_deref().map(crate::entries::normalize_key);
+    if v2 {
+        tx.execute(
+            "UPDATE entry
+                SET entry_date = ?1, created_at = ?2, updated_at = ?3, deleted_at = ?4,
+                    rev = ?5, device_id = ?6, lseq = ?7, folder_id = ?8, title = ?9,
+                    title_key = ?10, body_md = ?11, mood = ?12, tz = ?13,
+                    base_rev = ?14, base_device = ?15
+              WHERE id = ?16",
+            params![
+                record.entry_date,
+                record.created_at,
+                record.updated_at,
+                record.deleted_at,
+                record.rev,
+                record.device_id,
+                lseq,
+                record.folder_id,
+                record.title,
+                title_key,
+                record.body_md,
+                record.mood,
+                record.tz,
+                record.base_rev,
+                record.base_device,
+                record.id
+            ],
+        )?;
+    } else {
+        tx.execute(
+            "UPDATE entry
+                SET entry_date = ?1, created_at = ?2, updated_at = ?3, deleted_at = ?4,
+                    rev = ?5, device_id = ?6, lseq = ?7, title = ?8, title_key = ?9, body_md = ?10,
+                    mood = ?11, tz = ?12, base_rev = ?13, base_device = ?14
+              WHERE id = ?15",
+            params![
+                record.entry_date,
+                record.created_at,
+                record.updated_at,
+                record.deleted_at,
+                record.rev,
+                record.device_id,
+                lseq,
+                record.title,
+                title_key,
+                record.body_md,
+                record.mood,
+                record.tz,
+                record.base_rev,
+                record.base_device,
+                record.id
+            ],
+        )?;
+    }
+    let rid: i64 = tx.query_row("SELECT rid FROM entry WHERE id = ?1", [&record.id], |row| {
+        row.get(0)
+    })?;
     if record.deleted_at.is_none() {
         write_record_tags(tx, rid, &record.tags)?;
     } else {
@@ -1889,7 +2232,144 @@ fn replace_record(tx: &Transaction, record: &EntryRecord) -> Result<()> {
     Ok(())
 }
 
-fn insert_attachment_row(tx: &Transaction, record: &AttachmentRecord, lseq: i64, sha_hex: &str) -> Result<()> {
+/// Merges one folder record. Same lineage and conflict identity as
+/// entries — (id, rev), higher rev wins on one lineage, bases decide
+/// fast-forward versus stale across lineages — except the loser is
+/// reported, not preserved: there is no content to keep a copy of,
+/// only a name and a position. Tombstones win over live records in
+/// both directions (the entry deletion precedence); a live folder
+/// that loses, or a live record that loses to a tombstone, counts a
+/// conflict and warns. Tombstone-versus-tombstone converges on the
+/// higher (rev, device) silently.
+fn apply_folder(tx: &Transaction, record: &FolderRecord, report: &mut SyncReport) -> Result<()> {
+    let local: Option<FolderRecord> = tx
+        .query_row(
+            "SELECT parent_id, name, created_at, updated_at, deleted_at, rev,
+                    device_id, base_rev, base_device
+               FROM folder WHERE id = ?1",
+            [&record.id],
+            |row| {
+                Ok(FolderRecord {
+                    id: record.id.clone(),
+                    parent_id: row.get(0)?,
+                    name: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                    deleted_at: row.get(4)?,
+                    rev: row.get(5)?,
+                    device_id: row.get(6)?,
+                    base_rev: row.get(7)?,
+                    base_device: row.get(8)?,
+                })
+            },
+        )
+        .optional()?;
+    let Some(local) = local else {
+        insert_folder_row(tx, record)?;
+        report.folders_applied += 1;
+        return Ok(());
+    };
+    if record.device_id == local.device_id {
+        if record.rev > local.rev {
+            replace_folder_row(tx, record)?;
+            report.folders_applied += 1;
+        }
+        return Ok(());
+    }
+    if (record.base_device.as_str(), record.base_rev) == (local.device_id.as_str(), local.rev) {
+        replace_folder_row(tx, record)?;
+        report.folders_applied += 1;
+        return Ok(());
+    }
+    if (local.base_device.as_str(), local.base_rev) == (record.device_id.as_str(), record.rev) {
+        return Ok(());
+    }
+    let incoming_tomb = record.deleted_at.is_some();
+    let local_tomb = local.deleted_at.is_some();
+    let incoming_wins = match (incoming_tomb, local_tomb) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => (record.rev, record.device_id.as_str()) > (local.rev, local.device_id.as_str()),
+    };
+    if incoming_wins {
+        replace_folder_row(tx, record)?;
+        report.folders_applied += 1;
+    }
+    let live_lost = (incoming_wins && !local_tomb) || (!incoming_wins && !incoming_tomb);
+    if live_lost {
+        report.folders_conflicted += 1;
+        let (kept, dropped) = if incoming_wins {
+            (record.name.as_str(), local.name.as_str())
+        } else {
+            (local.name.as_str(), record.name.as_str())
+        };
+        report.warnings.push(format!(
+            "folder {}: concurrent change resolved, kept {kept:?} over {dropped:?}",
+            short(&record.id),
+        ));
+    }
+    Ok(())
+}
+
+fn insert_folder_row(tx: &Transaction, record: &FolderRecord) -> Result<()> {
+    let lseq = next_lseq(tx)?;
+    let name_key = crate::entries::normalize_key(&record.name);
+    tx.execute(
+        "INSERT INTO folder
+           (id, parent_id, name, name_key, created_at, updated_at, deleted_at,
+            rev, device_id, lseq, base_rev, base_device)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            record.id,
+            record.parent_id,
+            record.name,
+            name_key,
+            record.created_at,
+            record.updated_at,
+            record.deleted_at,
+            record.rev,
+            record.device_id,
+            lseq,
+            record.base_rev,
+            record.base_device
+        ],
+    )?;
+    Ok(())
+}
+
+fn replace_folder_row(tx: &Transaction, record: &FolderRecord) -> Result<()> {
+    let lseq = next_lseq(tx)?;
+    let name_key = crate::entries::normalize_key(&record.name);
+    tx.execute(
+        "UPDATE folder
+            SET parent_id = ?1, name = ?2, name_key = ?3, created_at = ?4,
+                updated_at = ?5, deleted_at = ?6, rev = ?7, device_id = ?8,
+                lseq = ?9, base_rev = ?10, base_device = ?11
+          WHERE id = ?12",
+        params![
+            record.parent_id,
+            record.name,
+            name_key,
+            record.created_at,
+            record.updated_at,
+            record.deleted_at,
+            record.rev,
+            record.device_id,
+            lseq,
+            record.base_rev,
+            record.base_device,
+            record.id
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_attachment_row(
+    tx: &Transaction,
+    record: &AttachmentRecord,
+    lseq: i64,
+    sha_hex: &str,
+) -> Result<()> {
     // Callers validate the wire record before it reaches this function. Keep
     // decoding fallible anyway so a future caller cannot turn malformed input
     // into a panic or silently substitute zero bytes.
@@ -1932,7 +2412,11 @@ mod tests {
     const DEVICE_B: &str = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb";
 
     fn fast() -> KdfParams {
-        KdfParams { m_kib: 8, t: 1, p: 1 }
+        KdfParams {
+            m_kib: 8,
+            t: 1,
+            p: 1,
+        }
     }
 
     fn copy_dir(from: &Path, to: &Path) {
@@ -1965,8 +2449,11 @@ mod tests {
                 [DEVICE_B],
             )
             .unwrap();
-            conn.execute("UPDATE meta SET value = ?1 WHERE key = 'device_id'", [DEVICE_B])
-                .unwrap();
+            conn.execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'device_id'",
+                [DEVICE_B],
+            )
+            .unwrap();
         }
         drop(b);
         let b = Vault::open_with_passphrase(&dir_b.path().join("v"), PASSPHRASE).unwrap();
@@ -1979,8 +2466,11 @@ mod tests {
                 [DEVICE_A],
             )
             .unwrap();
-            conn.execute("UPDATE meta SET value = ?1 WHERE key = 'device_id'", [DEVICE_A])
-                .unwrap();
+            conn.execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'device_id'",
+                [DEVICE_A],
+            )
+            .unwrap();
         }
         drop(a);
         let a = Vault::open_with_passphrase(&a_dir, PASSPHRASE).unwrap();
@@ -2012,12 +2502,15 @@ mod tests {
     fn entries_flow_both_ways_and_reapply_is_a_no_op() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let entry = a.create_entry(&draft("from A")).unwrap();
+        let entry = a.create_entry(None, &draft("from A")).unwrap();
         exchange(&mut a, &mut b, sync.path());
         assert_eq!(b.get_entry(&entry.id).unwrap().body_md, "from A");
-        assert_eq!(b.get_entry(&entry.id).unwrap().tags, vec!["sync".to_string()]);
+        assert_eq!(
+            b.get_entry(&entry.id).unwrap().tags,
+            vec!["sync".to_string()]
+        );
 
-        b.update_entry(&entry.id, &draft("edited on B")).unwrap();
+        b.update_entry(&entry.id, b.get_entry(&entry.id).unwrap().rev, &draft("edited on B")).unwrap();
         exchange(&mut a, &mut b, sync.path());
         assert_eq!(a.get_entry(&entry.id).unwrap().body_md, "edited on B");
 
@@ -2036,26 +2529,40 @@ mod tests {
     fn diverged_edits_converge_with_one_conflict_copy() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let entry = a.create_entry(&draft("base")).unwrap();
+        let entry = a.create_entry(None, &draft("base")).unwrap();
         exchange(&mut a, &mut b, sync.path());
 
-        a.update_entry(&entry.id, &draft("A's words")).unwrap();
-        b.update_entry(&entry.id, &draft("B's words")).unwrap();
+        a.update_entry(&entry.id, a.get_entry(&entry.id).unwrap().rev, &draft("A's words")).unwrap();
+        b.update_entry(&entry.id, b.get_entry(&entry.id).unwrap().rev, &draft("B's words")).unwrap();
         exchange(&mut a, &mut b, sync.path());
         // A second exchange: the copies themselves travel.
         exchange(&mut a, &mut b, sync.path());
 
-        let page_a = a.list_entries(&crate::entries::ListQuery::default()).unwrap();
-        let page_b = b.list_entries(&crate::entries::ListQuery::default()).unwrap();
+        let page_a = a
+            .list_entries(&crate::entries::ListQuery::default())
+            .unwrap();
+        let page_b = b
+            .list_entries(&crate::entries::ListQuery::default())
+            .unwrap();
         assert_eq!(page_a.items.len(), 2, "winner + one conflict copy");
         assert_eq!(page_b.items.len(), 2);
         let winner_a = a.get_entry(&entry.id).unwrap();
         let winner_b = b.get_entry(&entry.id).unwrap();
-        assert_eq!(winner_a.body_md, winner_b.body_md, "both sides pick the same winner");
-        let loser_text = if winner_a.body_md == "A's words" { "B's words" } else { "A's words" };
+        assert_eq!(
+            winner_a.body_md, winner_b.body_md,
+            "both sides pick the same winner"
+        );
+        let loser_text = if winner_a.body_md == "A's words" {
+            "B's words"
+        } else {
+            "A's words"
+        };
         let copy_a = page_a.items.iter().find(|i| i.id != entry.id).unwrap();
         let copy_b = page_b.items.iter().find(|i| i.id != entry.id).unwrap();
-        assert_eq!(copy_a.id, copy_b.id, "the same deterministic copy on both sides");
+        assert_eq!(
+            copy_a.id, copy_b.id,
+            "the same deterministic copy on both sides"
+        );
         assert_eq!(a.get_entry(&copy_a.id).unwrap().body_md, loser_text);
     }
 
@@ -2063,19 +2570,27 @@ mod tests {
     fn delete_against_edit_keeps_the_text_as_a_copy() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let entry = a.create_entry(&draft("base")).unwrap();
+        let entry = a.create_entry(None, &draft("base")).unwrap();
         exchange(&mut a, &mut b, sync.path());
 
         b.delete_entry(&entry.id).unwrap();
-        a.update_entry(&entry.id, &draft("still writing")).unwrap();
+        a.update_entry(&entry.id, a.get_entry(&entry.id).unwrap().rev, &draft("still writing")).unwrap();
         exchange(&mut a, &mut b, sync.path());
         exchange(&mut a, &mut b, sync.path());
 
-        assert!(a.get_entry(&entry.id).is_err(), "the delete won the entry on A too");
+        assert!(
+            a.get_entry(&entry.id).is_err(),
+            "the delete won the entry on A too"
+        );
         assert!(b.get_entry(&entry.id).is_err());
-        let page = a.list_entries(&crate::entries::ListQuery::default()).unwrap();
+        let page = a
+            .list_entries(&crate::entries::ListQuery::default())
+            .unwrap();
         assert_eq!(page.items.len(), 1, "only the conflict copy remains");
-        assert_eq!(a.get_entry(&page.items[0].id).unwrap().body_md, "still writing");
+        assert_eq!(
+            a.get_entry(&page.items[0].id).unwrap().body_md,
+            "still writing"
+        );
     }
 
     #[test]
@@ -2088,20 +2603,28 @@ mod tests {
         // act on an entry that no longer exists.
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let entry = a.create_entry(&draft("base")).unwrap();
+        let entry = a.create_entry(None, &draft("base")).unwrap();
         exchange(&mut a, &mut b, sync.path());
 
         a.delete_entry(&entry.id).unwrap();
-        b.update_entry(&entry.id, &draft("still writing")).unwrap();
+        b.update_entry(&entry.id, b.get_entry(&entry.id).unwrap().rev, &draft("still writing")).unwrap();
         exchange(&mut a, &mut b, sync.path());
         exchange(&mut a, &mut b, sync.path());
 
         assert!(a.get_entry(&entry.id).is_err());
-        assert!(b.get_entry(&entry.id).is_err(), "the delete won the entry on B too");
+        assert!(
+            b.get_entry(&entry.id).is_err(),
+            "the delete won the entry on B too"
+        );
         for vault in [&a, &b] {
-            let page = vault.list_entries(&crate::entries::ListQuery::default()).unwrap();
+            let page = vault
+                .list_entries(&crate::entries::ListQuery::default())
+                .unwrap();
             assert_eq!(page.items.len(), 1, "only the conflict copy remains");
-            assert_eq!(vault.get_entry(&page.items[0].id).unwrap().body_md, "still writing");
+            assert_eq!(
+                vault.get_entry(&page.items[0].id).unwrap().body_md,
+                "still writing"
+            );
         }
     }
 
@@ -2125,7 +2648,13 @@ mod tests {
         let aad = header_line(&header);
         let nonce = random_bytes::<NONCE_LEN>().unwrap();
         let sealed = cipher
-            .encrypt(&XNonce::from(nonce), Payload { msg: &json, aad: &aad })
+            .encrypt(
+                &XNonce::from(nonce),
+                Payload {
+                    msg: &json,
+                    aad: &aad,
+                },
+            )
             .unwrap();
         let mut out = aad.clone();
         out.push(b'\n');
@@ -2145,7 +2674,7 @@ mod tests {
         let entry_dir = TempDir::new().unwrap();
         let junk_dir = TempDir::new().unwrap();
         let tomb_dir = TempDir::new().unwrap();
-        let entry = b.create_entry(&draft("base")).unwrap();
+        let entry = b.create_entry(None, &draft("base")).unwrap();
         b.sync_emit(entry_dir.path()).unwrap();
         a.sync_apply(entry_dir.path()).unwrap();
         let att = b
@@ -2153,7 +2682,7 @@ mod tests {
             .unwrap();
         b.sync_emit(junk_dir.path()).unwrap();
         b.delete_attachment(&att.id).unwrap();
-        let companion = b.create_entry(&draft("companion")).unwrap();
+        let companion = b.create_entry(None, &draft("companion")).unwrap();
         let info = b.sync_emit(tomb_dir.path()).unwrap().unwrap();
         poison_bundle(tomb_dir.path(), &info.file_name, &b, |bundle| {
             bundle.attachments[0].sha256 = "a".repeat(63);
@@ -2174,7 +2703,7 @@ mod tests {
         // changes nothing, and the vault still works.
         let report = a.sync_apply(tomb_dir.path()).unwrap();
         assert_eq!(report.problems.len(), 1);
-        b.create_entry(&draft("afterwards")).unwrap();
+        b.create_entry(None, &draft("afterwards")).unwrap();
         let good = TempDir::new().unwrap();
         b.sync_emit(good.path()).unwrap();
         let report = a.sync_apply(good.path()).unwrap();
@@ -2189,7 +2718,7 @@ mod tests {
         let (_da, _db, mut a, mut b) = two_devices();
         let entry_dir = TempDir::new().unwrap();
         let att_dir = TempDir::new().unwrap();
-        let entry = b.create_entry(&draft("base")).unwrap();
+        let entry = b.create_entry(None, &draft("base")).unwrap();
         b.sync_emit(entry_dir.path()).unwrap();
         a.sync_apply(entry_dir.path()).unwrap();
         b.add_attachment(&entry.id, "note.txt", "text/plain", b"attachment canary")
@@ -2211,7 +2740,7 @@ mod tests {
     fn attachments_travel_with_their_blob() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let entry = a.create_entry(&draft("with a file")).unwrap();
+        let entry = a.create_entry(None, &draft("with a file")).unwrap();
         let att = a
             .add_attachment(&entry.id, "note.txt", "text/plain", b"attachment canary")
             .unwrap();
@@ -2224,8 +2753,11 @@ mod tests {
     fn a_bundle_from_another_vault_is_ignored_quietly() {
         let (_da, _db, mut a, _b) = two_devices();
         let other_dir = TempDir::new().unwrap();
-        let (mut other, _) = Vault::create(&other_dir.path().join("v"), PASSPHRASE, fast()).unwrap();
-        other.create_entry(&draft("someone else's diary")).unwrap();
+        let (mut other, _) =
+            Vault::create(&other_dir.path().join("v"), PASSPHRASE, fast()).unwrap();
+        other
+            .create_entry(None, &draft("someone else's diary"))
+            .unwrap();
         let sync = TempDir::new().unwrap();
         other.sync_emit(sync.path()).unwrap();
         // Two vaults sharing one folder is a normal setup:
@@ -2262,15 +2794,22 @@ mod tests {
                 [&twin_id],
             )
             .unwrap();
-            conn.execute("UPDATE meta SET value = ?1 WHERE key = 'device_id'", [&twin_id])
-                .unwrap();
+            conn.execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'device_id'",
+                [&twin_id],
+            )
+            .unwrap();
         }
         drop(b);
         let mut b = Vault::open_with_passphrase(&dir_b.path().join("v"), PASSPHRASE).unwrap();
         let mut a = Vault::open_with_passphrase(&a_dir, PASSPHRASE).unwrap();
-        assert_eq!(short(&a.device_id), short(&b.device_id), "the prefixes collide");
+        assert_eq!(
+            short(&a.device_id),
+            short(&b.device_id),
+            "the prefixes collide"
+        );
         assert_ne!(a.device_id, b.device_id);
-        let entry = a.create_entry(&draft("from A")).unwrap();
+        let entry = a.create_entry(None, &draft("from A")).unwrap();
         exchange(&mut a, &mut b, sync.path());
         assert_eq!(b.get_entry(&entry.id).unwrap().body_md, "from A");
     }
@@ -2279,7 +2818,7 @@ mod tests {
     fn a_copied_vault_is_loud_and_restamp_fixes_it() {
         let (_da, _db, mut a, _b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let entry = a.create_entry(&draft("original")).unwrap();
+        let entry = a.create_entry(None, &draft("original")).unwrap();
         a.sync_emit(sync.path()).unwrap();
         // A raw folder copy: same device id, same watermark.
         let dir_t = TempDir::new().unwrap();
@@ -2287,8 +2826,10 @@ mod tests {
         copy_dir(a.dir(), &t_dir);
         let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
         assert_eq!(twin.device_id, a.device_id);
-        twin.update_entry(&entry.id, &draft("twin edit one")).unwrap();
-        twin.update_entry(&entry.id, &draft("twin edit two")).unwrap();
+        twin.update_entry(&entry.id, twin.get_entry(&entry.id).unwrap().rev, &draft("twin edit one"))
+            .unwrap();
+        twin.update_entry(&entry.id, twin.get_entry(&entry.id).unwrap().rev, &draft("twin edit two"))
+            .unwrap();
         twin.sync_emit(sync.path()).unwrap();
         // A hears about it — loudly — and applies nothing.
         let report = a.sync_apply(sync.path()).unwrap();
@@ -2316,7 +2857,7 @@ mod tests {
         let dir_a = TempDir::new().unwrap();
         let sync = TempDir::new().unwrap();
         let (mut a, _) = Vault::create(&dir_a.path().join("v"), PASSPHRASE, fast()).unwrap();
-        let entry = a.create_entry(&draft("base")).unwrap();
+        let entry = a.create_entry(None, &draft("base")).unwrap();
         // A raw copy taken after the create: same id,
         // watermark 0 on both sides.
         let dir_t = TempDir::new().unwrap();
@@ -2325,7 +2866,7 @@ mod tests {
         let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
         // Both sides edit the entry once, so both emits want
         // the same range (1..=2) — with different records.
-        a.update_entry(&entry.id, &draft("A's text")).unwrap();
+        a.update_entry(&entry.id, a.get_entry(&entry.id).unwrap().rev, &draft("A's text")).unwrap();
         a.sync_emit(sync.path()).unwrap();
         let bundle_name = format!(
             "{}-{}-00000001-00000002.sync",
@@ -2333,7 +2874,7 @@ mod tests {
             a.device_id
         );
         let before = fs::read(sync.path().join(&bundle_name)).unwrap();
-        twin.update_entry(&entry.id, &draft("twin's text")).unwrap();
+        twin.update_entry(&entry.id, twin.get_entry(&entry.id).unwrap().rev, &draft("twin's text")).unwrap();
         let err = twin.sync_emit(sync.path()).unwrap_err();
         assert!(err.to_string().contains("restamp-device"), "{err}");
         assert!(matches!(err, Error::SharedDeviceId), "{err}");
@@ -2345,12 +2886,11 @@ mod tests {
     fn a_reemit_after_a_crash_is_a_no_op() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let entry = a.create_entry(&draft("from A")).unwrap();
+        let entry = a.create_entry(None, &draft("from A")).unwrap();
         let first = a.sync_emit(sync.path()).unwrap().unwrap();
         // The crash: the bundle reached the folder, the
         // watermark commit did not.
-        a.db
-            .conn_mut()
+        a.db.conn_mut()
             .execute("DELETE FROM meta WHERE key = 'sync_emitted_lseq'", [])
             .unwrap();
         let second = a.sync_emit(sync.path()).unwrap().unwrap();
@@ -2364,20 +2904,36 @@ mod tests {
     fn editing_a_conflict_copy_survives() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let entry = a.create_entry(&draft("base")).unwrap();
+        let entry = a.create_entry(None, &draft("base")).unwrap();
         exchange(&mut a, &mut b, sync.path());
-        a.update_entry(&entry.id, &draft("A's words")).unwrap();
-        b.update_entry(&entry.id, &draft("B's words")).unwrap();
+        a.update_entry(&entry.id, a.get_entry(&entry.id).unwrap().rev, &draft("A's words")).unwrap();
+        b.update_entry(&entry.id, b.get_entry(&entry.id).unwrap().rev, &draft("B's words")).unwrap();
         exchange(&mut a, &mut b, sync.path());
         // The user fixes up the copy on A before any further
         // exchange: the edit is an authorship change on the
         // copy's own lineage and must travel like one.
-        let page = a.list_entries(&crate::entries::ListQuery::default()).unwrap();
-        let copy_id = page.items.iter().find(|i| i.id != entry.id).unwrap().id.clone();
-        a.update_entry(&copy_id, &draft("merged by hand")).unwrap();
+        let page = a
+            .list_entries(&crate::entries::ListQuery::default())
+            .unwrap();
+        let copy_id = page
+            .items
+            .iter()
+            .find(|i| i.id != entry.id)
+            .unwrap()
+            .id
+            .clone();
+        a.update_entry(&copy_id, a.get_entry(&copy_id).unwrap().rev, &draft("merged by hand")).unwrap();
         exchange(&mut a, &mut b, sync.path());
-        assert_eq!(a.get_entry(&copy_id).unwrap().body_md, "merged by hand", "edit lost on A");
-        assert_eq!(b.get_entry(&copy_id).unwrap().body_md, "merged by hand", "edit never reached B");
+        assert_eq!(
+            a.get_entry(&copy_id).unwrap().body_md,
+            "merged by hand",
+            "edit lost on A"
+        );
+        assert_eq!(
+            b.get_entry(&copy_id).unwrap().body_md,
+            "merged by hand",
+            "edit never reached B"
+        );
     }
 
     #[test]
@@ -2399,16 +2955,19 @@ mod tests {
                 [DEVICE_C],
             )
             .unwrap();
-            conn.execute("UPDATE meta SET value = ?1 WHERE key = 'device_id'", [DEVICE_C])
-                .unwrap();
+            conn.execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'device_id'",
+                [DEVICE_C],
+            )
+            .unwrap();
         }
         drop(c);
         let mut c = Vault::open_with_passphrase(&c_dir, PASSPHRASE).unwrap();
         assert_eq!(c.device_id, DEVICE_C);
         // A creates, B edits: the entry is B-authored.
-        let entry = a.create_entry(&draft("from A")).unwrap();
+        let entry = a.create_entry(None, &draft("from A")).unwrap();
         exchange(&mut a, &mut b, sync.path());
-        b.update_entry(&entry.id, &draft("edited on B")).unwrap();
+        b.update_entry(&entry.id, b.get_entry(&entry.id).unwrap().rev, &draft("edited on B")).unwrap();
         exchange(&mut a, &mut b, sync.path());
         // A re-emits into a fresh folder: its bundle carries
         // the B-authored record under A's header. C must
@@ -2425,7 +2984,7 @@ mod tests {
     fn twin_copies_of_one_vault_lose_no_loser_text() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let entry = a.create_entry(&draft("base")).unwrap();
+        let entry = a.create_entry(None, &draft("base")).unwrap();
         exchange(&mut a, &mut b, sync.path());
         // A twin: a raw copy of A's vault, still DEVICE_A.
         let dir_t = TempDir::new().unwrap();
@@ -2438,38 +2997,54 @@ mod tests {
         // The twin makes a filler entry first so its emit
         // range differs from A's and the emit guard stays
         // out of this scenario.
-        a.update_entry(&entry.id, &draft("A one")).unwrap();
-        twin.create_entry(&draft("filler")).unwrap();
-        twin.update_entry(&entry.id, &draft("twin words")).unwrap();
-        b.update_entry(&entry.id, &draft("B words")).unwrap();
+        a.update_entry(&entry.id, a.get_entry(&entry.id).unwrap().rev, &draft("A one")).unwrap();
+        twin.create_entry(None, &draft("filler")).unwrap();
+        twin.update_entry(&entry.id, twin.get_entry(&entry.id).unwrap().rev, &draft("twin words")).unwrap();
+        b.update_entry(&entry.id, b.get_entry(&entry.id).unwrap().rev, &draft("B words")).unwrap();
         exchange(&mut a, &mut b, sync.path());
         exchange(&mut b, &mut twin, sync.path());
         // Both losers survive as copies: their ids differ
         // because the content is part of the derivation.
-        let page = b.list_entries(&crate::entries::ListQuery::default()).unwrap();
+        let page = b
+            .list_entries(&crate::entries::ListQuery::default())
+            .unwrap();
         let bodies: Vec<String> = page
             .items
             .iter()
             .map(|i| b.get_entry(&i.id).unwrap().body_md)
             .collect();
-        assert!(bodies.iter().any(|x| x == "A one"), "A's loser kept: {bodies:?}");
-        assert!(bodies.iter().any(|x| x == "twin words"), "twin's loser kept: {bodies:?}");
+        assert!(
+            bodies.iter().any(|x| x == "A one"),
+            "A's loser kept: {bodies:?}"
+        );
+        assert!(
+            bodies.iter().any(|x| x == "twin words"),
+            "twin's loser kept: {bodies:?}"
+        );
     }
 
     #[test]
     fn editing_a_conflict_copy_on_the_winner_device_survives() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let entry = a.create_entry(&draft("base")).unwrap();
+        let entry = a.create_entry(None, &draft("base")).unwrap();
         exchange(&mut a, &mut b, sync.path());
-        a.update_entry(&entry.id, &draft("A's words")).unwrap();
-        b.update_entry(&entry.id, &draft("B's words")).unwrap();
+        a.update_entry(&entry.id, a.get_entry(&entry.id).unwrap().rev, &draft("A's words")).unwrap();
+        b.update_entry(&entry.id, b.get_entry(&entry.id).unwrap().rev, &draft("B's words")).unwrap();
         exchange(&mut a, &mut b, sync.path());
         // The copy is edited on B — the device whose edit
         // WON the entry (A edited it in the other test).
-        let page = b.list_entries(&crate::entries::ListQuery::default()).unwrap();
-        let copy_id = page.items.iter().find(|i| i.id != entry.id).unwrap().id.clone();
-        b.update_entry(&copy_id, &draft("merged by hand")).unwrap();
+        let page = b
+            .list_entries(&crate::entries::ListQuery::default())
+            .unwrap();
+        let copy_id = page
+            .items
+            .iter()
+            .find(|i| i.id != entry.id)
+            .unwrap()
+            .id
+            .clone();
+        b.update_entry(&copy_id, b.get_entry(&copy_id).unwrap().rev, &draft("merged by hand")).unwrap();
         exchange(&mut a, &mut b, sync.path());
         assert_eq!(a.get_entry(&copy_id).unwrap().body_md, "merged by hand");
         assert_eq!(b.get_entry(&copy_id).unwrap().body_md, "merged by hand");
@@ -2479,28 +3054,38 @@ mod tests {
     fn an_edited_copy_arriving_before_resolution_converges() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let entry = a.create_entry(&draft("base")).unwrap();
+        let entry = a.create_entry(None, &draft("base")).unwrap();
         a.sync_emit(sync.path()).unwrap();
         b.sync_apply(sync.path()).unwrap();
-        a.update_entry(&entry.id, &draft("A's words")).unwrap();
-        b.update_entry(&entry.id, &draft("B's words")).unwrap();
+        a.update_entry(&entry.id, a.get_entry(&entry.id).unwrap().rev, &draft("A's words")).unwrap();
+        b.update_entry(&entry.id, b.get_entry(&entry.id).unwrap().rev, &draft("B's words")).unwrap();
         // B resolves first and edits the copy.
         a.sync_emit(sync.path()).unwrap();
         b.sync_apply(sync.path()).unwrap();
-        let page = b.list_entries(&crate::entries::ListQuery::default()).unwrap();
-        let copy_id = page.items.iter().find(|i| i.id != entry.id).unwrap().id.clone();
-        b.update_entry(&copy_id, &draft("merged by hand")).unwrap();
+        let page = b
+            .list_entries(&crate::entries::ListQuery::default())
+            .unwrap();
+        let copy_id = page
+            .items
+            .iter()
+            .find(|i| i.id != entry.id)
+            .unwrap()
+            .id
+            .clone();
+        b.update_entry(&copy_id, b.get_entry(&copy_id).unwrap().rev, &draft("merged by hand")).unwrap();
         // B edits the entry once more, so in B's next
         // bundle the edited copy precedes the winning
         // entry record (by lseq): A meets the copy before
         // it has resolved the entry at all.
-        b.update_entry(&entry.id, &draft("B words v2")).unwrap();
+        b.update_entry(&entry.id, b.get_entry(&entry.id).unwrap().rev, &draft("B words v2")).unwrap();
         b.sync_emit(sync.path()).unwrap();
         let report = a.sync_apply(sync.path()).unwrap();
         assert!(report.problems.is_empty(), "{:?}", report.problems);
         assert_eq!(a.get_entry(&entry.id).unwrap().body_md, "B words v2");
         assert_eq!(a.get_entry(&copy_id).unwrap().body_md, "merged by hand");
-        let page = a.list_entries(&crate::entries::ListQuery::default()).unwrap();
+        let page = a
+            .list_entries(&crate::entries::ListQuery::default())
+            .unwrap();
         assert_eq!(page.items.len(), 2, "no duplicate copy");
     }
 
@@ -2532,22 +3117,27 @@ mod tests {
                 [DEVICE_C],
             )
             .unwrap();
-            conn.execute("UPDATE meta SET value = ?1 WHERE key = 'device_id'", [DEVICE_C])
-                .unwrap();
+            conn.execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'device_id'",
+                [DEVICE_C],
+            )
+            .unwrap();
         }
         drop(c);
         let mut c = Vault::open_with_passphrase(&c_dir, PASSPHRASE).unwrap();
-        c.create_entry(&tagged("C's own", "foo")).unwrap();
+        c.create_entry(None, &tagged("C's own", "foo")).unwrap();
         // A authors the entry with the spelling "Foo".
-        let entry = a.create_entry(&tagged("base", "Foo")).unwrap();
+        let entry = a.create_entry(None, &tagged("base", "Foo")).unwrap();
         a.sync_emit(sync.path()).unwrap();
         b.sync_apply(sync.path()).unwrap();
         c.sync_apply(sync.path()).unwrap();
         // A and B diverge on it; B resolves (loser seen with
         // A's spelling), then C resolves (loser is C's local
         // record, whose tag reads "foo" from C's table).
-        a.update_entry(&entry.id, &tagged("A's edited", "Foo")).unwrap();
-        b.update_entry(&entry.id, &tagged("B's words", "Foo")).unwrap();
+        a.update_entry(&entry.id, a.get_entry(&entry.id).unwrap().rev, &tagged("A's edited", "Foo"))
+            .unwrap();
+        b.update_entry(&entry.id, b.get_entry(&entry.id).unwrap().rev, &tagged("B's words", "Foo"))
+            .unwrap();
         exchange(&mut a, &mut b, sync.path());
         b.sync_emit(sync.path()).unwrap();
         c.sync_apply(sync.path()).unwrap();
@@ -2556,7 +3146,9 @@ mod tests {
         // One loser, one text — exactly one copy of it on B,
         // because the copy's identity is derived from the
         // tag's name key, not from any device's spelling.
-        let page = b.list_entries(&crate::entries::ListQuery::default()).unwrap();
+        let page = b
+            .list_entries(&crate::entries::ListQuery::default())
+            .unwrap();
         let copies = page
             .items
             .iter()
@@ -2580,7 +3172,7 @@ mod tests {
     fn apply_records_cursors_and_publishes_an_ack() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        a.create_entry(&draft("one")).unwrap();
+        a.create_entry(None, &draft("one")).unwrap();
         let info = a.sync_emit(sync.path()).unwrap().unwrap();
         b.sync_apply(sync.path()).unwrap();
         let cursor = b.db.meta(&format!("sync_applied:{}", a.device_id)).unwrap();
@@ -2613,17 +3205,20 @@ mod tests {
                 [DEVICE_C],
             )
             .unwrap();
-            conn.execute("UPDATE meta SET value = ?1 WHERE key = 'device_id'", [DEVICE_C])
-                .unwrap();
+            conn.execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'device_id'",
+                [DEVICE_C],
+            )
+            .unwrap();
         }
         drop(c);
         let mut c = Vault::open_with_passphrase(&c_dir, PASSPHRASE).unwrap();
 
-        let entry = a.create_entry(&draft("one")).unwrap();
+        let entry = a.create_entry(None, &draft("one")).unwrap();
         let first = a.sync_emit(sync.path()).unwrap().unwrap();
         b.sync_apply(sync.path()).unwrap();
         c.sync_apply(sync.path()).unwrap();
-        a.update_entry(&entry.id, &draft("two")).unwrap();
+        a.update_entry(&entry.id, a.get_entry(&entry.id).unwrap().rev, &draft("two")).unwrap();
         let second = a.sync_emit(sync.path()).unwrap().unwrap();
         b.sync_apply(sync.path()).unwrap();
         // C has not consumed the second bundle: only the
@@ -2647,7 +3242,7 @@ mod tests {
     fn prune_without_peers_removes_nothing() {
         let (_da, _db, mut a, _b) = two_devices();
         let sync = TempDir::new().unwrap();
-        a.create_entry(&draft("one")).unwrap();
+        a.create_entry(None, &draft("one")).unwrap();
         a.sync_emit(sync.path()).unwrap();
         let report = a.sync_prune(sync.path()).unwrap();
         assert_eq!(report.bundles_removed, 0);
@@ -2659,7 +3254,7 @@ mod tests {
     fn prune_removes_only_covered_tombstone_blobs() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let entry = a.create_entry(&draft("with file")).unwrap();
+        let entry = a.create_entry(None, &draft("with file")).unwrap();
         let att = a
             .add_attachment(&entry.id, "note.txt", "text/plain", b"blob bytes")
             .unwrap();
@@ -2687,7 +3282,7 @@ mod tests {
     fn a_failed_attachment_is_not_acknowledged_and_heals_later() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let entry = a.create_entry(&draft("with file")).unwrap();
+        let entry = a.create_entry(None, &draft("with file")).unwrap();
         let att = a
             .add_attachment(&entry.id, "note.txt", "text/plain", b"blob bytes")
             .unwrap();
@@ -2725,9 +3320,9 @@ mod tests {
     fn a_gap_in_a_peers_stream_is_not_acknowledged() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        let e1 = a.create_entry(&draft("first")).unwrap();
+        let e1 = a.create_entry(None, &draft("first")).unwrap();
         let first = a.sync_emit(sync.path()).unwrap().unwrap();
-        let e2 = a.create_entry(&draft("second")).unwrap();
+        let e2 = a.create_entry(None, &draft("second")).unwrap();
         let second = a.sync_emit(sync.path()).unwrap().unwrap();
         // The first bundle arrives torn (the mover is mid-
         // copy); the second is intact but must not be
@@ -2764,7 +3359,7 @@ mod tests {
     fn overview_reports_identity_emit_point_and_cursors() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        a.create_entry(&draft("one")).unwrap();
+        a.create_entry(None, &draft("one")).unwrap();
         let info = a.sync_emit(sync.path()).unwrap().unwrap();
         let over_a = a.sync_overview().unwrap();
         assert_eq!(over_a.device_id, a.device_id);
@@ -2788,15 +3383,21 @@ mod tests {
     fn apply_publishes_and_repairs_this_devices_ack() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        a.create_entry(&draft("one")).unwrap();
+        a.create_entry(None, &draft("one")).unwrap();
         // Emit alone does not publish: the ack belongs to
         // apply, the only operation that moves cursors.
         a.sync_emit(sync.path()).unwrap();
-        let a_ack = sync.path().join("acks").join(format!("{}.json", a.device_id));
+        let a_ack = sync
+            .path()
+            .join("acks")
+            .join(format!("{}.json", a.device_id));
         assert!(!a_ack.exists());
         // B applies: B's ack appears, naming A's stream.
         b.sync_apply(sync.path()).unwrap();
-        let b_ack_path = sync.path().join("acks").join(format!("{}.json", b.device_id));
+        let b_ack_path = sync
+            .path()
+            .join("acks")
+            .join(format!("{}.json", b.device_id));
         let b_ack = fs::read(&b_ack_path).unwrap();
         assert!(String::from_utf8(b_ack).unwrap().contains(&a.device_id));
         // A lost ack is repaired by the next apply, even
@@ -2829,7 +3430,7 @@ mod tests {
         // A's apply carries that as a warning, not a
         // problem — the data itself applied fine.
         fs::write(sync.path().join("acks"), b"not a dir").unwrap();
-        b.create_entry(&draft("y1")).unwrap();
+        b.create_entry(None, &draft("y1")).unwrap();
         b.sync_emit(sync.path()).unwrap();
         let report = a.sync_apply(sync.path()).unwrap();
         assert_eq!(report.entries_applied, 1);
@@ -2848,7 +3449,7 @@ mod tests {
     fn an_ack_ahead_of_this_vault_is_reported_and_corrected() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        b.create_entry(&draft("y1")).unwrap();
+        b.create_entry(None, &draft("y1")).unwrap();
         let info1 = b.sync_emit(sync.path()).unwrap().unwrap();
         a.sync_apply(sync.path()).unwrap();
         // The file claims consumption this vault never
@@ -2856,9 +3457,11 @@ mod tests {
         // apply must say so AND put the file back to this
         // database's truth: the ack never claims more
         // than this vault holds.
-        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
-        let mut file_ack: SyncAck =
-            serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
+        let ack_path = sync
+            .path()
+            .join("acks")
+            .join(format!("{}.json", a.device_id));
+        let mut file_ack: SyncAck = serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
         file_ack.applied.insert(b.device_id.clone(), 99);
         fs::write(&ack_path, serde_json::to_vec(&file_ack).unwrap()).unwrap();
         let report = a.sync_apply(sync.path()).unwrap();
@@ -2868,8 +3471,7 @@ mod tests {
         assert!(a.sync_overview().unwrap().ack_ahead_seen);
         a.clear_ack_ahead().unwrap();
         assert!(!a.sync_overview().unwrap().ack_ahead_seen);
-        let after: SyncAck =
-            serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
+        let after: SyncAck = serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
         assert_eq!(after.applied.get(&b.device_id), Some(&info1.to_lseq));
     }
 
@@ -2887,14 +3489,14 @@ mod tests {
         // corrects the file back to its own cursors.
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        b.create_entry(&draft("y1")).unwrap();
+        b.create_entry(None, &draft("y1")).unwrap();
         let info1 = b.sync_emit(sync.path()).unwrap().unwrap();
         a.sync_apply(sync.path()).unwrap();
         let dir_t = TempDir::new().unwrap();
         let t_dir = dir_t.path().join("v");
         copy_dir(a.dir(), &t_dir);
         let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
-        b.create_entry(&draft("y2")).unwrap();
+        b.create_entry(None, &draft("y2")).unwrap();
         let info2 = b.sync_emit(sync.path()).unwrap().unwrap();
         twin.sync_apply(sync.path()).unwrap();
         // The harm lands through the real chain: B
@@ -2904,8 +3506,12 @@ mod tests {
         assert!(pruned.bundles_removed >= 1);
         assert!(!sync.path().join(&info2.file_name).exists());
         let ack: SyncAck = serde_json::from_slice(
-            &fs::read(sync.path().join("acks").join(format!("{}.json", a.device_id)))
-                .unwrap(),
+            &fs::read(
+                sync.path()
+                    .join("acks")
+                    .join(format!("{}.json", a.device_id)),
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(ack.applied.get(&b.device_id), Some(&(info1.to_lseq + 1)));
@@ -2927,8 +3533,12 @@ mod tests {
         assert!(ahead.contains("ahead of this vault"), "{ahead}");
         assert!(a.sync_overview().unwrap().ack_ahead_seen);
         let ack: SyncAck = serde_json::from_slice(
-            &fs::read(sync.path().join("acks").join(format!("{}.json", a.device_id)))
-                .unwrap(),
+            &fs::read(
+                sync.path()
+                    .join("acks")
+                    .join(format!("{}.json", a.device_id)),
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(ack.applied.get(&b.device_id), Some(&info1.to_lseq));
@@ -2938,7 +3548,7 @@ mod tests {
     fn a_reemit_heals_what_a_prune_took() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        b.create_entry(&draft("y1")).unwrap();
+        b.create_entry(None, &draft("y1")).unwrap();
         b.sync_emit(sync.path()).unwrap();
         a.sync_apply(sync.path()).unwrap();
         // A twin of A moves A's ack past y2; B prunes on
@@ -2947,7 +3557,7 @@ mod tests {
         let t_dir = dir_t.path().join("v");
         copy_dir(a.dir(), &t_dir);
         let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
-        b.create_entry(&draft("y2")).unwrap();
+        b.create_entry(None, &draft("y2")).unwrap();
         b.sync_emit(sync.path()).unwrap();
         twin.sync_apply(sync.path()).unwrap();
         b.sync_prune(sync.path()).unwrap();
@@ -2983,25 +3593,28 @@ mod tests {
     fn two_reemits_in_a_row_agree() {
         let (_da, _db, _a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        b.create_entry(&draft("y1")).unwrap();
+        b.create_entry(None, &draft("y1")).unwrap();
         let first = b.sync_reemit(sync.path()).unwrap().unwrap();
         let bytes = fs::read(sync.path().join(&first.file_name)).unwrap();
         // Nothing changed since: the same range name and
         // the identical payload, so the guard passes.
         let second = b.sync_reemit(sync.path()).unwrap().unwrap();
         assert_eq!(first.file_name, second.file_name);
-        assert_eq!(fs::read(sync.path().join(&second.file_name)).unwrap(), bytes);
+        assert_eq!(
+            fs::read(sync.path().join(&second.file_name)).unwrap(),
+            bytes
+        );
     }
 
     #[test]
     fn a_failed_reemit_keeps_the_watermark() {
         let (_da, _db, _a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        b.create_entry(&draft("y1")).unwrap();
-        b.create_entry(&draft("y2")).unwrap();
+        b.create_entry(None, &draft("y1")).unwrap();
+        b.create_entry(None, &draft("y2")).unwrap();
         b.sync_emit(sync.path()).unwrap();
         assert_eq!(b.sync_overview().unwrap().emitted_lseq, 2);
-        b.create_entry(&draft("y3")).unwrap();
+        b.create_entry(None, &draft("y3")).unwrap();
         // A garbage file already sits at the full-range
         // name: the re-emit must fail with SyncUnreadable
         // (not an identity clash — nothing there decrypts
@@ -3027,7 +3640,7 @@ mod tests {
     fn a_twin_reemit_with_a_colliding_name_is_shared_device_id() {
         let (_da, _db, _a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        b.create_entry(&draft("y1")).unwrap();
+        b.create_entry(None, &draft("y1")).unwrap();
         b.sync_emit(sync.path()).unwrap();
         // A bit-identical copy adds its own record and
         // re-emits the full range under the shared name.
@@ -3035,12 +3648,12 @@ mod tests {
         let t_dir = dir_t.path().join("v");
         copy_dir(b.dir(), &t_dir);
         let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
-        twin.create_entry(&draft("twin's")).unwrap();
+        twin.create_entry(None, &draft("twin's")).unwrap();
         twin.sync_reemit(sync.path()).unwrap();
         // The original's diverging record takes the same
         // lseq, so its full-range bundle takes the same
         // name with a different payload: the guard fires.
-        b.create_entry(&draft("original's")).unwrap();
+        b.create_entry(None, &draft("original's")).unwrap();
         let err = b.sync_reemit(sync.path()).unwrap_err();
         assert!(matches!(err, Error::SharedDeviceId), "{err}");
     }
@@ -3049,8 +3662,8 @@ mod tests {
     fn a_torn_own_bundle_is_replaced_silently() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        b.create_entry(&draft("y1")).unwrap();
-        b.create_entry(&draft("y2")).unwrap();
+        b.create_entry(None, &draft("y1")).unwrap();
+        b.create_entry(None, &draft("y2")).unwrap();
         let info = b.sync_emit(sync.path()).unwrap().unwrap();
         // Tear the bundle: the header line survives (it
         // still names this vault and device), the sealed
@@ -3075,7 +3688,7 @@ mod tests {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
         // Direct evidence: a bundle A opens.
-        b.create_entry(&draft("y1")).unwrap();
+        b.create_entry(None, &draft("y1")).unwrap();
         let info1 = b.sync_emit(sync.path()).unwrap().unwrap();
         a.sync_apply(sync.path()).unwrap();
         let peer = a.sync_overview().unwrap().peers.remove(0);
@@ -3089,7 +3702,7 @@ mod tests {
         let t_dir = dir_t.path().join("v");
         copy_dir(a.dir(), &t_dir);
         let mut twin = Vault::open_with_passphrase(&t_dir, PASSPHRASE).unwrap();
-        b.create_entry(&draft("y2")).unwrap();
+        b.create_entry(None, &draft("y2")).unwrap();
         let info2 = b.sync_emit(sync.path()).unwrap().unwrap();
         twin.sync_apply(sync.path()).unwrap();
         b.sync_prune(sync.path()).unwrap();
@@ -3103,10 +3716,13 @@ mod tests {
     fn dismiss_and_restamp_clear_claimed_evidence() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        b.create_entry(&draft("y1")).unwrap();
+        b.create_entry(None, &draft("y1")).unwrap();
         b.sync_emit(sync.path()).unwrap().unwrap();
         a.sync_apply(sync.path()).unwrap();
-        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
+        let ack_path = sync
+            .path()
+            .join("acks")
+            .join(format!("{}.json", a.device_id));
         let plant = |ack_path: &std::path::Path, b_id: &str| {
             let mut file_ack: SyncAck =
                 serde_json::from_slice(&fs::read(ack_path).unwrap()).unwrap();
@@ -3136,9 +3752,11 @@ mod tests {
         let (_da, _db, mut a, _b) = two_devices();
         let sync = TempDir::new().unwrap();
         a.sync_apply(sync.path()).unwrap();
-        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
-        let mut file_ack: SyncAck =
-            serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
+        let ack_path = sync
+            .path()
+            .join("acks")
+            .join(format!("{}.json", a.device_id));
+        let mut file_ack: SyncAck = serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
         file_ack.applied.insert("not-a-uuid".to_string(), 50);
         for _ in 0..100 {
             file_ack
@@ -3161,12 +3779,14 @@ mod tests {
     fn a_known_peer_persists_among_strangers() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        b.create_entry(&draft("y1")).unwrap();
+        b.create_entry(None, &draft("y1")).unwrap();
         b.sync_emit(sync.path()).unwrap().unwrap();
         a.sync_apply(sync.path()).unwrap();
-        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
-        let mut file_ack: SyncAck =
-            serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
+        let ack_path = sync
+            .path()
+            .join("acks")
+            .join(format!("{}.json", a.device_id));
+        let mut file_ack: SyncAck = serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
         file_ack.applied.insert(b.device_id.clone(), 999);
         for _ in 0..100 {
             file_ack
@@ -3175,10 +3795,12 @@ mod tests {
         }
         fs::write(&ack_path, serde_json::to_vec(&file_ack).unwrap()).unwrap();
         let report = a.sync_apply(sync.path()).unwrap();
-        assert!(report
-            .ack_ahead
-            .as_deref()
-            .is_some_and(|t| t.contains(&b.device_id[..8])));
+        assert!(
+            report
+                .ack_ahead
+                .as_deref()
+                .is_some_and(|t| t.contains(&b.device_id[..8]))
+        );
         let over = a.sync_overview().unwrap();
         assert_eq!(over.peers.len(), 1);
         assert_eq!(over.peers[0].device_id, b.device_id);
@@ -3189,9 +3811,9 @@ mod tests {
     fn a_claim_about_this_device_itself_is_not_persisted() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();
-        a.create_entry(&draft("x")).unwrap();
+        a.create_entry(None, &draft("x")).unwrap();
         a.sync_emit(sync.path()).unwrap().unwrap();
-        b.create_entry(&draft("y1")).unwrap();
+        b.create_entry(None, &draft("y1")).unwrap();
         b.sync_emit(sync.path()).unwrap().unwrap();
         a.sync_apply(sync.path()).unwrap();
         // A copy's ack claims this device consumed its
@@ -3199,19 +3821,22 @@ mod tests {
         // the folder and its cursor for B exists — only
         // the explicit self rule keeps the claim out of
         // both detection and persistence.
-        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
-        let mut file_ack: SyncAck =
-            serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
+        let ack_path = sync
+            .path()
+            .join("acks")
+            .join(format!("{}.json", a.device_id));
+        let mut file_ack: SyncAck = serde_json::from_slice(&fs::read(&ack_path).unwrap()).unwrap();
         file_ack.applied.insert(a.device_id.clone(), 50);
         fs::write(&ack_path, serde_json::to_vec(&file_ack).unwrap()).unwrap();
         let report = a.sync_apply(sync.path()).unwrap();
         assert!(report.ack_ahead.is_none());
-        assert!(a
-            .sync_overview()
-            .unwrap()
-            .peers
-            .iter()
-            .all(|p| p.device_id != a.device_id));
+        assert!(
+            a.sync_overview()
+                .unwrap()
+                .peers
+                .iter()
+                .all(|p| p.device_id != a.device_id)
+        );
     }
 
     #[test]
@@ -3219,7 +3844,10 @@ mod tests {
         let (_da, _db, mut a, _b) = two_devices();
         let sync = TempDir::new().unwrap();
         a.sync_apply(sync.path()).unwrap();
-        let ack_path = sync.path().join("acks").join(format!("{}.json", a.device_id));
+        let ack_path = sync
+            .path()
+            .join("acks")
+            .join(format!("{}.json", a.device_id));
         // A real ack's shape, padded past the size bound
         // with a junk field serde would otherwise ignore:
         // the bound is on bytes, before any parsing.
@@ -3237,10 +3865,7 @@ mod tests {
         // at all, and this is the same class, only
         // louder because of its size.
         assert!(report.ack_ahead.is_none());
-        assert!(report
-            .warnings
-            .iter()
-            .any(|w| w.contains("too large")));
+        assert!(report.warnings.iter().any(|w| w.contains("too large")));
         // The file is corrected: this device's own ack,
         // parseable and back under the bound.
         let now = fs::read(&ack_path).unwrap();
@@ -3260,7 +3885,7 @@ mod tests {
         let id_a = crate::new_device_id();
         let (mut a, _recovery) =
             Vault::create_with_device(dir_a.path(), PASSPHRASE, fast(), &id_a).unwrap();
-        a.create_entry(&draft("from a")).unwrap();
+        a.create_entry(None, &draft("from a")).unwrap();
         a.sync_emit(sync.path()).unwrap().unwrap();
         a.checkpoint().unwrap();
         copy_dir(dir_a.path(), &dir_c.path().join("v"));
@@ -3275,7 +3900,7 @@ mod tests {
         // The copy's own changes are authored by the
         // assigned id, and the original takes them as a
         // peer's.
-        copy.create_entry(&draft("from the copy")).unwrap();
+        copy.create_entry(None, &draft("from the copy")).unwrap();
         let info = copy.sync_emit(sync.path()).unwrap().unwrap();
         assert!(info.file_name.contains(&id_c), "{}", info.file_name);
         let report = a.sync_apply(sync.path()).unwrap();
@@ -3287,23 +3912,23 @@ mod tests {
         );
     }
 
-
     #[test]
     fn a_copied_vault_starts_its_stream_at_one() {
         let dir_a = TempDir::new().unwrap();
         let dir_c = TempDir::new().unwrap();
         let sync = TempDir::new().unwrap();
         let id_a = crate::new_device_id();
-        let (mut a, _) = Vault::create_with_device(dir_a.path(), PASSPHRASE, fast(), &id_a).unwrap();
-        a.create_entry(&draft("e1")).unwrap();
-        a.create_entry(&draft("e2")).unwrap();
+        let (mut a, _) =
+            Vault::create_with_device(dir_a.path(), PASSPHRASE, fast(), &id_a).unwrap();
+        a.create_entry(None, &draft("e1")).unwrap();
+        a.create_entry(None, &draft("e2")).unwrap();
         a.sync_emit(sync.path()).unwrap().unwrap();
         a.checkpoint().unwrap();
         copy_dir(dir_a.path(), &dir_c.path().join("v"));
         let id_c = crate::new_device_id();
         let mut copy =
             Vault::open_with_passphrase_as(&dir_c.path().join("v"), PASSPHRASE, &id_c).unwrap();
-        copy.create_entry(&draft("e3")).unwrap();
+        copy.create_entry(None, &draft("e3")).unwrap();
         let info = copy.sync_emit(sync.path()).unwrap().unwrap();
         assert_eq!(info.from_lseq, 1, "copy stream must start at 1");
         a.sync_apply(sync.path()).unwrap();
@@ -3320,12 +3945,7 @@ mod tests {
         // C is a consumer only: it publishes an ack
         // (by applying an empty folder) and never
         // emits, so no bundle names it as an author.
-        let (c, _recovery) = Vault::create(
-            dir_c.path(),
-            PASSPHRASE,
-            fast(),
-        )
-        .unwrap();
+        let (c, _recovery) = Vault::create(dir_c.path(), PASSPHRASE, fast()).unwrap();
         // C's vault is a different vault: it cannot
         // apply A's bundles. Use a copy of A instead —
         // a third device on A's vault, opened stored.
@@ -3336,8 +3956,8 @@ mod tests {
         c.restamp_device().unwrap();
         c.sync_apply(sync.path()).unwrap();
         // Now A emits and B consumes everything.
-        a.create_entry(&draft("x1")).unwrap();
-        a.create_entry(&draft("x2")).unwrap();
+        a.create_entry(None, &draft("x1")).unwrap();
+        a.create_entry(None, &draft("x2")).unwrap();
         let info = a.sync_emit(sync.path()).unwrap().unwrap();
         b.sync_apply(sync.path()).unwrap();
         // C's ack is torn after the fact. C has consumed
@@ -3353,5 +3973,571 @@ mod tests {
         let report = a.sync_prune(sync.path()).unwrap();
         assert_eq!(report.bundles_removed, 0);
         assert!(sync.path().join(&info.file_name).exists());
+    }
+
+    /// Marks the vault as owing its one-time v2 bootstrap, the way
+    /// migration 5 leaves an upgraded database. Fresh creates clear
+    /// the flag (no history to replay).
+    fn set_pending(vault: &Vault) {
+        vault
+            .database()
+            .connection()
+            .execute(
+                "INSERT INTO meta (key, value) VALUES ('bootstrap_pending', '1')
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [],
+            )
+            .unwrap();
+    }
+
+    /// Simulates the upgrade path: the migration raises the pending
+    /// flag, and the next emission must re-emit v1-covered history
+    /// as v2 — so the watermark rewinds to the start of the stream.
+    fn simulate_upgrade(vault: &Vault) {
+        set_pending(vault);
+        vault
+            .database()
+            .connection()
+            .execute(
+                "INSERT INTO meta (key, value) VALUES ('sync_emitted_lseq', '0')
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [],
+            )
+            .unwrap();
+    }
+
+    fn pending(vault: &Vault) -> bool {
+        vault
+            .database()
+            .connection()
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'bootstrap_pending'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .unwrap()
+            .is_some()
+    }
+
+    fn only_bundle(dir: &Path) -> PathBuf {
+        let mut files: Vec<PathBuf> = fs::read_dir(dir)
+            .unwrap()
+            .map(|item| item.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "sync"))
+            .collect();
+        assert_eq!(files.len(), 1, "expected exactly one bundle: {files:?}");
+        files.pop().unwrap()
+    }
+
+    /// The sealed bundle's header and body as JSON, for tests that
+    /// simulate other writers: v1 history (no `folders` key, no
+    /// per-entry `folder_id`) or unknown future formats.
+    fn bundle_parts(vault: &Vault, path: &Path) -> (BundleHeader, serde_json::Value) {
+        let bytes = fs::read(path).unwrap();
+        let key = vault.sync_key();
+        let cipher = XChaCha20Poly1305::new_from_slice(&key[..]).expect("sync key is 32 bytes");
+        let (header, bundle) = open_bundle(&cipher, &bytes).unwrap();
+        (header, serde_json::to_value(&bundle).unwrap())
+    }
+
+    fn write_bundle(
+        vault: &Vault,
+        dir: &Path,
+        name: &str,
+        header: &BundleHeader,
+        body: &serde_json::Value,
+    ) {
+        let key = vault.sync_key();
+        let cipher = XChaCha20Poly1305::new_from_slice(&key[..]).expect("sync key is 32 bytes");
+        let payload = serde_json::to_vec(body).unwrap();
+        fs::write(
+            dir.join(name),
+            seal_bundle(&cipher, header, &payload).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// Strips a v2 body down to its v1 shape: no folder records and
+    /// no membership on entries.
+    fn v1_shape(body: &mut serde_json::Value) {
+        body.as_object_mut().unwrap().remove("folders");
+        for entry in body["entries"].as_array_mut().unwrap() {
+            entry.as_object_mut().unwrap().remove("folder_id");
+        }
+    }
+
+    #[test]
+    fn bootstrap_converges_two_upgraded_devices() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        set_pending(&a);
+        let folder = a.create_folder(None, "Health").unwrap();
+        let entry = a
+            .create_entry(Some(&folder.id), &draft("morning run"))
+            .unwrap();
+        let info = a.sync_emit(sync.path()).unwrap().unwrap();
+        assert_eq!(info.folders, 1);
+        assert_eq!(info.entries, 1);
+        assert!(!pending(&a), "the bootstrap clears its flag once covered");
+        let report = b.sync_apply(sync.path()).unwrap();
+        assert!(report.problems.is_empty());
+        assert_eq!(report.folders_applied, 1);
+        assert_eq!(report.entries_applied, 1);
+        assert_eq!(b.get_folder(&folder.id).unwrap().name, "Health");
+        assert_eq!(
+            b.get_entry(&entry.id).unwrap().folder_id.as_deref(),
+            Some(folder.id.as_str())
+        );
+        // Settling the re-broadcast is silent: same revisions,
+        // same membership, no writes.
+        exchange(&mut a, &mut b, sync.path());
+        let quiet = b.sync_apply(sync.path()).unwrap();
+        assert_eq!(quiet.folders_applied, 0);
+        assert_eq!(quiet.entries_applied, 0);
+    }
+
+    #[test]
+    fn caught_up_peer_upgrades_without_duplication() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let entry = a.create_entry(None, &draft("shared")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        // Both sides upgrade with the same history covered.
+        simulate_upgrade(&a);
+        simulate_upgrade(&b);
+        let info = a.sync_emit(sync.path()).unwrap().unwrap();
+        assert_eq!(info.folders, 0);
+        assert_eq!(info.entries, 1);
+        assert!(!pending(&a));
+        let report = b.sync_apply(sync.path()).unwrap();
+        assert_eq!(report.entries_applied, 0, "same rev, same root: no-op");
+        assert_eq!(report.folders_applied, 0);
+        assert_eq!(b.get_entry(&entry.id).unwrap().rev, 1);
+        // The peer's own bootstrap echo is equally silent.
+        b.sync_emit(sync.path()).unwrap().unwrap();
+        assert!(!pending(&b));
+        let back = a.sync_apply(sync.path()).unwrap();
+        assert_eq!(back.entries_applied, 0);
+        assert_eq!(back.folders_applied, 0);
+    }
+
+    #[test]
+    fn delayed_v1_replay_never_resets_membership() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        set_pending(&a);
+        let folder = a.create_folder(None, "Health").unwrap();
+        let entry = a
+            .create_entry(Some(&folder.id), &draft("morning run"))
+            .unwrap();
+        a.sync_emit(sync.path()).unwrap().unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        // A v1 replay of the same revision changes nothing.
+        let replay = TempDir::new().unwrap();
+        let (mut header, mut body) = bundle_parts(&a, &only_bundle(sync.path()));
+        header.format = BUNDLE_FORMAT_V1;
+        v1_shape(&mut body);
+        let name = only_bundle(sync.path())
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        write_bundle(&a, replay.path(), &name, &header, &body);
+        let report = b.sync_apply(replay.path()).unwrap();
+        assert!(report.problems.is_empty());
+        assert_eq!(report.entries_applied, 0);
+        assert_eq!(
+            b.get_entry(&entry.id).unwrap().folder_id.as_deref(),
+            Some(folder.id.as_str())
+        );
+        // A delayed v1 edit applies its content but keeps the
+        // established v2 membership. It needs a fresh range past
+        // B's cursor: a bundle fully below the cursor is already
+        // incorporated and skipped whole, whatever it carries.
+        let late = TempDir::new().unwrap();
+        let cursor: i64 =
+            b.db.meta(&format!("{APPLIED_PREFIX}{}", a.device_id))
+                .unwrap()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+        header.from_lseq = cursor + 1;
+        header.to_lseq = cursor + 1;
+        body["entries"][0]["rev"] = serde_json::json!(2);
+        body["entries"][0]["body_md"] = serde_json::json!("late v1 edit");
+        write_bundle(&a, late.path(), &name, &header, &body);
+        let report = b.sync_apply(late.path()).unwrap();
+        assert!(report.problems.is_empty());
+        assert_eq!(report.entries_applied, 1);
+        let got = b.get_entry(&entry.id).unwrap();
+        assert_eq!(got.body_md.as_str(), "late v1 edit");
+        assert_eq!(got.rev, 2);
+        assert_eq!(got.folder_id.as_deref(), Some(folder.id.as_str()));
+    }
+
+    #[test]
+    fn future_bundle_reports_upgrade_not_vault_mismatch() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let entry = a.create_entry(None, &draft("from A")).unwrap();
+        a.sync_emit(sync.path()).unwrap().unwrap();
+        let future = TempDir::new().unwrap();
+        let (mut header, body) = bundle_parts(&a, &only_bundle(sync.path()));
+        header.format = BUNDLE_FORMAT + 1;
+        let name = only_bundle(sync.path())
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        write_bundle(&a, future.path(), &name, &header, &body);
+        let report = b.sync_apply(future.path()).unwrap();
+        assert_eq!(report.entries_applied, 0);
+        assert_eq!(report.folders_applied, 0);
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|p| p.contains("requires a newer app version")),
+            "unexpected problems: {:?}",
+            report.problems
+        );
+        assert!(
+            b.get_entry(&entry.id).is_err(),
+            "the refused bundle must apply nothing"
+        );
+    }
+
+    #[test]
+    fn bootstrap_retry_after_crash_is_idempotent() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        set_pending(&a);
+        let folder = a.create_folder(None, "Health").unwrap();
+        a.create_entry(Some(&folder.id), &draft("morning run"))
+            .unwrap();
+        let first = a.sync_emit(sync.path()).unwrap().unwrap();
+        // The crash: the bundle is durable in the folder, but the
+        // watermark commit and the pending-flag clear are lost.
+        a.db.connection()
+            .execute(
+                "UPDATE meta SET value = '0' WHERE key = 'sync_emitted_lseq'",
+                [],
+            )
+            .unwrap();
+        set_pending(&a);
+        let second = a.sync_emit(sync.path()).unwrap().unwrap();
+        assert_eq!(first.file_name, second.file_name);
+        assert!(!pending(&a));
+        let mut files: Vec<PathBuf> = fs::read_dir(sync.path())
+            .unwrap()
+            .map(|item| item.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "sync"))
+            .collect();
+        assert_eq!(files.len(), 1);
+        files.pop();
+        b.sync_apply(sync.path()).unwrap();
+        let again = b.sync_apply(sync.path()).unwrap();
+        assert_eq!(again.folders_applied, 0);
+        assert_eq!(again.entries_applied, 0);
+        assert_eq!(b.list_folders().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn crossed_folder_move_and_entry_edit_converge() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let folder = a.create_folder(None, "Dev").unwrap();
+        let entry = a.create_entry(Some(&folder.id), &draft("base")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        let target = a.create_folder(None, "Archive").unwrap();
+        a.sync_emit(sync.path()).unwrap();
+        b.sync_apply(sync.path()).unwrap();
+        let target_b = b.get_folder(&target.id).unwrap();
+        assert_eq!(target_b.name, "Archive");
+        a.move_folder(&folder.id, 1, Some(&target.id)).unwrap();
+        b.update_entry(&entry.id, b.get_entry(&entry.id).unwrap().rev, &draft("edited on B")).unwrap();
+        a.sync_emit(sync.path()).unwrap();
+        b.sync_emit(sync.path()).unwrap();
+        let ra = a.sync_apply(sync.path()).unwrap();
+        let rb = b.sync_apply(sync.path()).unwrap();
+        assert!(ra.problems.is_empty());
+        assert!(rb.problems.is_empty());
+        assert_eq!(ra.folders_conflicted, 0);
+        assert_eq!(rb.folders_conflicted, 0);
+        for vault in [&a, &b] {
+            assert_eq!(
+                vault.get_folder(&folder.id).unwrap().parent_id.as_deref(),
+                Some(target.id.as_str())
+            );
+            let got = vault.get_entry(&entry.id).unwrap();
+            assert_eq!(got.body_md.as_str(), "edited on B");
+            assert_eq!(got.folder_id.as_deref(), Some(folder.id.as_str()));
+        }
+        // Settling the re-broadcast moves nothing further.
+        exchange(&mut a, &mut b, sync.path());
+        let quiet = a.sync_apply(sync.path()).unwrap();
+        assert_eq!(quiet.entries_applied, 0);
+        assert_eq!(quiet.folders_applied, 0);
+    }
+
+    #[test]
+    fn prune_keeps_tombstone_rows_across_bootstrap() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        set_pending(&a);
+        let folder = a.create_folder(None, "Scratch").unwrap();
+        a.delete_folder(&folder.id, 1).unwrap();
+        let info = a.sync_emit(sync.path()).unwrap().unwrap();
+        // One row, two writes: the tombstone supersedes the create
+        // in the same bootstrap bundle.
+        assert_eq!(info.folders, 1);
+        b.sync_apply(sync.path()).unwrap();
+        assert!(b.get_folder(&folder.id).is_err());
+        // Settle both streams so every ack covers every bundle.
+        exchange(&mut a, &mut b, sync.path());
+        let pruned = a.sync_prune(sync.path()).unwrap();
+        assert_eq!(pruned.bundles_removed, 1);
+        assert!(!sync.path().join(&info.file_name).exists());
+        // The row must survive pruning: restore still works and
+        // converges.
+        a.restore_folder(&folder.id, 2).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        assert_eq!(a.get_folder(&folder.id).unwrap().rev, 3);
+        assert_eq!(b.get_folder(&folder.id).unwrap().rev, 3);
+    }
+
+    #[test]
+    fn crossed_folder_moves_converge_and_reads_terminate() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let x = a.create_folder(None, "X").unwrap();
+        let y = a.create_folder(None, "Y").unwrap();
+        let entry = a.create_entry(Some(&x.id), &draft("in X")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        // Offline in opposite directions: X under Y on A, Y under
+        // X on B. Both records fast-forward on the peer, so both
+        // devices hold the same cyclic raw rows.
+        a.move_folder(&x.id, 1, Some(&y.id)).unwrap();
+        b.move_folder(&y.id, 1, Some(&x.id)).unwrap();
+        a.sync_emit(sync.path()).unwrap();
+        b.sync_emit(sync.path()).unwrap();
+        let ra = a.sync_apply(sync.path()).unwrap();
+        let rb = b.sync_apply(sync.path()).unwrap();
+        assert!(ra.problems.is_empty());
+        assert!(rb.problems.is_empty());
+        for vault in [&a, &b] {
+            assert_eq!(
+                vault.get_folder(&x.id).unwrap().parent_id.as_deref(),
+                Some(y.id.as_str())
+            );
+            assert_eq!(
+                vault.get_folder(&y.id).unwrap().parent_id.as_deref(),
+                Some(x.id.as_str())
+            );
+            // Reads must terminate on cyclic data: the scope CTE
+            // is depth-bounded, and entries stay reachable by id
+            // and through the whole-vault scope.
+            let page = vault
+                .list_entries(&crate::entries::ListQuery {
+                    limit: 10,
+                    scope: crate::entries::EntryScope::Folder {
+                        id: x.id.clone(),
+                        include_descendants: true,
+                    },
+                    ..Default::default()
+                })
+                .unwrap();
+            assert!(page.items.iter().any(|item| item.id == entry.id));
+            assert_eq!(
+                vault.get_entry(&entry.id).unwrap().folder_id.as_deref(),
+                Some(x.id.as_str())
+            );
+        }
+        // The raw cycle is identical on both sides: detaching the
+        // lexicographically smallest id in the effective view (a
+        // Step-7 display rule) resolves it the same everywhere.
+        // NOTE: no effective-tree helper exists in core yet; the
+        // workspace tree must handle cyclic raw data without
+        // hanging (ancestors() already errors instead of looping).
+    }
+
+    #[test]
+    fn duplicate_offline_folder_names_coexist() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let mine = a.create_folder(None, "Health").unwrap();
+        let theirs = b.create_folder(None, "Health").unwrap();
+        assert_ne!(mine.id, theirs.id);
+        exchange(&mut a, &mut b, sync.path());
+        for vault in [&a, &b] {
+            let names: Vec<_> = vault
+                .list_folders()
+                .unwrap()
+                .iter()
+                .filter(|f| f.name == "Health")
+                .map(|f| f.id.clone())
+                .collect();
+            assert_eq!(names.len(), 2, "both Health folders stay live");
+            assert!(names.contains(&mine.id) && names.contains(&theirs.id));
+        }
+        // Entries route to the exact folder, not the name.
+        let entry = a.create_entry(Some(&mine.id), &draft("run")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        assert_eq!(
+            b.get_entry(&entry.id).unwrap().folder_id.as_deref(),
+            Some(mine.id.as_str())
+        );
+    }
+
+    #[test]
+    fn parent_arriving_late_resolves() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        let parent = a.create_folder(None, "Parent").unwrap();
+        a.sync_emit(first.path()).unwrap().unwrap();
+        let child = a.create_folder(Some(&parent.id), "Child").unwrap();
+        a.create_entry(Some(&child.id), &draft("nested")).unwrap();
+        a.sync_emit(second.path()).unwrap().unwrap();
+        // The child arrives before its parent: raw references are
+        // stored, and the folder and its entry stay readable.
+        let report = b.sync_apply(second.path()).unwrap();
+        assert!(report.problems.is_empty());
+        assert_eq!(report.folders_applied, 1);
+        assert_eq!(
+            b.get_folder(&child.id).unwrap().parent_id.as_deref(),
+            Some(parent.id.as_str())
+        );
+        assert_eq!(b.list_folders().unwrap().len(), 1);
+        // The parent lands next; re-applying the child bundle is a
+        // no-op, and the hierarchy is complete.
+        b.sync_apply(first.path()).unwrap();
+        let quiet = b.sync_apply(second.path()).unwrap();
+        assert_eq!(quiet.folders_applied, 0);
+        assert_eq!(quiet.entries_applied, 0);
+        assert_eq!(b.list_folders().unwrap().len(), 2);
+        assert_eq!(
+            b.get_folder(&child.id).unwrap().parent_id.as_deref(),
+            Some(parent.id.as_str())
+        );
+    }
+
+    #[test]
+    fn folder_delete_vs_concurrent_entry_create_then_restore() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let folder = a.create_folder(None, "Shared").unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        // A deletes the empty folder while B files a new entry in
+        // it. Deletion wins deterministically on both sides (the
+        // entry-tombstone precedence), and the entry stays readable
+        // under its original folder id.
+        a.delete_folder(&folder.id, 1).unwrap();
+        let entry = b
+            .create_entry(Some(&folder.id), &draft("late arrival"))
+            .unwrap();
+        a.sync_emit(sync.path()).unwrap();
+        b.sync_emit(sync.path()).unwrap();
+        let ra = a.sync_apply(sync.path()).unwrap();
+        let rb = b.sync_apply(sync.path()).unwrap();
+        assert!(ra.problems.is_empty());
+        assert!(rb.problems.is_empty());
+        for vault in [&a, &b] {
+            assert!(vault.get_folder(&folder.id).is_err());
+            let got = vault.get_entry(&entry.id).unwrap();
+            assert_eq!(got.folder_id.as_deref(), Some(folder.id.as_str()));
+            let page = vault
+                .list_entries(&crate::entries::ListQuery {
+                    limit: 10,
+                    ..Default::default()
+                })
+                .unwrap();
+            assert!(page.items.iter().any(|item| item.id == entry.id));
+        }
+        // Recovery is explicit restoration, not entry reassignment:
+        // the original folder id revives with the entry still filed.
+        a.restore_folder(&folder.id, 2).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        for vault in [&a, &b] {
+            assert_eq!(vault.get_folder(&folder.id).unwrap().rev, 3);
+            assert_eq!(
+                vault.get_entry(&entry.id).unwrap().folder_id.as_deref(),
+                Some(folder.id.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn conflict_copies_keep_source_folder() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let folder = a.create_folder(None, "Dev").unwrap();
+        let entry = a.create_entry(Some(&folder.id), &draft("base")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        a.update_entry(&entry.id, a.get_entry(&entry.id).unwrap().rev, &draft("A text")).unwrap();
+        b.update_entry(&entry.id, b.get_entry(&entry.id).unwrap().rev, &draft("B text")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        for vault in [&a, &b] {
+            let page = vault
+                .list_entries(&crate::entries::ListQuery {
+                    limit: 10,
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(page.items.len(), 2, "winner plus one conflict copy");
+            let copy = page
+                .items
+                .iter()
+                .find(|item| item.id != entry.id)
+                .expect("a conflict copy exists");
+            assert_eq!(copy.folder_id.as_deref(), Some(folder.id.as_str()));
+            assert_eq!(
+                vault.get_entry(&copy.id).unwrap().folder_id.as_deref(),
+                Some(folder.id.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn mismatched_v2_membership_is_reported_and_kept_local() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let f = a.create_folder(None, "F").unwrap();
+        let g = a.create_folder(None, "G").unwrap();
+        let entry = a.create_entry(Some(&f.id), &draft("base")).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        // B edits (a legitimate new revision), then a faulty peer
+        // rewrites the row's folder behind the API's back. The
+        // record fast-forwards on A: content converges, placement
+        // stays local and warns.
+        b.update_entry(&entry.id, b.get_entry(&entry.id).unwrap().rev, &draft("B text")).unwrap();
+        b.db.connection()
+            .execute(
+                "UPDATE entry SET folder_id = ?1,
+                   lseq = (SELECT COALESCE(MAX(lseq), 0) + 1 FROM (
+                     SELECT lseq FROM folder UNION ALL
+                     SELECT lseq FROM entry UNION ALL
+                     SELECT lseq FROM attachment))
+                 WHERE id = ?2",
+                rusqlite::params![g.id, entry.id],
+            )
+            .unwrap();
+        b.sync_emit(sync.path()).unwrap();
+        let report = a.sync_apply(sync.path()).unwrap();
+        assert!(report.problems.is_empty());
+        assert_eq!(report.entries_applied, 1);
+        assert_eq!(report.warnings.len(), 1);
+        let got = a.get_entry(&entry.id).unwrap();
+        assert_eq!(got.body_md.as_str(), "B text");
+        assert_eq!(got.folder_id.as_deref(), Some(f.id.as_str()));
+        // No flap: the next exchange settles silently with both
+        // sides keeping their own folder and saying so once each.
+        b.sync_emit(sync.path()).unwrap();
+        let rb = b.sync_apply(sync.path()).unwrap();
+        assert_eq!(rb.entries_applied, 0);
+        exchange(&mut a, &mut b, sync.path());
+        let quiet = a.sync_apply(sync.path()).unwrap();
+        assert_eq!(quiet.entries_applied, 0);
+        assert_eq!(quiet.folders_applied, 0);
     }
 }

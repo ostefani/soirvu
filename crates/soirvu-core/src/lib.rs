@@ -6,6 +6,7 @@ pub mod entries;
 pub mod error;
 pub mod export;
 pub mod folder;
+pub mod folders;
 pub mod import;
 pub mod storage;
 pub mod sync;
