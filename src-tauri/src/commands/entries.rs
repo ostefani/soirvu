@@ -403,7 +403,9 @@ pub struct BacklinkDto {
     /// oversized bodies (see `body_size`): never truncated.
     pub body: Option<String>,
     pub body_size: i64,
-    pub rev: i64,
+    /// Hex SHA-256 over the body bytes: the verify cache keys on
+    /// content, never on the revision.
+    pub body_hash: String,
 }
 
 impl From<&soirvu_core::entries::BacklinkCandidate> for BacklinkDto {
@@ -415,7 +417,7 @@ impl From<&soirvu_core::entries::BacklinkCandidate> for BacklinkDto {
             folder_id: hit.folder_id.clone(),
             body: hit.body.clone(),
             body_size: hit.body_size,
-            rev: hit.rev,
+            body_hash: hit.body_hash.clone(),
         }
     }
 }

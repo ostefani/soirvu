@@ -119,9 +119,10 @@ import { scopeToWire } from "./lib/scope.js";
  * @property {string | null} folder_id
  * @property {string | null} body Full body when it fits the inline
  *   budget, null for oversized bodies — never truncated.
- * @property {number} body_size Body length in characters; the fetch
+ * @property {number} body_size Body length in bytes; the fetch
  *   budget and large-entry indicator read this, not the body.
- * @property {number} rev Source revision, for the verify cache.
+ * @property {string} body_hash Hex SHA-256 over the body bytes;
+ *   the verify cache keys on content, never on the revision.
  */
 
 /**

@@ -4,7 +4,7 @@
     import { onDestroy, untrack } from 'svelte';
     import * as api from '@/api.js';
     import { breadcrumb } from '@/lib/folders.js';
-    import { outgoingEntryRefs, verifyBacklinkCandidates } from '@/lib/links.js';
+    import { isMissingEntryError, outgoingEntryRefs, shouldYield, verifyBacklinkCandidates } from '@/lib/links.js';
 
     let {
         entryId,
@@ -116,11 +116,13 @@
         refreshed++;
     }
 
-    /* ---- Backlinks: candidate pages verify one by one until a
-       page of verified rows fills or the candidates run out.
-       Unverified sources never render. Oversized sources travel
-       as metadata and load whole one at a time, so peak memory
-       is one large document instead of a page of them. ---- */
+    /* ---- Backlinks: candidates verify one by one, in page
+       order, until a page of verified rows fills or the
+       candidates run out. Unverified sources never render, and
+       oversized rows never reorder past newer ones. Oversized
+       sources travel as metadata and load whole one at a time,
+       so peak memory is one large document instead of a page of
+       them; only a confirmed-missing source skips silently. ---- */
 
     let backlinks = $state([]);
     let backCursor = $state(null);
@@ -131,6 +133,17 @@
     let scanError = $state('');
     // Large bodies currently fetching whole (0 or 1: sequential).
     let pendingLarge = $state(0);
+    // Last slice yield: the loop gives the event loop a turn
+    // whenever a slice budget elapses between documents.
+    let lastYield = 0;
+
+    async function yieldSlice() {
+        const now = performance.now();
+        if (shouldYield(now, lastYield, 8)) {
+            lastYield = now;
+            await new Promise((r) => setTimeout(r, 0));
+        }
+    }
 
     async function scanBacklinks(reset) {
         const target = entryId;
@@ -146,6 +159,7 @@
         }
         scanning = true;
         scanError = '';
+        lastYield = performance.now();
         try {
             let collected = reset ? [] : [...backlinks];
             let cursor = reset ? null : backCursor;
@@ -155,41 +169,54 @@
             while (collected.length < want && !exhausted) {
                 const page = await api.backlinkCandidates(target, { cursor, limit: PAGE });
                 if (mine !== scanRun) return;
-                count += page.candidates.length;
-                const { verified, pending } = verifyBacklinkCandidates(target, page.candidates);
-                for (const v of verified) {
-                    if (!collected.some((c) => c.id === v.id)) collected.push(v);
-                }
-                // Oversized sources arrived as metadata: fetch each
-                // whole body alone, verify it through the same path
-                // (which also caches the row), and drop sources that
-                // vanished mid-scan.
-                for (const p of pending) {
+                // Candidate order is the display order: verifying
+                // and publishing one by one keeps newer large
+                // sources ahead of older small ones, and yields
+                // between documents so stop stays responsive.
+                for (const c of page.candidates) {
                     if (mine !== scanRun) return;
-                    if (collected.some((c) => c.id === p.id)) continue;
-                    pendingLarge++;
-                    try {
-                        const full = await api.entryGet(p.id);
-                        if (mine !== scanRun) return;
-                        const retry = verifyBacklinkCandidates(target, [
-                            { ...p, body: full.body_md ?? '', rev: full.rev },
-                        ]);
-                        for (const v of retry.verified) {
-                            if (!collected.some((c) => c.id === v.id)) collected.push(v);
-                        }
-                        backlinks = collected;
-                    } catch {
-                        // The source vanished mid-scan; the count stands.
-                    } finally {
-                        // A reset or stop owns the counter from here;
-                        // only the live scan decrements it.
-                        if (mine === scanRun) pendingLarge--;
+                    count++;
+                    const { verified, pending } = verifyBacklinkCandidates(target, [c]);
+                    for (const v of verified) {
+                        if (!collected.some((existing) => existing.id === v.id)) collected.push(v);
                     }
+                    // Oversized sources arrived as metadata: fetch each
+                    // whole body alone, verify it through the same
+                    // path (which also caches the row), and skip only
+                    // sources that vanished mid-scan.
+                    for (const p of pending) {
+                        if (mine !== scanRun) return;
+                        if (collected.some((existing) => existing.id === p.id)) continue;
+                        pendingLarge++;
+                        try {
+                            const full = await api.entryGet(p.id);
+                            if (mine !== scanRun) return;
+                            const retry = verifyBacklinkCandidates(target, [
+                                { ...p, body: full.body_md ?? '' },
+                            ]);
+                            for (const v of retry.verified) {
+                                if (!collected.some((existing) => existing.id === v.id))
+                                    collected.push(v);
+                            }
+                            backlinks = collected;
+                        } catch (e) {
+                            // Any other failure aborts the scan so it
+                            // never reports completion over unread
+                            // sources; the cursor keeps the resume
+                            // point and backDone stays false.
+                            if (!isMissingEntryError(e)) throw e;
+                        } finally {
+                            // A reset or stop owns the counter from here;
+                            // only the live scan decrements it.
+                            if (mine === scanRun) pendingLarge--;
+                        }
+                    }
+                    backlinks = collected;
+                    checked = count;
+                    await yieldSlice();
                 }
                 cursor = page.next_cursor;
                 exhausted = !cursor;
-                backlinks = collected;
-                checked = count;
                 backCursor = cursor;
                 backDone = exhausted;
             }

@@ -9,7 +9,9 @@
 //!   (tags belong to the entry, so changing tags counts as changing the entry);
 //! - deleting never removes the row: it leaves a "tombstone" with the text scrubbed.
 
+use data_encoding::HEXLOWER;
 use rusqlite::{Connection, Transaction, params};
+use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
@@ -217,11 +219,13 @@ pub struct BacklinkCandidate {
     /// oversized bodies (see `body_size`): never truncated, so a
     /// link past any cut still verifies after an on-demand fetch.
     pub body: Option<String>,
-    /// `LENGTH(body_md)` in characters: the frontend's fetch
-    /// budget and large-entry indicator read this, not the body.
+    /// Body length in bytes: the frontend's fetch budget and
+    /// large-entry indicator read this, not the body.
     pub body_size: i64,
-    /// The source revision: verification caches key on `(id, rev)`.
-    pub rev: i64,
+    /// Hex SHA-256 over the body bytes: verification caches key on
+    /// content, never on the revision — sync can replace content
+    /// at an identical revision when it picks the winning device.
+    pub body_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,12 +234,12 @@ pub struct BacklinkPage {
     pub next: Option<Cursor>,
 }
 
-/// Largest body inlined in a backlink candidate row, in
-/// characters. Typical diary entries are a few kilobytes; 64 KiB
-/// keeps ordinary pages self-contained (twenty rows worst case)
-/// while anything larger travels as metadata and is fetched whole
-/// on demand — an explicit fetch, never a silent cut.
-const BACKLINK_INLINE_CHARS: i64 = 65_536;
+/// Largest body inlined in a backlink candidate row, in bytes.
+/// Typical diary entries are a few kilobytes; twenty inline rows
+/// peak around 1.3 MiB plus JSON overhead, while anything larger
+/// travels as metadata and is fetched whole on demand — an
+/// explicit fetch, never a silent cut.
+const BACKLINK_INLINE_BYTES: i64 = 65_536;
 
 /// Escapes a normalized key for a LIKE prefix match: a literal
 /// backslash, percent or underscore in a title must not act as a
@@ -895,14 +899,16 @@ impl Vault {
     /// fixtures prove, over the body column only. Titles never match
     /// here, so a title-only mention is not a backlink candidate.
     /// Metadata first: bodies travel inline only up to
-    /// `BACKLINK_INLINE_CHARS`; larger ones arrive as `None` with
-    /// their size and revision, and the frontend fetches them whole
-    /// on demand. Nothing is ever truncated — any cut could sever
-    /// a link from its UUID — so a page of small bodies plus one
-    /// large fetch at a time bounds working memory instead of the
-    /// response. The frontend verifies real link marks (ignoring
-    /// code, images and raw blocks) before showing anything, and
-    /// deduplicates by source elsewhere.
+    /// `BACKLINK_INLINE_BYTES`; larger ones arrive as `None` with
+    /// their byte size and content hash, and the frontend fetches
+    /// them whole on demand. Nothing is ever truncated — any cut
+    /// could sever a link from its UUID. Sequential fetching bounds
+    /// the peak to one row in flight here plus one large fetch at
+    /// a time downstream; that is a peak bound, not an absolute
+    /// memory limit, and oversized rows are always still verifiable.
+    /// The frontend verifies real link marks (ignoring code, images
+    /// and raw blocks) before showing anything, and deduplicates
+    /// by source elsewhere.
     pub fn backlink_candidates(
         &self,
         entry_id: &str,
@@ -924,13 +930,12 @@ impl Vault {
         let phrase = format!("body_md : \"{entry_id}\"");
         let mut stmt = self.db.connection().prepare(
             "SELECT e.id, e.entry_date, e.created_at, e.title, e.folder_id,
-                    CASE WHEN LENGTH(e.body_md) <= ?5 THEN e.body_md ELSE NULL END,
-                    LENGTH(e.body_md), e.rev
+                    e.body_md
                FROM entry_fts JOIN entry e ON e.rid = entry_fts.rowid
               WHERE entry_fts MATCH ?1 AND e.deleted_at IS NULL AND e.id != ?2
-                AND (?3 IS NULL OR (e.entry_date, e.created_at, e.id) < (?3, ?4, ?6))
+                AND (?3 IS NULL OR (e.entry_date, e.created_at, e.id) < (?3, ?4, ?5))
               ORDER BY e.entry_date DESC, e.created_at DESC, e.id DESC
-              LIMIT ?7",
+              LIMIT ?6",
         )?;
         let rows = stmt.query_map(
             params![
@@ -938,20 +943,29 @@ impl Vault {
                 entry_id,
                 after_date,
                 after_created,
-                BACKLINK_INLINE_CHARS,
                 after_id,
                 limit as i64 + 1
             ],
             |row| {
+                // Hash and measure the full body, then inline it only
+                // under the byte budget: an oversized body is
+                // dropped right after hashing, never transferred.
+                let body: String = row.get(5)?;
+                let body_size = body.len() as i64;
+                let body_hash = HEXLOWER.encode(&Sha256::digest(body.as_bytes()));
                 Ok((
                     BacklinkCandidate {
                         id: row.get(0)?,
                         entry_date: row.get(1)?,
                         title: row.get(3)?,
                         folder_id: row.get(4)?,
-                        body: row.get(5)?,
-                        body_size: row.get(6)?,
-                        rev: row.get(7)?,
+                        body: if body_size <= BACKLINK_INLINE_BYTES {
+                            Some(body)
+                        } else {
+                            None
+                        },
+                        body_size,
+                        body_hash,
                     },
                     Cursor {
                         entry_date: row.get(1)?,
@@ -3166,10 +3180,9 @@ mod tests {
     }
 
     /// Metadata-first candidates: bodies larger than the inline
-    /// budget travel as `None` with their byte size and revision,
-    /// so the frontend fetches them whole on demand instead of the
-    /// command pushing unbounded batches.
-    #[test]
+    /// budget travel as `None` with their byte size and content
+    /// hash, so the frontend fetches them whole on demand instead
+    /// of the command pushing unbounded batches.
     #[test]
     fn backlink_candidates_report_metadata_for_oversized_bodies() {
         let (_tmp, mut vault) = new_vault();
@@ -3193,7 +3206,11 @@ mod tests {
         assert_eq!(hit.id, src.id);
         assert_eq!(hit.body, None);
         assert!(hit.body_size > 100_000);
-        assert_eq!(hit.rev, src.rev);
+        let body = vault.get_entry(&src.id).unwrap().body_md;
+        assert_eq!(
+            hit.body_hash,
+            HEXLOWER.encode(&Sha256::digest(body.as_bytes()))
+        );
     }
 
     /// P2 follow-up: candidate bodies were cut at 20k chars, so a

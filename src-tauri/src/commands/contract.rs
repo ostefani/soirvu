@@ -487,7 +487,8 @@ fn candidate_dtos() {
                 folder_id: None,
                 body: Some("see [notes](entry:entry-1) for details".into()),
                 body_size: 38,
-                rev: 1,
+                body_hash: "d9150e63f33a8b72c75cc8996a505195ce6cfee5a4c07832bd4126d130ba0201"
+                    .into(),
             }],
             next_cursor: None,
         },

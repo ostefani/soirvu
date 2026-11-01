@@ -120,10 +120,13 @@ export function linksToTarget(markdown, targetId) {
 }
 
 /**
- * Verified backlink rows, keyed by source id and revision so a
- * reopened panel does not re-parse. Bounded FIFO: the oldest
- * entries leave first. Cleared on lock via `clearBacklinkCache`.
- * @type {Map<string, { rev: number, row: object | null }>}
+ * Verified backlink rows, keyed by target, source and the
+ * server-provided content hash — never by revision, which sync
+ * can reuse for replaced content. A reopened panel skips
+ * re-parsing; an oversized source verified once never refetches
+ * while its hash still matches. Bounded FIFO: the oldest entries
+ * leave first. Cleared on lock via `clearBacklinkCache`.
+ * @type {Map<string, object | null>}
  */
 const backlinkCache = new Map();
 const BACKLINK_CACHE_LIMIT = 200;
@@ -133,18 +136,44 @@ export function clearBacklinkCache() {
     backlinkCache.clear();
 }
 
+function backlinkCacheKey(targetId, id, bodyHash) {
+    return `${targetId}:${id}:${bodyHash}`;
+}
+
 function backlinkCacheGet(targetId, candidate) {
-    if (typeof candidate?.rev !== "number") return undefined;
-    const hit = backlinkCache.get(`${targetId}:${candidate.id}`);
-    return hit && hit.rev === candidate.rev ? hit.row : undefined;
+    if (typeof candidate?.body_hash !== "string") return undefined;
+    const hit = backlinkCache.get(backlinkCacheKey(targetId, candidate.id, candidate.body_hash));
+    return hit === undefined ? undefined : hit;
 }
 
 function backlinkCachePut(targetId, candidate, row) {
-    if (typeof candidate?.rev !== "number") return;
+    if (typeof candidate?.body_hash !== "string") return;
     if (backlinkCache.size >= BACKLINK_CACHE_LIMIT) {
         backlinkCache.delete(backlinkCache.keys().next().value);
     }
-    backlinkCache.set(`${targetId}:${candidate.id}`, { rev: candidate.rev, row });
+    backlinkCache.set(backlinkCacheKey(targetId, candidate.id, candidate.body_hash), row);
+}
+
+/**
+ * True when a slice budget is spent and the scan should yield to
+ * the event loop before parsing the next body, so a stop click
+ * or a paint lands between documents instead of after the page.
+ * @param {number} nowMs
+ * @param {number} lastYieldMs
+ * @param {number} budgetMs
+ */
+export function shouldYield(nowMs, lastYieldMs, budgetMs) {
+    return nowMs - lastYieldMs >= budgetMs;
+}
+
+/**
+ * Only a confirmed-missing entry skips silently. Every other
+ * fetch failure (lock, storage) aborts the scan with an error so
+ * it never reports completion over unread sources.
+ * @param {unknown} e IPC rejection value.
+ */
+export function isMissingEntryError(e) {
+    return e === "entry_not_found";
 }
 
 /**
@@ -156,8 +185,8 @@ function backlinkCachePut(targetId, candidate, row) {
  * proportional to the inline bodies; cached revisions skip
  * parsing entirely.
  * @param {string} targetId
- * @param {{ id: string, entry_date: string, title: string | null, folder_id: string | null, body: string | null, body_size?: number, rev?: number }[]} candidates
- * @returns {{ verified: { id: string, entry_date: string, title: string | null, folder_id: string | null }[], pending: { id: string, entry_date: string, title: string | null, folder_id: string | null, rev: number, body_size: number }[] }}
+ * @param {{ id: string, entry_date: string, title: string | null, folder_id: string | null, body: string | null, body_size?: number, body_hash?: string }[]} candidates
+ * @returns {{ verified: { id: string, entry_date: string, title: string | null, folder_id: string | null }[], pending: { id: string, entry_date: string, title: string | null, folder_id: string | null, body_hash: string | null, body_size: number }[] }}
  */
 export function verifyBacklinkCandidates(targetId, candidates) {
     const want = parseEntryTarget(`entry:${targetId ?? ""}`);
@@ -171,12 +200,20 @@ export function verifyBacklinkCandidates(targetId, candidates) {
         seen.add(id);
         if (id.toLowerCase() === want) continue;
         if (candidate.body == null) {
+            // Metadata only: a cached row under the same content
+            // hash serves without refetching; otherwise the caller
+            // fetches the body whole and re-runs this function.
+            const cached = backlinkCacheGet(want, candidate);
+            if (cached !== undefined) {
+                if (cached !== null) verified.push(cached);
+                continue;
+            }
             pending.push({
                 id,
                 entry_date: candidate.entry_date,
                 title: candidate.title ?? null,
                 folder_id: candidate.folder_id ?? null,
-                rev: candidate.rev,
+                body_hash: typeof candidate.body_hash === "string" ? candidate.body_hash : null,
                 body_size: candidate.body_size ?? 0,
             });
             continue;

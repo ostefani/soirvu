@@ -13,10 +13,12 @@ import {
     classifyHref,
     clearBacklinkCache,
     isEntryHref,
+    isMissingEntryError,
     linksToTarget,
     outgoingEntryLinks,
     outgoingEntryRefs,
     parseEntryTarget,
+    shouldYield,
     verifyBacklinkCandidates,
 } from "../links.js";
 
@@ -164,7 +166,7 @@ test("verifyBacklinkCandidates parks oversized bodies as pending", () => {
         folder_id: null,
         body: null,
         body_size: 100_000,
-        rev: 7,
+        body_hash: "h-big",
     };
     const small = {
         id: "s1",
@@ -173,7 +175,7 @@ test("verifyBacklinkCandidates parks oversized bodies as pending", () => {
         folder_id: null,
         body: `[t](entry:${B})`,
         body_size: 20,
-        rev: 3,
+        body_hash: "h-small",
     };
     const out = verifyBacklinkCandidates(B, [big, small]);
     assert.deepEqual(
@@ -188,13 +190,23 @@ test("verifyBacklinkCandidates parks oversized bodies as pending", () => {
             entry_date: "2026-10-30",
             title: "Long",
             folder_id: null,
-            rev: 7,
+            body_hash: "h-big",
             body_size: 100_000,
         },
     ]);
+    // A cached row serves metadata without refetching: verify the
+    // fetched shape once, then the metadata-only shape resolves it.
+    clearBacklinkCache();
+    verifyBacklinkCandidates(B, [{ ...small, body: `[t](entry:${B})` }]);
+    const cached = verifyBacklinkCandidates(B, [{ ...big, body_hash: "h-small", id: "s1" }]);
+    assert.deepEqual(
+        cached.verified.map((v) => v.id),
+        ["s1"],
+    );
+    assert.deepEqual(cached.pending, []);
 });
 
-test("backlink verification caches by source revision", () => {
+test("backlink verification caches by content hash", () => {
     clearBacklinkCache();
     const linked = {
         id: "s1",
@@ -203,23 +215,39 @@ test("backlink verification caches by source revision", () => {
         folder_id: null,
         body: `[t](entry:${B})`,
         body_size: 20,
-        rev: 3,
+        body_hash: "h1",
     };
     assert.deepEqual(
         verifyBacklinkCandidates(B, [linked]).verified.map((v) => v.id),
         ["s1"],
     );
-    // Same id and rev, body now link-free: the cache still reports
-    // the verified row instead of re-parsing.
+    // Same id and hash, body now link-free: the cache still reports
+    // the verified row instead of re-parsing. A revision alone
+    // never invalidates — content does.
     const edited = { ...linked, body: "Nothing here." };
     assert.deepEqual(
         verifyBacklinkCandidates(B, [edited]).verified.map((v) => v.id),
         ["s1"],
     );
-    // A new revision re-parses and drops the row.
-    const changed = { ...linked, body: "Nothing here.", rev: 4 };
+    // A new hash re-parses and drops the row.
+    const changed = { ...linked, body: "Nothing here.", body_hash: "h2" };
     assert.deepEqual(verifyBacklinkCandidates(B, [changed]).verified, []);
     // Clearing forgets everything.
     clearBacklinkCache();
     assert.deepEqual(verifyBacklinkCandidates(B, [edited]).verified, []);
+});
+
+test("shouldYield fires on a spent budget", () => {
+    assert.equal(shouldYield(100, 90, 8), true);
+    assert.equal(shouldYield(108, 100, 8), true);
+    assert.equal(shouldYield(107, 100, 8), false);
+    assert.equal(shouldYield(100, 100, 8), false);
+});
+
+test("only a confirmed-missing entry skips silently", () => {
+    assert.equal(isMissingEntryError("entry_not_found"), true);
+    assert.equal(isMissingEntryError("locked"), false);
+    assert.equal(isMissingEntryError("io"), false);
+    assert.equal(isMissingEntryError(null), false);
+    assert.equal(isMissingEntryError(undefined), false);
 });
