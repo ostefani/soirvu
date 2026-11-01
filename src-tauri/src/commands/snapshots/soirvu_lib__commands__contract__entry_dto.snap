@@ -15,5 +15,6 @@ expression: json
   ],
   "created_at": 1767225600000,
   "updated_at": 1767229200000,
-  "rev": 3
+  "rev": 3,
+  "folder_id": "folder-1"
 }

@@ -5,6 +5,7 @@ mod contract;
 
 pub mod attachments;
 pub mod entries;
+pub mod folders;
 pub mod misc;
 pub mod sync;
 pub mod vault;

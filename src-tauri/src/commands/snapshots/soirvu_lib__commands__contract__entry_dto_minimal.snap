@@ -12,5 +12,6 @@ expression: json
   "tags": [],
   "created_at": 1767139200000,
   "updated_at": 1767139200000,
-  "rev": 1
+  "rev": 1,
+  "folder_id": null
 }

@@ -12,7 +12,8 @@ expression: json
       "tags": [
         "golden"
       ],
-      "updated_at": 1767229200000
+      "updated_at": 1767229200000,
+      "folder_id": "folder-1"
     },
     {
       "id": "entry-2",
@@ -22,7 +23,8 @@ expression: json
       "tags": [
         "golden"
       ],
-      "updated_at": 1767229200000
+      "updated_at": 1767229200000,
+      "folder_id": "folder-1"
     }
   ],
   "next_cursor": "2026-01-02|1767225600000|entry-1"

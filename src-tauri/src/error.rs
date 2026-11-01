@@ -47,7 +47,16 @@ impl From<Error> for AppError {
             UnsupportedFormat(_) => "unsupported_version",
             InvalidHeader(_) | CorruptAttachment(_) => "corrupt",
             BadKdfParams(_) => "bad_kdf",
+            // Physical vault directory (create flow), not a logical folder.
             FolderNotEmpty => "folder_not_empty",
+            // Logical folders share this code; the failing command
+            // disambiguates, exactly like "invalid_input" does.
+            FolderNotFound => "folder_not_found",
+            FolderExists => "folder_exists",
+            FolderHasContents => "folder_not_empty",
+            FolderCycle => "folder_cycle",
+            FolderTooDeep => "folder_depth_exceeded",
+            RevisionConflict => "revision_conflict",
             VaultMismatch => "vault_mismatch",
             EntryNotFound => "entry_not_found",
             AttachmentNotFound => "attachment_not_found",

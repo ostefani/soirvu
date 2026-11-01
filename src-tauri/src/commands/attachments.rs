@@ -18,11 +18,15 @@ use zeroize::Zeroize;
 use crate::error::{AppError, ipc};
 use crate::state::AppState;
 
+/// The entry's post-commit revision rides along: the editor
+/// saves against the rev it opened, so without it every save
+/// after an attachment would fail with `revision_conflict`.
 #[derive(Debug, Serialize)]
 pub struct AttachmentAdded {
     pub id: String,
     pub mime: String,
     pub size: i64,
+    pub rev: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -130,6 +134,7 @@ pub async fn attachment_chunk(
 pub async fn attachment_finish(
     app: AppHandle,
     upload_id: String,
+    expected_rev: i64,
 ) -> Result<AttachmentAdded, String> {
     crate::commands::run_blocking_state(app, move |state| {
         let mut upload = ipc(state.take_upload(&upload_id))?;
@@ -139,6 +144,7 @@ pub async fn attachment_finish(
             upload.entry_id.clone(),
             upload.name.clone(),
             bytes,
+            expected_rev,
         ))
     })
     .await
@@ -153,6 +159,22 @@ pub async fn attachment_abort(app: AppHandle, upload_id: String) {
     .await;
 }
 
+/// The editor saves against the rev it opened: if sync (or any
+/// other writer) advanced the entry while the file uploaded,
+/// committing here would strand the attachment on unseen content
+/// and the rev adoption would clobber it. Refuse with the same
+/// conflict the next save would hit instead.
+fn check_base(
+    vault: &mut soirvu_core::Vault,
+    entry_id: &str,
+    expected_rev: i64,
+) -> Result<(), AppError> {
+    if vault.get_entry(entry_id)?.rev != expected_rev {
+        return Err(AppError::from(soirvu_core::Error::RevisionConflict));
+    }
+    Ok(())
+}
+
 /// Sniff, cap, strip, commit — shared by the chunked upload and the
 /// file import.
 fn finish_upload(
@@ -160,6 +182,7 @@ fn finish_upload(
     entry_id: String,
     name: String,
     bytes: Vec<u8>,
+    expected_rev: i64,
 ) -> Result<AttachmentAdded, AppError> {
     let mut bytes = zeroize::Zeroizing::new(bytes);
     let settings = state.settings();
@@ -174,14 +197,17 @@ fn finish_upload(
         bytes.zeroize();
         bytes = zeroize::Zeroizing::new(stripped);
     }
-    let added = state.with_vault(|vault| {
+    let (added, rev) = state.with_vault(|vault| {
+        check_base(vault, &entry_id, expected_rev)?;
         let a = vault.add_attachment(&entry_id, &name, mime, &bytes)?;
-        Ok(a)
+        let rev = vault.get_entry(&entry_id)?.rev;
+        Ok((a, rev))
     })?;
     Ok(AttachmentAdded {
         id: added.id,
         mime: added.mime,
         size: added.size,
+        rev,
     })
 }
 
@@ -211,6 +237,7 @@ pub async fn attachment_info(app: AppHandle, id: String) -> Result<AttachmentInf
 pub async fn attachment_import(
     app: AppHandle,
     entry_id: String,
+    expected_rev: i64,
 ) -> Result<Option<AttachmentAdded>, String> {
     let Some(path) = pick_file(&app).await else {
         return Ok(None);
@@ -220,7 +247,7 @@ pub async fn attachment_import(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "file".to_string());
     crate::commands::run_blocking_state(app, move |state| {
-        ipc(import_path(state, &entry_id, &path, &name).map(Some))
+        ipc(import_path(state, &entry_id, &path, &name, expected_rev).map(Some))
     })
     .await
 }
@@ -230,6 +257,7 @@ pub fn import_path(
     entry_id: &str,
     path: &std::path::Path,
     name: &str,
+    expected_rev: i64,
 ) -> Result<AttachmentAdded, AppError> {
     let settings = state.settings();
     let mut file = std::fs::File::open(path).map_err(|_| AppError::Code("io".into()))?;
@@ -257,25 +285,31 @@ pub fn import_path(
         let stripped = strip_metadata(&bytes, mime);
         bytes.zeroize();
         let bytes = zeroize::Zeroizing::new(stripped);
-        let added = state.with_vault(|vault| {
+        let (added, rev) = state.with_vault(|vault| {
+            check_base(vault, entry_id, expected_rev)?;
             let a = vault.add_attachment(entry_id, name, mime, &bytes)?;
-            Ok(a)
+            let rev = vault.get_entry(entry_id)?.rev;
+            Ok((a, rev))
         })?;
         return Ok(AttachmentAdded {
             id: added.id,
             mime: added.mime,
             size: added.size,
+            rev,
         });
     }
     let mut reader = std::io::Cursor::new(head[..head_len].to_vec()).chain(file);
-    let added = state.with_vault(|vault| {
+    let (added, rev) = state.with_vault(|vault| {
+        check_base(vault, entry_id, expected_rev)?;
         let a = vault.add_attachment_from_reader(entry_id, name, mime, &mut reader)?;
-        Ok(a)
+        let rev = vault.get_entry(entry_id)?.rev;
+        Ok((a, rev))
     })?;
     Ok(AttachmentAdded {
         id: added.id,
         mime: added.mime,
         size: added.size,
+        rev,
     })
 }
 
@@ -653,7 +687,153 @@ pub fn decode_base64(text: &str) -> Result<Vec<u8>, ()> {
 
 #[cfg(test)]
 mod tests {
-    use super::valid_attachment_id;
+    use super::{finish_upload, valid_attachment_id};
+    use crate::error::AppError;
+    use crate::state::AppState;
+    use soirvu_core::Vault;
+    use soirvu_core::crypto::KdfParams;
+    use soirvu_core::entries::EntryDraft;
+
+    fn state_with_entry() -> (tempfile::TempDir, AppState, String) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let vault_dir = dir.path().join("vault");
+        let (vault, _recovery) = Vault::create(
+            &vault_dir,
+            "pass",
+            KdfParams {
+                m_kib: 64 * 1024,
+                t: 3,
+                p: 1,
+            },
+        )
+        .unwrap();
+        let vault_id = vault.header().vault_id.clone();
+        let state = AppState::load(dir.path().join("config"));
+        state
+            .register(vault_id.clone(), "Test".into(), vault_dir)
+            .unwrap();
+        state.adopt_created(vault, &vault_id);
+        let entry = state
+            .with_vault(|vault| {
+                vault
+                    .create_entry(
+                        None,
+                        &EntryDraft {
+                            entry_date: "2026-10-30".into(),
+                            title: Some("Note".into()),
+                            body_md: "body".into(),
+                            mood: None,
+                            tz: None,
+                            tags: vec![],
+                        },
+                    )
+                    .map_err(AppError::from)
+            })
+            .unwrap();
+        (dir, state, entry.id)
+    }
+
+    /// P1: the rev `attachment_finish` reports must be the entry's
+    /// post-commit rev. The editor saves against the rev it opened;
+    /// without the reported rev every autosave after an attachment
+    /// fails sticky with `revision_conflict`.
+    #[test]
+    fn finish_reports_the_post_commit_rev() {
+        let (_dir, state, entry_id) = state_with_entry();
+        let stale = state
+            .with_vault(|vault| vault.get_entry(&entry_id).map_err(AppError::from))
+            .unwrap()
+            .rev;
+        let added = finish_upload(
+            &state,
+            entry_id.clone(),
+            "clip.gif".to_string(),
+            b"GIF89a\x01\x00\x01\x00\x00\x00\x00;".to_vec(),
+            stale,
+        )
+        .unwrap();
+        assert_eq!(added.rev, stale + 1);
+        let changed = EntryDraft {
+            entry_date: "2026-10-30".into(),
+            title: Some("Note".into()),
+            body_md: "edited after attach".into(),
+            mood: None,
+            tz: None,
+            tags: vec![],
+        };
+        let stale_err = state
+            .with_vault(|vault| {
+                vault
+                    .update_entry(&entry_id, stale, &changed)
+                    .map_err(AppError::from)
+            })
+            .unwrap_err();
+        assert_eq!(stale_err.to_ipc(), "revision_conflict");
+        state
+            .with_vault(|vault| {
+                vault
+                    .update_entry(&entry_id, added.rev, &changed)
+                    .map_err(AppError::from)
+            })
+            .unwrap();
+    }
+
+    /// Follow-up: adopting the upload's rev must not clobber content
+    /// that landed while the file uploaded. The finish is conditional
+    /// on the editor's base rev — a stale base is refused with the
+    /// same conflict a save would hit, and nothing is committed.
+    #[test]
+    fn finish_refuses_a_stale_base_rev() {
+        let (_dir, state, entry_id) = state_with_entry();
+        let opened = state
+            .with_vault(|vault| vault.get_entry(&entry_id).map_err(AppError::from))
+            .unwrap()
+            .rev;
+        // Sync applies remote content while the file uploads.
+        let remote = EntryDraft {
+            entry_date: "2026-10-30".into(),
+            title: Some("Remote".into()),
+            body_md: "remote wins".into(),
+            mood: None,
+            tz: None,
+            tags: vec![],
+        };
+        state
+            .with_vault(|vault| {
+                vault
+                    .update_entry(&entry_id, opened, &remote)
+                    .map_err(AppError::from)
+            })
+            .unwrap();
+        let refused = finish_upload(
+            &state,
+            entry_id.clone(),
+            "clip.gif".to_string(),
+            b"GIF89a\x01\x00\x01\x00\x00\x00\x00;".to_vec(),
+            opened,
+        )
+        .unwrap_err();
+        assert_eq!(refused.to_ipc(), "revision_conflict");
+        // Nothing committed, remote content intact.
+        let kept = state
+            .with_vault(|vault| vault.get_entry(&entry_id).map_err(AppError::from))
+            .unwrap();
+        assert_eq!(kept.body_md, "remote wins");
+        let atts = state
+            .with_vault(|vault| vault.list_attachments(&entry_id).map_err(AppError::from))
+            .unwrap();
+        assert!(atts.is_empty());
+        // Retrying against the fresh rev commits.
+        let added = finish_upload(
+            &state,
+            entry_id.clone(),
+            "clip.gif".to_string(),
+            b"GIF89a\x01\x00\x01\x00\x00\x00\x00;".to_vec(),
+            kept.rev,
+        )
+        .unwrap();
+        assert_eq!(added.rev, kept.rev + 1);
+    }
 
     #[test]
     fn attachment_ids_cannot_escape_the_opened_directory() {

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-folder-update"
+description = "Enables the folder_update command without any pre-configured scope."
+commands.allow = ["folder_update"]
+
+[[permission]]
+identifier = "deny-folder-update"
+description = "Denies the folder_update command without any pre-configured scope."
+commands.deny = ["folder_update"]

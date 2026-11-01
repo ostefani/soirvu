@@ -1,5 +1,6 @@
 ---
-source: src/commands/contract.rs
+source: src-tauri/src/commands/contract.rs
+assertion_line: 410
 expression: "lines.join(\"\\n\")"
 ---
 Unlock -> wrong_passphrase
@@ -9,6 +10,12 @@ UnsupportedFormat -> unsupported_version
 InvalidHeader -> corrupt
 BadKdfParams -> bad_kdf
 FolderNotEmpty -> folder_not_empty
+FolderNotFound -> folder_not_found
+FolderExists -> folder_exists
+FolderHasContents -> folder_not_empty
+FolderCycle -> folder_cycle
+FolderTooDeep -> folder_depth_exceeded
+RevisionConflict -> revision_conflict
 VaultMismatch -> vault_mismatch
 Io -> storage
 EntryNotFound -> entry_not_found
