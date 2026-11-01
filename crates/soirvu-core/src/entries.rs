@@ -112,17 +112,47 @@ impl Default for ListQuery {
 }
 
 /// Scope predicate modes for the shared folder filter below. Every
-/// scoped read prepends the same recursive subtree and filters with
-/// the same four-way predicate; only the parameter numbers differ.
+/// scoped read prepends the same recursive subtree (see
+/// [`scope_cte`]) and filters with the same four-way predicate
+/// (see [`scope_predicate`]); only the parameter numbers differ.
 const SCOPE_ALL: i64 = 0;
 const SCOPE_ROOT: i64 = 1;
 const SCOPE_FOLDER: i64 = 2;
 const SCOPE_TREE: i64 = 3;
-/// The five scope CTEs below all carry `AND s.depth < 33`: local
-/// writes cap nesting at 32, so anything deeper is a malformed
-/// (synced) graph, and a cycle must terminate instead of looping
-/// the recursive query forever. Duplicates from a cycle are
-/// harmless — the tree only feeds `IN` predicates.
+
+/// The recursive subtree of the scope folder, seeded with the
+/// folder id bound at `folder_param`. The bound sits one past the
+/// write cap ([`crate::folders::MAX_DEPTH`]), so legitimate trees
+/// never clip, while anything deeper is a malformed (synced)
+/// graph and a cycle terminates instead of looping the recursive
+/// query forever. Duplicates from a cycle are harmless — the tree
+/// only feeds `IN` predicates. Only the placeholder number is
+/// interpolated; the folder id itself stays bound.
+fn scope_cte(folder_param: u8) -> String {
+    format!(
+        "WITH RECURSIVE scope_tree(id, depth) AS (
+            SELECT ?{folder_param}, 0 UNION ALL
+            SELECT f.id, s.depth + 1 FROM folder f JOIN scope_tree s ON f.parent_id = s.id
+             WHERE f.deleted_at IS NULL AND s.depth < {}
+        )",
+        crate::folders::MAX_DEPTH + 1
+    )
+}
+
+/// The four-way scope predicate for the entry alias `e`, with the
+/// caller's own placeholder numbers. Every scoped read carries
+/// this exact text, so a change cannot update one copy and miss
+/// another; each query keeps its projection, joins, ordering and
+/// pagination visible at its call site. Only placeholder numbers
+/// are interpolated — folder ids and every other value stay bound.
+fn scope_predicate(folder_param: u8, mode_param: u8) -> String {
+    format!(
+        "(?{mode_param} = 0 \
+         OR (?{mode_param} = 1 AND e.folder_id IS NULL) \
+         OR (?{mode_param} = 2 AND e.folder_id = ?{folder_param}) \
+         OR (?{mode_param} = 3 AND e.folder_id IN (SELECT id FROM scope_tree)))"
+    )
+}
 
 impl Vault {
     /// Maps a scope to its predicate mode and folder id, rejecting
@@ -510,12 +540,8 @@ impl Vault {
 
         let (scope_mode, scope_folder) = self.scope_filter(&query.scope)?;
         // One extra row tells us whether another page exists.
-        let mut stmt = self.db.connection().prepare(
-            "WITH RECURSIVE scope_tree(id, depth) AS (
-                    SELECT ?8, 0 UNION ALL
-                    SELECT f.id, s.depth + 1 FROM folder f JOIN scope_tree s ON f.parent_id = s.id
-                     WHERE f.deleted_at IS NULL AND s.depth < 33
-                )
+        let mut stmt = self.db.connection().prepare(&format!(
+            "{} \
              SELECT e.id, e.entry_date, e.created_at, e.updated_at, e.title,
                     substr(e.body_md, 1, ?6),
                     (SELECT group_concat(t.name, char(31))
@@ -529,13 +555,12 @@ impl Vault {
                        SELECT 1 FROM entry_tag et JOIN tag t ON t.id = et.tag_id
                         WHERE et.entry_rid = e.rid AND t.name_key = ?4))
                 AND (?7 IS NULL OR e.entry_date = ?7)
-                AND (?9 = 0
-                     OR (?9 = 1 AND e.folder_id IS NULL)
-                     OR (?9 = 2 AND e.folder_id = ?8)
-                     OR (?9 = 3 AND e.folder_id IN (SELECT id FROM scope_tree)))
+                AND {} \
               ORDER BY e.entry_date DESC, e.created_at DESC, e.id DESC
               LIMIT ?5",
-        )?;
+            scope_cte(8),
+            scope_predicate(8, 9),
+        ))?;
         let rows = stmt.query_map(
             params![
                 after_date,
@@ -581,20 +606,15 @@ impl Vault {
     /// calendar's dots. Days with no entries are absent.
     pub fn entry_days(&self, from: &str, to: &str, scope: &EntryScope) -> Result<Vec<DayCount>> {
         let (scope_mode, scope_folder) = self.scope_filter(scope)?;
-        let mut stmt = self.db.connection().prepare(
-            "WITH RECURSIVE scope_tree(id, depth) AS (
-                    SELECT ?3, 0 UNION ALL
-                    SELECT f.id, s.depth + 1 FROM folder f JOIN scope_tree s ON f.parent_id = s.id
-                     WHERE f.deleted_at IS NULL AND s.depth < 33
-                )
+        let mut stmt = self.db.connection().prepare(&format!(
+            "{} \
              SELECT entry_date, COUNT(*) FROM entry e
               WHERE e.deleted_at IS NULL AND e.entry_date >= ?1 AND e.entry_date < ?2
-                AND (?4 = 0
-                     OR (?4 = 1 AND e.folder_id IS NULL)
-                     OR (?4 = 2 AND e.folder_id = ?3)
-                     OR (?4 = 3 AND e.folder_id IN (SELECT id FROM scope_tree)))
+                AND {} \
               GROUP BY entry_date ORDER BY entry_date",
-        )?;
+            scope_cte(3),
+            scope_predicate(3, 4),
+        ))?;
         let rows = stmt.query_map(params![from, to, scope_folder, scope_mode], |row| {
             Ok(DayCount {
                 date: row.get(0)?,
@@ -610,12 +630,8 @@ impl Vault {
     /// newest year first.
     pub fn on_this_day(&self, date: &str, scope: &EntryScope) -> Result<Vec<EntrySummary>> {
         let (scope_mode, scope_folder) = self.scope_filter(scope)?;
-        let mut stmt = self.db.connection().prepare(
-            "WITH RECURSIVE scope_tree(id, depth) AS (
-                    SELECT ?3, 0 UNION ALL
-                    SELECT f.id, s.depth + 1 FROM folder f JOIN scope_tree s ON f.parent_id = s.id
-                     WHERE f.deleted_at IS NULL AND s.depth < 33
-                )
+        let mut stmt = self.db.connection().prepare(&format!(
+            "{} \
              SELECT e.id, e.entry_date, e.created_at, e.updated_at, e.title,
                     substr(e.body_md, 1, ?2),
                     (SELECT group_concat(t.name, char(31))
@@ -626,12 +642,11 @@ impl Vault {
               WHERE e.deleted_at IS NULL
                 AND substr(e.entry_date, 6, 5) = substr(?1, 6, 5)
                 AND e.entry_date < ?1
-                AND (?4 = 0
-                     OR (?4 = 1 AND e.folder_id IS NULL)
-                     OR (?4 = 2 AND e.folder_id = ?3)
-                     OR (?4 = 3 AND e.folder_id IN (SELECT id FROM scope_tree)))
+                AND {} \
               ORDER BY e.entry_date DESC, e.created_at DESC, e.id DESC",
-        )?;
+            scope_cte(3),
+            scope_predicate(3, 4),
+        ))?;
         let rows = stmt.query_map(
             params![date, PREVIEW_CHARS as i64, scope_folder, scope_mode],
             |row| {
@@ -669,24 +684,19 @@ impl Vault {
         let fts_query = words.join(" ");
         let (scope_mode, scope_folder) = self.scope_filter(scope)?;
 
-        let mut stmt = self.db.connection().prepare(
-            "WITH RECURSIVE scope_tree(id, depth) AS (
-                    SELECT ?3, 0 UNION ALL
-                    SELECT f.id, s.depth + 1 FROM folder f JOIN scope_tree s ON f.parent_id = s.id
-                     WHERE f.deleted_at IS NULL AND s.depth < 33
-                )
+        let mut stmt = self.db.connection().prepare(&format!(
+            "{} \
              SELECT e.id, e.entry_date, e.title,
                     snippet(entry_fts, -1, char(2), char(3), '…', 64),
                     e.folder_id
                FROM entry_fts JOIN entry e ON e.rid = entry_fts.rowid
               WHERE entry_fts MATCH ?1 AND e.deleted_at IS NULL
-                AND (?4 = 0
-                     OR (?4 = 1 AND e.folder_id IS NULL)
-                     OR (?4 = 2 AND e.folder_id = ?3)
-                     OR (?4 = 3 AND e.folder_id IN (SELECT id FROM scope_tree)))
+                AND {} \
               ORDER BY e.entry_date DESC, e.created_at DESC, e.id DESC
               LIMIT ?2",
-        )?;
+            scope_cte(3),
+            scope_predicate(3, 4),
+        ))?;
         let rows = stmt.query_map(
             params![
                 fts_query,
@@ -1008,24 +1018,19 @@ impl Vault {
     /// entries use them there.
     pub fn list_tags(&self, scope: &EntryScope) -> Result<Vec<TagCount>> {
         let (scope_mode, scope_folder) = self.scope_filter(scope)?;
-        let mut stmt = self.db.connection().prepare(
-            "WITH RECURSIVE scope_tree(id, depth) AS (
-                    SELECT ?1, 0 UNION ALL
-                    SELECT f.id, s.depth + 1 FROM folder f JOIN scope_tree s ON f.parent_id = s.id
-                     WHERE f.deleted_at IS NULL AND s.depth < 33
-                )
+        let mut stmt = self.db.connection().prepare(&format!(
+            "{} \
              SELECT t.name, count(*)
                FROM tag t
                JOIN entry_tag et ON et.tag_id = t.id
                JOIN entry e ON e.rid = et.entry_rid
               WHERE e.deleted_at IS NULL
-                AND (?2 = 0
-                     OR (?2 = 1 AND e.folder_id IS NULL)
-                     OR (?2 = 2 AND e.folder_id = ?1)
-                     OR (?2 = 3 AND e.folder_id IN (SELECT id FROM scope_tree)))
+                AND {} \
               GROUP BY t.id
               ORDER BY t.name_key",
-        )?;
+            scope_cte(1),
+            scope_predicate(1, 2),
+        ))?;
         let rows = stmt.query_map(params![scope_folder, scope_mode], |row| {
             Ok(TagCount {
                 name: row.get(0)?,
@@ -3033,6 +3038,185 @@ mod tests {
         assert_eq!(vault.on_this_day("2026-10-30", &tree).unwrap().len(), 1);
         assert!(vault.on_this_day("2026-10-30", &roots).unwrap().is_empty());
         assert!(vault.on_this_day("2026-10-30", &leaf).unwrap().is_empty());
+    }
+
+    /// Acceptance matrix for the scoped reads: one fixture, All /
+    /// Root / direct / descendants across list_entries, entry_days,
+    /// on_this_day, search and list_tags. Deleted entries never
+    /// show, a tombstoned folder fails every read loudly, filter
+    /// combinations intersect with the scope, unknown folders fail
+    /// every read, and a cyclic folder graph still terminates.
+    #[test]
+    fn scoped_reads_share_one_view_of_the_tree() {
+        let (_tmp, mut vault) = new_vault();
+        let a = vault.create_folder(None, "A").unwrap();
+        let b = vault.create_folder(Some(&a.id), "B").unwrap();
+        vault
+            .create_entry(
+                None,
+                &tagged(draft("2026-10-29", "Root", "plain day"), &["day"]),
+            )
+            .unwrap();
+        vault
+            .create_entry(
+                Some(&a.id),
+                &tagged(draft("2025-10-30", "In A", "borrow checker"), &["code"]),
+            )
+            .unwrap();
+        vault
+            .create_entry(
+                Some(&b.id),
+                &tagged(draft("2026-10-31", "In B", "borrow ownership"), &["code"]),
+            )
+            .unwrap();
+        let gone = vault
+            .create_entry(Some(&a.id), &draft("2026-10-28", "Gone", "borrow vanished"))
+            .unwrap();
+        vault.delete_entry(&gone.id).unwrap();
+        // A tombstoned folder is gone for reads: every scoped read
+        // over it must fail, not silently empty.
+        let t = vault.create_folder(None, "T").unwrap();
+        vault.delete_folder(&t.id, 1).unwrap();
+
+        let everywhere = EntryScope::All;
+        let roots = EntryScope::Root;
+        let flat_a = EntryScope::Folder {
+            id: a.id.clone(),
+            include_descendants: false,
+        };
+        let tree_a = EntryScope::Folder {
+            id: a.id.clone(),
+            include_descendants: true,
+        };
+        let dead = EntryScope::Folder {
+            id: t.id.clone(),
+            include_descendants: true,
+        };
+        let missing = EntryScope::Folder {
+            id: "nope".into(),
+            include_descendants: true,
+        };
+        let titles = |page: &Page| {
+            page.items
+                .iter()
+                .map(|item| item.title.clone().unwrap())
+                .collect::<Vec<_>>()
+        };
+        let list = |vault: &Vault, scope: &EntryScope| {
+            vault
+                .list_entries(&ListQuery {
+                    limit: 10,
+                    scope: scope.clone(),
+                    ..Default::default()
+                })
+                .unwrap()
+        };
+
+        // Three live entries vault-wide.
+        assert_eq!(titles(&list(&vault, &everywhere)).len(), 3);
+        assert_eq!(titles(&list(&vault, &roots)), vec!["Root".to_string()]);
+        assert_eq!(titles(&list(&vault, &flat_a)), vec!["In A".to_string()]);
+        assert_eq!(
+            titles(&list(&vault, &tree_a)),
+            vec!["In B".to_string(), "In A".to_string()]
+        );
+        // Deleted entries never show, in any scope.
+        for scope in [&everywhere, &roots, &flat_a, &tree_a] {
+            assert!(
+                !titles(&list(&vault, scope)).contains(&"Gone".to_string()),
+                "deleted entry leaks into {scope:?}"
+            );
+            assert!(
+                vault.search("vanished", 10, scope).unwrap().is_empty(),
+                "deleted body leaks into {scope:?}"
+            );
+        }
+        // Filter combinations intersect with the scope, not the vault.
+        let tagged_tree = vault
+            .list_entries(&ListQuery {
+                limit: 10,
+                tag: Some("code".into()),
+                scope: EntryScope::Folder {
+                    id: a.id.clone(),
+                    include_descendants: false,
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(titles(&tagged_tree), vec!["In A".to_string()]);
+        let dated_tree = vault
+            .list_entries(&ListQuery {
+                limit: 10,
+                date: Some("2026-10-31".into()),
+                scope: tree_a.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(titles(&dated_tree), vec!["In B".to_string()]);
+        // The calendar, the anniversaries and the tag counts see
+        // the same tree.
+        assert_eq!(
+            vault
+                .entry_days("2026-10-29", "2026-11-01", &tree_a)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(vault.on_this_day("2026-10-30", &tree_a).unwrap().len(), 1);
+        assert_eq!(vault.search("borrow", 10, &tree_a).unwrap().len(), 2);
+        assert_eq!(vault.list_tags(&tree_a).unwrap(), vec![tc("code", 2)]);
+        // Unknown and tombstoned folders fail every read loudly.
+        for scope in [missing.clone(), dead.clone()] {
+            assert!(matches!(
+                vault.list_entries(&ListQuery {
+                    limit: 10,
+                    scope: scope.clone(),
+                    ..Default::default()
+                }),
+                Err(Error::FolderNotFound)
+            ));
+            assert!(matches!(
+                vault.entry_days("2026-10-29", "2026-11-01", &scope),
+                Err(Error::FolderNotFound)
+            ));
+            assert!(matches!(
+                vault.on_this_day("2026-10-30", &scope),
+                Err(Error::FolderNotFound)
+            ));
+            assert!(matches!(
+                vault.search("borrow", 10, &scope),
+                Err(Error::FolderNotFound)
+            ));
+            assert!(matches!(
+                vault.list_tags(&scope),
+                Err(Error::FolderNotFound)
+            ));
+        }
+        // A synced cycle terminates instead of looping: the bounded
+        // expansion still sees both sides.
+        let c1 = "01900000-0000-7000-8000-0000000000c1";
+        let c2 = "01900000-0000-7000-8000-0000000000c2";
+        let dev = "01900000-0000-7000-8000-0000000000d1";
+        vault
+            .insert_folder_exact(c1, Some(c2), "C1", 1, 1, None, 1, dev, 0, "")
+            .unwrap();
+        vault
+            .insert_folder_exact(c2, Some(c1), "C2", 1, 1, None, 1, dev, 0, "")
+            .unwrap();
+        vault
+            .create_entry(Some(c1), &draft("2026-10-26", "Cyclic one", "borrow loop"))
+            .unwrap();
+        vault
+            .create_entry(Some(c2), &draft("2026-10-25", "Cyclic two", "borrow loop"))
+            .unwrap();
+        let cyclic = EntryScope::Folder {
+            id: c1.to_string(),
+            include_descendants: true,
+        };
+        assert_eq!(
+            titles(&list(&vault, &cyclic)),
+            vec!["Cyclic one".to_string(), "Cyclic two".to_string()]
+        );
     }
 
     fn candidate_ids(page: &CandidatePage) -> Vec<&str> {
