@@ -237,6 +237,38 @@ test("backlink verification caches by content hash", () => {
     assert.deepEqual(verifyBacklinkCandidates(B, [edited]).verified, []);
 });
 
+test("cached verification serves current metadata, not the cached row", () => {
+    clearBacklinkCache();
+    const linked = {
+        id: "s1",
+        entry_date: "2026-10-29",
+        title: "Old title",
+        folder_id: null,
+        body: `[t](entry:${B})`,
+        body_size: 20,
+        body_hash: "h-same",
+    };
+    assert.deepEqual(
+        verifyBacklinkCandidates(B, [linked]).verified.map((v) => v.title),
+        ["Old title"],
+    );
+    // A title-only edit leaves the body hash unchanged: the cached
+    // verification still applies, but the row must carry the
+    // current metadata instead of the cached one.
+    const retitled = { ...linked, title: "New title" };
+    assert.deepEqual(verifyBacklinkCandidates(B, [retitled]).verified, [
+        { id: "s1", entry_date: "2026-10-29", title: "New title", folder_id: null },
+    ]);
+    // The metadata-only (oversized) path resolves from the same
+    // cache without refetching, also with current metadata.
+    const metaOnly = { ...retitled, body: null, body_size: 100_000 };
+    const second = verifyBacklinkCandidates(B, [metaOnly]);
+    assert.deepEqual(second.verified, [
+        { id: "s1", entry_date: "2026-10-29", title: "New title", folder_id: null },
+    ]);
+    assert.deepEqual(second.pending, []);
+});
+
 test("shouldYield fires on a spent budget", () => {
     assert.equal(shouldYield(100, 90, 8), true);
     assert.equal(shouldYield(108, 100, 8), true);

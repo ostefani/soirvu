@@ -182,8 +182,8 @@
                     }
                     // Oversized sources arrived as metadata: fetch each
                     // whole body alone, verify it through the same
-                    // path (which also caches the row), and skip only
-                    // sources that vanished mid-scan.
+                    // path (which also caches the verdict), and skip
+                    // only sources that vanished mid-scan.
                     for (const p of pending) {
                         if (mine !== scanRun) return;
                         if (collected.some((existing) => existing.id === p.id)) continue;
@@ -191,8 +191,15 @@
                         try {
                             const full = await api.entryGet(p.id);
                             if (mine !== scanRun) return;
+                            // Cache under the fetched body's own hash:
+                            // an edit between the metadata read and
+                            // this fetch describes different content.
                             const retry = verifyBacklinkCandidates(target, [
-                                { ...p, body: full.body_md ?? '' },
+                                {
+                                    ...p,
+                                    body: full.body_md ?? '',
+                                    body_hash: full.body_hash ?? p.body_hash,
+                                },
                             ]);
                             for (const v of retry.verified) {
                                 if (!collected.some((existing) => existing.id === v.id))

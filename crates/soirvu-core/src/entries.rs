@@ -928,65 +928,80 @@ impl Vault {
             None => (None, None, None),
         };
         let phrase = format!("body_md : \"{entry_id}\"");
-        let mut stmt = self.db.connection().prepare(
-            "SELECT e.id, e.entry_date, e.created_at, e.title, e.folder_id,
-                    e.body_md
-               FROM entry_fts JOIN entry e ON e.rid = entry_fts.rowid
-              WHERE entry_fts MATCH ?1 AND e.deleted_at IS NULL AND e.id != ?2
-                AND (?3 IS NULL OR (e.entry_date, e.created_at, e.id) < (?3, ?4, ?5))
-              ORDER BY e.entry_date DESC, e.created_at DESC, e.id DESC
-              LIMIT ?6",
-        )?;
-        let rows = stmt.query_map(
-            params![
-                phrase,
-                entry_id,
-                after_date,
-                after_created,
-                after_id,
-                limit as i64 + 1
-            ],
-            |row| {
-                // Hash and measure the full body, then inline it only
-                // under the byte budget: an oversized body is
-                // dropped right after hashing, never transferred.
-                let body: String = row.get(5)?;
-                let body_size = body.len() as i64;
-                let body_hash = HEXLOWER.encode(&Sha256::digest(body.as_bytes()));
-                Ok((
-                    BacklinkCandidate {
-                        id: row.get(0)?,
-                        entry_date: row.get(1)?,
-                        title: row.get(3)?,
-                        folder_id: row.get(4)?,
-                        body: if body_size <= BACKLINK_INLINE_BYTES {
-                            Some(body)
-                        } else {
-                            None
-                        },
-                        body_size,
-                        body_hash,
-                    },
-                    Cursor {
-                        entry_date: row.get(1)?,
-                        created_at: row.get(2)?,
-                        id: row.get(0)?,
-                    },
-                ))
-            },
-        )?;
-        let mut pairs: Vec<(BacklinkCandidate, Cursor)> =
-            rows.collect::<rusqlite::Result<Vec<_>>>()?;
-        let next = if pairs.len() > limit {
-            pairs.truncate(limit);
-            pairs.last().map(|(_, cursor)| cursor.clone())
-        } else {
-            None
+        // Phase 1: order and page over lightweight keys only. The
+        // temporary sort for ORDER BY/LIMIT then holds ids, dates
+        // and titles — never bodies — no matter how large the
+        // matched entries are.
+        let keys: Vec<(String, String, i64, Option<String>, Option<String>)> = {
+            let mut stmt = self.db.connection().prepare(
+                "SELECT e.id, e.entry_date, e.created_at, e.title, e.folder_id
+                   FROM entry_fts JOIN entry e ON e.rid = entry_fts.rowid
+                  WHERE entry_fts MATCH ?1 AND e.deleted_at IS NULL AND e.id != ?2
+                    AND (?3 IS NULL OR (e.entry_date, e.created_at, e.id) < (?3, ?4, ?5))
+                  ORDER BY e.entry_date DESC, e.created_at DESC, e.id DESC
+                  LIMIT ?6",
+            )?;
+            stmt.query_map(
+                params![
+                    phrase,
+                    entry_id,
+                    after_date,
+                    after_created,
+                    after_id,
+                    limit as i64 + 1
+                ],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?
         };
-        Ok(BacklinkPage {
-            items: pairs.into_iter().map(|(item, _)| item).collect(),
-            next,
-        })
+        // Phase 2: load, hash and measure each body individually.
+        // Peak backend memory is one body at a time; an oversized
+        // body is dropped right after hashing, never transferred.
+        let mut body_stmt = self
+            .db
+            .connection()
+            .prepare("SELECT body_md FROM entry WHERE id = ?1 AND deleted_at IS NULL")?;
+        // The extra probe row (LIMIT limit + 1) tells whether more
+        // keys exist; the resume cursor is the last included item's.
+        let has_more = keys.len() > limit;
+        let mut items = Vec::with_capacity(keys.len().min(limit));
+        let mut last_cursor = None;
+        for (id, entry_date, created_at, title, folder_id) in keys {
+            if items.len() == limit {
+                break;
+            }
+            let body: String = body_stmt.query_row(params![&id], |row| row.get(0))?;
+            let body_size = body.len() as i64;
+            let body_hash = body_hash(&body);
+            last_cursor = Some(Cursor {
+                entry_date: entry_date.clone(),
+                created_at,
+                id: id.clone(),
+            });
+            items.push(BacklinkCandidate {
+                id,
+                entry_date,
+                title,
+                folder_id,
+                body: if body_size <= BACKLINK_INLINE_BYTES {
+                    Some(body)
+                } else {
+                    None
+                },
+                body_size,
+                body_hash,
+            });
+        }
+        let next = if has_more { last_cursor } else { None };
+        Ok(BacklinkPage { items, next })
     }
 
     /// Tags used by at least one live entry in scope, with how many
@@ -1295,6 +1310,14 @@ pub(crate) fn normalize_key(text: &str) -> String {
 /// How tags are compared: see [`normalize_key`].
 fn tag_key(name: &str) -> String {
     normalize_key(name)
+}
+
+/// Hex SHA-256 over entry body bytes: verification caches and
+/// fetched bodies key on content with this, never on the
+/// revision — sync can replace content at an identical revision
+/// when it picks the winning device.
+pub fn body_hash(body: &str) -> String {
+    HEXLOWER.encode(&Sha256::digest(body.as_bytes()))
 }
 
 /// Returns (the name to display, the key to compare by).

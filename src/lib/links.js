@@ -120,13 +120,16 @@ export function linksToTarget(markdown, targetId) {
 }
 
 /**
- * Verified backlink rows, keyed by target, source and the
+ * Backlink verification booleans, keyed by target, source and the
  * server-provided content hash — never by revision, which sync
- * can reuse for replaced content. A reopened panel skips
- * re-parsing; an oversized source verified once never refetches
- * while its hash still matches. Bounded FIFO: the oldest entries
- * leave first. Cleared on lock via `clearBacklinkCache`.
- * @type {Map<string, object | null>}
+ * can reuse for replaced content. Only the verdict is cached;
+ * the displayed row is always built from the current candidate
+ * metadata, so a title-only edit (same hash) never serves stale
+ * text. A reopened panel skips re-parsing; an oversized source
+ * verified once never refetches while its hash still matches.
+ * Bounded FIFO: the oldest entries leave first. Cleared on lock
+ * via `clearBacklinkCache`.
+ * @type {Map<string, boolean>}
  */
 const backlinkCache = new Map();
 const BACKLINK_CACHE_LIMIT = 200;
@@ -146,12 +149,22 @@ function backlinkCacheGet(targetId, candidate) {
     return hit === undefined ? undefined : hit;
 }
 
-function backlinkCachePut(targetId, candidate, row) {
+function backlinkCachePut(targetId, candidate, links) {
     if (typeof candidate?.body_hash !== "string") return;
     if (backlinkCache.size >= BACKLINK_CACHE_LIMIT) {
         backlinkCache.delete(backlinkCache.keys().next().value);
     }
-    backlinkCache.set(backlinkCacheKey(targetId, candidate.id, candidate.body_hash), row);
+    backlinkCache.set(backlinkCacheKey(targetId, candidate.id, candidate.body_hash), links);
+}
+
+/** Builds the displayed row from current candidate metadata. */
+function backlinkRow(candidate) {
+    return {
+        id: candidate.id,
+        entry_date: candidate.entry_date,
+        title: candidate.title ?? null,
+        folder_id: candidate.folder_id ?? null,
+    };
 }
 
 /**
@@ -182,7 +195,7 @@ export function isMissingEntryError(e) {
  * null): the latter are never guessed at — the caller fetches
  * them whole on demand. In candidate order, one row per source.
  * Self-links never list, even if served. Parsing stays
- * proportional to the inline bodies; cached revisions skip
+ * proportional to the inline bodies; cached content hashes skip
  * parsing entirely.
  * @param {string} targetId
  * @param {{ id: string, entry_date: string, title: string | null, folder_id: string | null, body: string | null, body_size?: number, body_hash?: string }[]} candidates
@@ -200,12 +213,13 @@ export function verifyBacklinkCandidates(targetId, candidates) {
         seen.add(id);
         if (id.toLowerCase() === want) continue;
         if (candidate.body == null) {
-            // Metadata only: a cached row under the same content
-            // hash serves without refetching; otherwise the caller
-            // fetches the body whole and re-runs this function.
+            // Metadata only: a cached verdict under the same
+            // content hash serves without refetching; otherwise
+            // the caller fetches the body whole and re-runs
+            // this function.
             const cached = backlinkCacheGet(want, candidate);
             if (cached !== undefined) {
-                if (cached !== null) verified.push(cached);
+                if (cached) verified.push(backlinkRow(candidate));
                 continue;
             }
             pending.push({
@@ -220,20 +234,12 @@ export function verifyBacklinkCandidates(targetId, candidates) {
         }
         const cached = backlinkCacheGet(want, candidate);
         if (cached !== undefined) {
-            if (cached !== null) verified.push(cached);
+            if (cached) verified.push(backlinkRow(candidate));
             continue;
         }
-        let row = null;
-        if (linksToTarget(candidate.body ?? "", want)) {
-            row = {
-                id,
-                entry_date: candidate.entry_date,
-                title: candidate.title ?? null,
-                folder_id: candidate.folder_id ?? null,
-            };
-            verified.push(row);
-        }
-        backlinkCachePut(want, candidate, row);
+        const links = linksToTarget(candidate.body ?? "", want);
+        if (links) verified.push(backlinkRow(candidate));
+        backlinkCachePut(want, candidate, links);
     }
     return { verified, pending };
 }

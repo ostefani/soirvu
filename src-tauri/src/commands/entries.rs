@@ -10,6 +10,7 @@ use soirvu_core::entries::{
 };
 
 use crate::error::{AppError, ipc};
+use soirvu_core::entries::body_hash;
 use tauri::AppHandle;
 
 #[derive(Serialize)]
@@ -18,6 +19,10 @@ pub struct EntryDto {
     pub entry_date: String,
     pub title: Option<String>,
     pub body_md: String,
+    /// Hex SHA-256 over the body bytes, from the same row read as
+    /// `body_md`: a fetched body and its hash always describe the
+    /// same content, so caches can key on it.
+    pub body_hash: String,
     pub mood: Option<i64>,
     pub tz: Option<String>,
     pub tags: Vec<String>,
@@ -36,6 +41,7 @@ impl From<&Entry> for EntryDto {
             entry_date: e.entry_date.clone(),
             title: e.title.clone(),
             body_md: e.body_md.clone(),
+            body_hash: body_hash(&e.body_md),
             mood: e.mood,
             tz: e.tz.clone(),
             tags: e.tags.clone(),
