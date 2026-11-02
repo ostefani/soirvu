@@ -30,8 +30,9 @@
 
     // Serialized preference writes: every patch merges against the
     // latest acknowledged snapshot, so rapid toggles cannot revert
-    // each other. Folder picker/clear results assign outside the
-    // sequence and are adopted as merge bases instead.
+    // each other. Folder picker/clear results re-enter as one-field
+    // patches through the same sequence instead of adopted
+    // snapshots, which would have no ordering against queued writes.
     let settingsCommit = null;
 
     // One notification slot per section: a new notify replaces the previous one in place.

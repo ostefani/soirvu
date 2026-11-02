@@ -279,14 +279,14 @@
             // First expand for this entry: the single lazy scan,
             // reading whatever the workspace holds right now.
             autoStartedFor = target;
-            servedTick = tick;
+            servedBackTick = tick;
             if (untrack(() => backlinks.length === 0 && !backDone)) scanBacklinks(true);
-        } else if (untrack(() => servedTick) !== tick) {
+        } else if (untrack(() => servedBackTick) !== tick) {
             // Reopening after a workspace tick that arrived while
             // collapsed: the tick effect below left it unconsumed,
             // so the reopen catches up now instead of fetching for
             // a hidden panel earlier.
-            servedTick = tick;
+            servedBackTick = tick;
             scanBacklinks(true);
         }
         return () => {
@@ -298,16 +298,18 @@
     // the open entry. A tick that arrives while both panels are
     // collapsed is not consumed: reopening rescans lazily through
     // the effect above (backlinks) or re-resolves through the rev
-    // effect (outgoing metadata).
-    let servedTick = 0;
+    // effect (outgoing metadata). Each panel tracks its own epoch:
+    // an outgoing refresh must not mark collapsed backlinks served.
+    let servedBackTick = 0;
     $effect(() => {
         const tick = workspaceTick;
-        if (tick === servedTick) return;
         const backOpen = untrack(() => autoStartedFor === entryId && showBack);
         const outOpen = untrack(() => showOut);
         if (!backOpen && !outOpen) return;
-        servedTick = tick;
-        if (backOpen) scanBacklinks(true);
+        if (backOpen) {
+            servedBackTick = tick;
+            scanBacklinks(true);
+        }
         if (outOpen) resolveTargets();
     });
 </script>
