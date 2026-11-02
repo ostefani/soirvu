@@ -62,6 +62,17 @@ export function createNavigator({ onChange = null } = {}) {
             changed();
         },
         /**
+         * Records leaving `from` for `entry`: finalizes the entry
+         * left (an empty history adopts it, so the first navigation
+         * away stays returnable) and makes the destination current,
+         * discarding any forward tail. The caller passes both
+         * snapshots only after its select survived settling.
+         */
+        pushNavigation(from, entry) {
+            this.replace(from);
+            this.push(entry);
+        },
+        /**
          * The back/forward target without moving. Null when the
          * step leaves the stack — the caller does nothing then.
          */

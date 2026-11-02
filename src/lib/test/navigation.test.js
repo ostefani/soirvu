@@ -143,6 +143,32 @@ test("an overlapping select drops before mutating", async () => {
     assert.equal(nav.canGoBack, false);
 });
 
+test("leaving an entry records both sides: A -> B -> C", () => {
+    // Models selectEntry(id, { push: true }): the container finalizes
+    // the entry left and makes the destination current in one step.
+    // Pushing only the entry left left Back disabled after A -> B and
+    // made Back skip B after A -> B -> C.
+    const nav = createNavigator();
+    nav.pushNavigation(entry("a"), entry("b"));
+    assert.equal(nav.canGoBack, true);
+    assert.equal(nav.current().entryId, "b");
+    assert.equal(nav.peek(-1).entryId, "a");
+    nav.pushNavigation(entry("b"), entry("c"));
+    assert.equal(nav.current().entryId, "c");
+    assert.equal(nav.peek(-1).entryId, "b");
+    assert.equal(nav.peek(-2).entryId, "a");
+});
+
+test("the first push-navigation adopts the entry left", () => {
+    // The initial selection records no history; the first navigation
+    // away must adopt the entry left so Back can return to it.
+    const nav = createNavigator();
+    nav.pushNavigation(entry("a"), entry("b"));
+    assert.equal(nav.canGoBack, true);
+    assert.equal(nav.peek(-1).entryId, "a");
+    assert.equal(nav.current().entryId, "b");
+});
+
 test("a blocked settle records nothing", async () => {
     // A select refused by the editor flush must not push, move or
     // apply: the stack and the visible entry stay put.

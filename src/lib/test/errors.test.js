@@ -27,6 +27,10 @@ import {
 /** Every code the UI handles, with its expected severity. */
 const EXPECTED_SEVERITY = {
     invalid_input: ERROR_SEVERITY.VALIDATION,
+    query_too_short: ERROR_SEVERITY.VALIDATION,
+    too_large: ERROR_SEVERITY.VALIDATION,
+    unsupported_type: ERROR_SEVERITY.VALIDATION,
+    too_many_uploads: ERROR_SEVERITY.VALIDATION,
     wrong_passphrase: ERROR_SEVERITY.VALIDATION,
     invalid_recovery_key: ERROR_SEVERITY.VALIDATION,
     not_a_vault: ERROR_SEVERITY.VALIDATION,

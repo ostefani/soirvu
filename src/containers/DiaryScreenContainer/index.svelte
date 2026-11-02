@@ -195,7 +195,11 @@
         const token = nav.beginSelect();
         const ok = (await editorRef?.flushForNavigation?.()) ?? true;
         if (!ok || !nav.isLiveSelect(token)) return false;
-        if (opts.push && selectedId) nav.push(captureSnapshot());
+        // Snapshot the entry left before context and selection move
+        // on; the destination is recorded below, only after this
+        // select survived settling, so a superseded select pushes
+        // nothing.
+        const left = opts.push && selectedId ? captureSnapshot() : null;
         if (opts.context) {
             scopeSel = opts.context.scope;
             searchScoped = opts.context.scoped && opts.context.scope.kind === 'folder';
@@ -208,6 +212,20 @@
             clearTimeout(searchTimer);
             await runSearch(opts.context.query);
             if (!nav.isLiveSelect(token)) return false;
+        }
+        if (left) {
+            // History holds snapshots with the current entry on top:
+            // pushing only the entry left left Back disabled after
+            // A -> B and made it skip B after A -> B -> C.
+            nav.pushNavigation(left, {
+                entryId: id,
+                scope: scopeSel,
+                scoped: searchScoped,
+                query,
+                date: listDate,
+                sel: null,
+                scroll: 0,
+            });
         }
         if (navRestore && mainEl) {
             // The remounted editor loads async; settle the scroll
