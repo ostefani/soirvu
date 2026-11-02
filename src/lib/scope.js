@@ -43,3 +43,17 @@ export function searchScopeKey(scoped, scope) {
     }
     return scope.kind ?? "all";
 }
+
+/**
+ * Whether a scope movement must (re)issue the search. The decision
+ * keys on the query and the scope identity — never on whether
+ * results have arrived. Gating on results left an in-flight first
+ * search current under the new scope, publishing old-scope rows
+ * (or nothing, when it failed, with no replacement starting).
+ * @param {string} key the scope identity the screen now shows under.
+ * @param {string} lastKey the identity the last search ran under.
+ * @param {string} query the current query text.
+ */
+export function shouldReissueSearch(key, lastKey, query) {
+    return key !== lastKey && query.trim() !== "";
+}

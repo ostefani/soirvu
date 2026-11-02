@@ -1,9 +1,11 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
+    import { onDestroy } from 'svelte';
     import * as api from '@/api.js';
     import Checkbox from '@/components/Checkbox/index.svelte';
     import { breadcrumb } from '@/lib/folders.js';
+    import { createRequestOwner } from '@/lib/request-owner.js';
 
     let {
         selectedId,
@@ -31,6 +33,21 @@
     let tags = $state([]);
     let tagFilter = $state(null);
     let error = $state('');
+    // One list request in flight at most (reset or page): a
+    // "More…" click during a reset would start a newer token with
+    // the old cursor under the new scope, discarding the first
+    // page and appending old rows to new ones.
+    let listBusy = $state(false);
+
+    // Separate owners for the entry pages and the tag counts: a
+    // new filter retires its own in-flight read, never the other's.
+    const listOwner = createRequestOwner();
+    const tagOwner = createRequestOwner();
+
+    onDestroy(() => {
+        listOwner.dispose();
+        tagOwner.dispose();
+    });
 
     // Same short texts as the other screens: codes, never prose
     // from below.
@@ -48,30 +65,53 @@
     }
 
     async function load(reset) {
+        // Resets preempt an in-flight page; pagination waits for
+        // any outstanding request instead of racing it.
+        if (!reset && listBusy) return;
+        const token = listOwner.begin();
+        listBusy = true;
+        // Capture the filter generation and cursor before awaiting:
+        // a late page appends only to the list it was read for.
+        const cursor = reset ? null : nextCursor;
+        const tag = tagFilter;
+        const day = date;
+        const wireScope = scope ?? null;
         try {
             const page = await api.entryList({
-                cursor: reset ? null : nextCursor,
+                cursor,
                 limit: 50,
-                tag: tagFilter,
-                date,
-                scope: scope ?? null,
+                tag,
+                date: day,
+                scope: wireScope,
             });
+            if (!listOwner.current(token)) return;
             entries = reset ? page.entries : [...entries, ...page.entries];
             nextCursor = page.next_cursor;
             error = '';
         } catch (e) {
+            if (!listOwner.current(token)) return;
             error = describeError(e);
+        } finally {
+            // A superseded request leaves the flag to whoever is
+            // current; only the still-current request clears it, so
+            // a late reset cannot re-enable pagination mid-reload.
+            if (listOwner.current(token)) listBusy = false;
         }
     }
 
     async function loadTags() {
+        const token = tagOwner.begin();
+        const wireScope = scope ?? null;
         try {
-            tags = await api.tagList(scope ?? null);
+            const next = await api.tagList(wireScope);
+            if (!tagOwner.current(token)) return;
+            tags = next;
             tagNote = '';
         } catch (e) {
             // Unlike the entries load, the tag block owns no error
             // slot of its own: a rejection here must not escape as
             // an unhandled promise rejection.
+            if (!tagOwner.current(token)) return;
             tagNote = describeError(e);
         }
     }
@@ -247,7 +287,7 @@
             {/each}
             {#if entries.length === 0}<p class="note">No entries yet.</p>{/if}
             {#if nextCursor}
-                <button class="quiet" onclick={() => load(false)}>More…</button>
+                <button class="quiet" disabled={listBusy} onclick={() => load(false)}>More…</button>
             {/if}
         </div>
     {/if}

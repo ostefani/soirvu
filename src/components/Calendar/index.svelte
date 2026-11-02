@@ -1,10 +1,12 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
+    import { onDestroy } from 'svelte';
     import Button from '@/components/Button/index.svelte';
     import IconLeft from '@/icons/arrow-left.svelte';
     import IconRight from '@/icons/arrow-right.svelte';
     import * as api from '@/api.js';
+    import { createRequestOwner } from '@/lib/request-owner.js';
 
     // Folder scope: null counts the whole vault. Counts and day
     // selection follow the list scope; "On this day" stays vault-wide.
@@ -35,13 +37,25 @@
     const iso = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
     const todayIso = iso(now.getFullYear(), now.getMonth(), now.getDate());
 
+    // A month step retires the previous month's request: a late
+    // response must not repaint the counts the user already left.
+    const monthOwner = createRequestOwner();
+
+    onDestroy(() => monthOwner.dispose());
+
     async function load() {
+        const token = monthOwner.begin();
         const from = iso(year, month, 1);
         const to = month === 11 ? iso(year + 1, 0, 1) : iso(year, month + 1, 1);
+        const wireScope = scope ?? null;
         try {
-            const days = await api.calendarDays(from, to, scope ?? null);
+            const days = await api.calendarDays(from, to, wireScope);
+            if (!monthOwner.current(token)) return;
             counts = Object.fromEntries(days.map((d) => [d.date, d.entries]));
         } catch {
+            // A stale failure clears nothing: the visible month
+            // keeps its counts instead of flashing empty.
+            if (!monthOwner.current(token)) return;
             counts = {};
         }
     }

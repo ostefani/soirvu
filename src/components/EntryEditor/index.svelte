@@ -1,9 +1,10 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
-    import { onMount, untrack } from 'svelte';
+    import { onDestroy, onMount, untrack } from 'svelte';
     import * as api from '@/api.js';
     import { createEditor } from '@/editor/index.js';
+    import { createRequestOwner } from '@/lib/request-owner.js';
     import { classifyHref, parseEntryTarget } from '@/lib/links.js';
     import EditorToolbar from '@/components/EditorToolbar/index.svelte';
     import LinkPanels from '@/components/LinkPanels/index.svelte';
@@ -91,6 +92,12 @@
        race each other, so a conflict here is genuinely foreign —
        surface it with the draft preserved instead of retrying. */
     let commitSeq = null;
+
+    // The initial entry load: disposal (navigation, lock) retires
+    // it, so a late response cannot publish into a torn-down pane.
+    const loadOwner = createRequestOwner();
+
+    onDestroy(() => loadOwner.dispose());
 
     const autosave = createAutosave({
         snapshot: takeSnapshot,
@@ -200,10 +207,14 @@
     }
 
     onMount(async () => {
+        const token = loadOwner.begin();
         try {
-            entry = await api.entryGet(entryId);
+            const loaded = await api.entryGet(entryId);
+            if (!loadOwner.current(token)) return;
+            entry = loaded;
             commitSeq = createEntryCommit(entry.rev);
         } catch (e) {
+            if (!loadOwner.current(token)) return;
             loadFailed = true;
             // A followed link whose target is gone keeps its notice
             // instead of a bare load failure.

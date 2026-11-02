@@ -1,10 +1,11 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
-    import { onDestroy, onMount, untrack } from 'svelte';
+    import { onDestroy, untrack } from 'svelte';
     import * as api from '@/api.js';
+    import { createRequestOwner } from '@/lib/request-owner.js';
     import { clearBacklinkCache } from '@/lib/links.js';
-    import { searchScopeKey } from '@/lib/scope.js';
+    import { searchScopeKey, shouldReissueSearch } from '@/lib/scope.js';
     import EntryList from '@/components/EntryList/index.svelte';
     import FolderTree from '@/components/FolderTree/index.svelte';
     import Calendar from '@/components/Calendar/index.svelte';
@@ -37,6 +38,13 @@
     let searchScoped = $state(false);
     let filterEpoch = $state(0);
 
+    // One request owner per read purpose — never a shared global:
+    // a new search retires the previous search, not the folder
+    // refresh, and disposed owners publish nothing.
+    const searchOwner = createRequestOwner();
+    const folderOwner = createRequestOwner();
+    const dayOwner = createRequestOwner();
+
     const byId = $derived(new Map(folders.map((f) => [f.id, f])));
 
     const listScope = $derived(
@@ -55,8 +63,11 @@
     const destName = $derived(scopeFolderName ?? 'Root');
 
     async function loadFolders() {
+        const token = folderOwner.begin();
         try {
-            folders = await api.folderList();
+            const next = await api.folderList();
+            if (!folderOwner.current(token)) return;
+            folders = next;
             foldersLoaded = true;
         } catch {
             // Keep the last good tree: entry and folder counts may
@@ -64,8 +75,6 @@
             // vanish underneath the list.
         }
     }
-
-    onMount(loadFolders);
 
     // A folder deleted elsewhere (or by this screen's tree) drops
     // the scope back to the whole vault instead of erroring.
@@ -84,12 +93,14 @@
     // it under the new scope instead of leaving stale hits. The
     // query text is read untracked — typing stays on the debounced
     // path and must not fire this — and the key recorded by the
-    // search itself keeps its own completion from looping it.
+    // search itself keeps its own completion from looping it. An
+    // active query reissues even before its first results arrive:
+    // the old request retires and the new scope gets its own.
     $effect(() => {
         const key = searchScopeKey(searchScoped, listScope);
-        if (results === null || key === lastSearchKey) return;
         const q = untrack(() => query.trim());
-        if (q) runSearch(q);
+        if (!shouldReissueSearch(key, lastSearchKey, q)) return;
+        runSearch(q);
     });
 
     function handleScopeSelect(sel) {
@@ -119,14 +130,30 @@
     const canGoBack = $derived(histIndex > 0);
     const canGoForward = $derived(histIndex < history.length - 1);
 
-    // A different vault is a different history — and cached
-    // verifications belong to the vault they were computed in, so
-    // they leave with it on lock and on switch.
+    // Session lifecycle: the first run starts the session's reads;
+    // a re-run means the vault changed, so outstanding reads retire
+    // and the session restarts. Skipping invalidation on the first
+    // run matters: effects run after onMount-style startup, and an
+    // unconditional invalidate here would discard the initial
+    // folder response and leave the tree empty until another
+    // refresh. Beginning the replacement reads in the same tick as
+    // the invalidation keeps the switch deterministic either way.
+    let sessionStarted = false;
     $effect(() => {
         void vault?.id;
         history = [];
         histIndex = -1;
         navRestore = null;
+        if (sessionStarted) {
+            searchOwner.invalidate();
+            folderOwner.invalidate();
+            dayOwner.invalidate();
+            loadFolders();
+            loadOnThisDay();
+        } else {
+            loadFolders();
+            sessionStarted = true;
+        }
         return () => clearBacklinkCache();
     });
 
@@ -155,12 +182,21 @@
     let lastSearchKey = '';
 
     async function runSearch(q) {
+        const token = searchOwner.begin();
+        // Capture the inputs this request runs under before
+        // awaiting: the completion checks the token instead of
+        // trusting later state, so a late response cannot replace
+        // a newer query or scope.
+        const scoped = searchScoped && listScope !== null;
+        const wireScope = scoped ? listScope : null;
         lastSearchKey = searchScopeKey(searchScoped, listScope);
         try {
-            const scoped = searchScoped && listScope !== null;
-            results = await api.search(q, scoped ? { scope: listScope } : {});
-            searchNote = results.length === 0 ? 'Nothing found.' : '';
+            const found = await api.search(q, wireScope ? { scope: wireScope } : {});
+            if (!searchOwner.current(token)) return;
+            results = found;
+            searchNote = found.length === 0 ? 'Nothing found.' : '';
         } catch (e) {
+            if (!searchOwner.current(token)) return;
             results = null;
             searchNote =
                 e === 'query_too_short'
@@ -229,12 +265,16 @@
     }
 
     async function loadOnThisDay() {
+        const token = dayOwner.begin();
         const now = new Date();
         const pad = (n) => String(n).padStart(2, '0');
         const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
         try {
-            onThisDay = await api.onThisDay(today);
+            const days = await api.onThisDay(today);
+            if (!dayOwner.current(token)) return;
+            onThisDay = days;
         } catch {
+            if (!dayOwner.current(token)) return;
             onThisDay = [];
         }
     }
@@ -283,6 +323,7 @@
             // the user was searching for a moment ago. Search, date
             // and tag filters clear; the folder context is kept.
             query = '';
+            searchOwner.invalidate();
             results = null;
             searchNote = '';
             listDate = null;
@@ -302,6 +343,9 @@
 
     function onSearchInput() {
         clearTimeout(searchTimer);
+        // New intent retires the in-flight search immediately —
+        // before this keystroke's debounce expires.
+        searchOwner.invalidate();
         searchTimer = setTimeout(async () => {
             const q = query.trim();
             if (!q) {
@@ -315,7 +359,12 @@
         }, 250);
     }
 
-    onDestroy(() => clearTimeout(searchTimer));
+    onDestroy(() => {
+        clearTimeout(searchTimer);
+        searchOwner.dispose();
+        folderOwner.dispose();
+        dayOwner.dispose();
+    });
 </script>
 
 <div class="diary-screen">
@@ -363,6 +412,9 @@
                 {filterEpoch}
                 onToggleDescendants={toggleDescendants}
                 onClearSearch={() => {
+                    // A late response must not repopulate the
+                    // search the list just cleared.
+                    searchOwner.invalidate();
                     query = '';
                     results = null;
                     searchNote = '';

@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { scopeToWire, searchScopeKey } from "../scope.js";
+import { scopeToWire, searchScopeKey, shouldReissueSearch } from "../scope.js";
 
 test("vault-wide scopes pass through as null or kind-only", () => {
     assert.equal(scopeToWire(null), null);
@@ -60,4 +60,17 @@ test("the search scope key follows the checkbox and the list scope", () => {
     assert.equal(searchScopeKey(false, folder), "all");
     // The key carries no query text: typing alone must not re-fire it.
     assert.equal(searchScopeKey(true, folder), searchScopeKey(true, { ...folder }));
+});
+
+test("scope movement reissues an active search even before results arrive", () => {
+    // Gating on results left an in-flight first search current
+    // under the new scope: old-scope rows published, or nothing
+    // when it failed with no replacement starting. Only the query
+    // and the scope identity decide.
+    assert.equal(shouldReissueSearch("folder:a:false", "all", "milk"), true);
+    // Same scope: the search's own completion must not loop it.
+    assert.equal(shouldReissueSearch("folder:a:false", "folder:a:false", "milk"), false);
+    // No active query: scope movement starts nothing.
+    assert.equal(shouldReissueSearch("folder:a:false", "all", ""), false);
+    assert.equal(shouldReissueSearch("folder:a:false", "all", "   "), false);
 });
