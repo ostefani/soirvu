@@ -10,7 +10,9 @@
     let {
         vaults,
         selected,
-        model = $bindable(),
+        // Read-only: the view renders the parent model and reports
+        // intent through handlers, never assigning into it.
+        model,
         secretField,
         forkField,
         kindOptions,
@@ -68,22 +70,30 @@
                 </label>
                 <div class="vault-actions">
                     {#if vault.state === VAULT_STATE.NOT_FOUND}
-                        <Button label={textData.locateButton} handler={() => handlers.relocate(vault)} />
+                        <Button
+                            label={textData.locateButton}
+                            handler={() => handlers.relocate(vault)}
+                            disabled={model.opBusy} />
                     {/if}
                     {#if vault.state === VAULT_STATE.VOLUME_MISSING}
                         <Button label={textData.retryButton} handler={handlers.refresh} />
                     {/if}
                     {#if model.forgetArmed === vault.id}
-                        <Button label={textData.forgetConfirmButton} handler={() => handlers.forget(vault)} />
+                        <Button
+                            label={textData.forgetConfirmButton}
+                            handler={() => handlers.forget(vault)}
+                            disabled={model.opBusy} />
                         <Button
                             label={textData.forgetCancelButton ?? 'Cancel'}
                             kind="quiet"
-                            handler={() => (model.forgetArmed = null)} />
+                            handler={handlers.disarmForget}
+                            disabled={model.opBusy} />
                     {:else}
                         <Button
                             label={textData.forgetButton}
                             kind="texture-button"
-                            handler={() => handlers.armForget(vault)} />
+                            handler={() => handlers.armForget(vault)}
+                            disabled={model.opBusy} />
                     {/if}
                 </div>
             </div>
@@ -141,8 +151,16 @@
         </div>
     {/if}
 
-    <Button label={textData.openAnotherButton} kind="texture-button" handler={handlers.openAnother} />
-    <Button label={textData.createNewButton} kind="texture-button" handler={handlers.create} />
+    <Button
+        label={textData.openAnotherButton}
+        kind="texture-button"
+        handler={handlers.openAnother}
+        disabled={model.opBusy} />
+    <Button
+        label={textData.createNewButton}
+        kind="texture-button"
+        handler={handlers.create}
+        disabled={model.opBusy} />
 
     <NoteComponent text={model.note} />
     <ErrorComponent text={model.error} />

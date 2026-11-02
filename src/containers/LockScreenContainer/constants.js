@@ -36,6 +36,9 @@ export function createModel() {
         secret: '',
         error: '',
         busy: false,
+        // Vault-list operations (relocate/forget/open-another) share
+        // one pending flag: they never run usefully in parallel.
+        opBusy: false,
         forgetArmed: null,
         forkDest: null,
         forkSecret: '',

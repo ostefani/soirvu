@@ -83,24 +83,36 @@
     // -------------------------------------------------------------------------
     async function relocate(vault) {
         model.error = '';
+        model.opBusy = true;
         try {
             if (await api.vaultRelocate(vault.id)) {
                 onVaultsChanged();
             }
         } catch (error) {
             model.error = describeError(error);
+        } finally {
+            model.opBusy = false;
         }
     }
 
     async function forget(vault) {
-        await api.vaultForget(vault.id);
-        model.forgetArmed = null;
-        onVaultsChanged();
+        model.opBusy = true;
+        model.error = '';
+        try {
+            await api.vaultForget(vault.id);
+            model.forgetArmed = null;
+            onVaultsChanged();
+        } catch (error) {
+            model.error = describeError(error);
+        } finally {
+            model.opBusy = false;
+        }
     }
 
     async function openAnother() {
         model.error = '';
         model.note = '';
+        model.opBusy = true;
         try {
             const picked = await api.vaultPickFolder('open');
             if (picked && picked.fork_required) {
@@ -119,6 +131,8 @@
             }
         } catch (error) {
             model.error = describeError(error);
+        } finally {
+            model.opBusy = false;
         }
     }
 
@@ -203,6 +217,7 @@
         relocate,
         forget,
         armForget: (vault) => (model.forgetArmed = vault.id),
+        disarmForget: () => (model.forgetArmed = null),
         unlock,
         doFork,
         finishFork,
@@ -216,7 +231,7 @@
 <LockScreen
     {vaults}
     {selected}
-    bind:model
+    {model}
     {secretField}
     forkField={FORK_SECRET_FIELD_CONFIGURATION}
     {kindOptions}
