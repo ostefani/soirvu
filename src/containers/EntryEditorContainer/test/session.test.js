@@ -58,7 +58,7 @@ function fakeViewApi(overrides = {}) {
     };
 }
 
-function setup({ entryOverrides = {}, delay = 10000 } = {}) {
+function setup({ entryOverrides = {}, delay = 10000, onOpenEntry = null } = {}) {
     const saves = [];
     const api = {
         entryGet: async () => ({
@@ -94,7 +94,7 @@ function setup({ entryOverrides = {}, delay = 10000 } = {}) {
         delay,
         onSaved: null,
         onDeleted: () => opened.push('deleted'),
-        onOpenEntry: (target) => opened.push(target),
+        onOpenEntry: onOpenEntry ?? ((target) => opened.push(target)),
         notifyError: (message) => notified.push(message),
     });
     return { api, saves, notified, opened, session };
@@ -228,6 +228,58 @@ test('navigation drains queued uploads beyond the first active batch', async () 
     assert.equal(finishes, 9);
     assert.equal(inserted.length, 9);
     assert.equal(session.dirty, false);
+    session.dispose();
+});
+
+test('link follow defers to the workspace gate without preparing itself', async () => {
+    const gate = [];
+    const { saves, opened, session } = setup({
+        onOpenEntry: async (target) => {
+            gate.push(target);
+            return true;
+        },
+    });
+    await session.load('e1');
+    session.setViewApi(fakeViewApi());
+    session.setField('title', 'Edited');
+    await session.followEntryLink('e2');
+    assert.deepEqual(gate.map((target) => target.id), ['e2']);
+    assert.deepEqual(opened, []);
+    assert.equal(saves.length, 0);
+    assert.equal(session.navError, '');
+    assert.equal(session.pendingNavId, null);
+    assert.equal(session.navigating, false);
+    session.dispose();
+});
+
+test('failed workspace navigation preserves the source with a retryable error', async () => {
+    let allow = false;
+    const { saves, session } = setup({ onOpenEntry: async () => allow });
+    await session.load('e1');
+    session.setViewApi(fakeViewApi());
+    session.setField('title', 'Edited');
+    await session.followEntryLink('e2');
+    assert.match(session.navError, /Retry to navigate/);
+    assert.equal(session.pendingNavId, 'e2');
+    assert.equal(session.entry.id, 'e1');
+    assert.equal(session.navigating, false);
+    assert.equal(saves.length, 0);
+    allow = true;
+    await session.retryPendingNav();
+    assert.equal(session.navError, '');
+    assert.equal(session.pendingNavId, null);
+    session.dispose();
+});
+
+test('link follow stays put while frozen', async () => {
+    let calls = 0;
+    const { session } = setup({ onOpenEntry: async () => (calls++, true) });
+    await session.load('e1');
+    session.setViewApi(fakeViewApi());
+    assert.equal(await session.prepareLock(), true);
+    await session.followEntryLink('e2');
+    assert.equal(calls, 0);
+    assert.equal(session.navError, '');
     session.dispose();
 });
 

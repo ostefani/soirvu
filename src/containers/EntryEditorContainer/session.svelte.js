@@ -329,14 +329,14 @@ export function createEntrySession({
         navigating = true;
         navError = '';
         try {
-            if (!(await prepareNavigation())) {
+            const sel = viewApi?.query();
+            const ok = await onOpenEntry?.({ id, selFrom: sel?.from ?? 0, selTo: sel?.to ?? 0 });
+            if (ok === false) {
                 pendingNavId = id;
                 navError = ENTRY_EDITOR_TEXT.navigateAfterSave;
                 return;
             }
             pendingNavId = null;
-            const sel = viewApi?.query();
-            onOpenEntry?.({ id, selFrom: sel?.from ?? 0, selTo: sel?.to ?? 0 });
         } finally {
             navigating = false;
         }
