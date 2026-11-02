@@ -209,7 +209,7 @@
                 markdown: entry.body_md,
                 onChange: () => touch(),
                 onSelectionChange: refreshToolbar,
-                onAttach: (file) => attachFile(file),
+                onAttach: (file) => attachFiles([file]),
                 onAttachmentView: (el, id) => hydrateAttachment(el, id),
                 onOpenLink: (href, modified) => routeLink(href, modified),
                 onRequestLinkPicker: ({ bracketPos }) => {

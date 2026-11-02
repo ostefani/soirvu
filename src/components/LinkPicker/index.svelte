@@ -46,8 +46,10 @@
         }
         // Native activation already picks the focused button (a
         // candidate or More…): handling Enter here too would fire
-        // both the focused row and the highlighted one.
-        if (e.target instanceof HTMLButtonElement) return;
+        // both the focused row and the highlighted one. Other keys
+        // (notably Tab) must still reach their handlers below no
+        // matter which control holds focus.
+        if (e.key === 'Enter' && e.target instanceof HTMLButtonElement) return;
         if (e.key === 'ArrowDown') {
             e.preventDefault();
             active = Math.min(active + 1, candidates.length - 1);
