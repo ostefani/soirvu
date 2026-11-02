@@ -212,6 +212,8 @@ fn import_outcome_shape() {
             attachments: 3,
             skipped_entries: 1,
             skipped_attachments: 2,
+            folders: 2,
+            skipped_folders: 0,
         },
     );
 }
@@ -312,6 +314,8 @@ fn sync_shapes() {
         &SyncReportDto {
             bundles_seen: 2,
             bundles_applied: 2,
+            folders_applied: 1,
+            folders_conflicted: 0,
             entries_applied: 5,
             entries_conflicted: 1,
             attachments_applied: 1,

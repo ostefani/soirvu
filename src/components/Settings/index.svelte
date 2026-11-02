@@ -97,6 +97,7 @@
                         <Input
                             field={fields.timeout}
                             value={general.timeoutMin}
+                            disabled={general.prefsSaving}
                             oninput={(e) => setTimeoutMin(e.currentTarget.value)} />
                         <ActionRow names={actions.timeout} />
                     </div>
@@ -107,6 +108,7 @@
                         {#each privacyOptions as option (option.setting)}
                             <Checkbox
                                 checked={general.settings[option.setting]}
+                                disabled={general.prefsSaving}
                                 onchange={(e) => handlers[option.handler](e.currentTarget.checked)}
                                 label={text[option.label]} />
                         {/each}
@@ -184,6 +186,7 @@
                         <Select
                             field={fields.schedule}
                             value={general.settings.backup_schedule}
+                            disabled={general.prefsSaving}
                             onchange={(e) => handlers.saveSchedule(e.currentTarget.value)} />
                     </div>
 

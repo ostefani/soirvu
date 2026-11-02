@@ -11,6 +11,9 @@
         rev,
         readBody,
         folders = [],
+        // Workspace epoch (import/sync changes) from the diary:
+        // refreshes visible panels without touching the draft.
+        workspaceTick = 0,
         onOpenEntry = null,
         onRemoveLink = null,
     } = $props();
@@ -275,6 +278,18 @@
         return () => {
             scanRun++;
         };
+    });
+
+    // Workspace changes (import/sync) may add or remove links to
+    // the open entry. Refresh only panels the user already opened:
+    // unopened panels keep their lazy first scan.
+    let servedTick = 0;
+    $effect(() => {
+        const tick = workspaceTick;
+        if (tick === servedTick) return;
+        servedTick = tick;
+        if (untrack(() => autoStartedFor === entryId && showBack)) scanBacklinks(true);
+        if (untrack(() => showOut)) resolveTargets();
     });
 </script>
 

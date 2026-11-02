@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Olha Stefanishyna
 export function createGeneralModel() {
-    return { settings: null, error: '', timeoutMin: null };
+    return { settings: null, error: '', timeoutMin: null, prefsSaving: false };
 }
 
 export function createSecurityModel() {

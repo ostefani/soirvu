@@ -32,6 +32,10 @@
         onNavForward = null,
         // Applied once on mount: { sel: { from, to } }.
         navRestore = null,
+        // Workspace epoch (import/sync changes): forwarded to the
+        // link panels so visible backlink/metadata refresh without
+        // touching the loaded draft.
+        workspaceTick = 0,
     } = $props();
 
     let entry = $state(null);
@@ -749,6 +753,7 @@
             rev={entry.rev}
             readBody={() => editor?.getMarkdown() ?? entry.body_md}
             {folders}
+            workspaceTick={workspaceTick}
             onOpenEntry={(id) => openEntry(id)}
             onRemoveLink={({ from, to }) => editor?.exec('removeLink', { from, to })} />
         {#if showPopover}

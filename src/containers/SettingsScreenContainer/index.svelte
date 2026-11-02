@@ -2,8 +2,8 @@
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     import { onMount } from 'svelte';
-    import { listen } from '@tauri-apps/api/event';
     import * as api from '@/api.js';
+    import { createSettingsCommit } from '@/lib/settings-commit.js';
     import Button from '@/components/Button/index.svelte';
     import Settings from '@/components/Settings/index.svelte';
     import IconLeft from '@/icons/arrow-left.svelte';
@@ -27,6 +27,12 @@
     let exp = $state(createExportModel());
     let imp = $state(createImportModel());
     let sync = $state(createSyncModel());
+
+    // Serialized preference writes: every patch merges against the
+    // latest acknowledged snapshot, so rapid toggles cannot revert
+    // each other. Folder picker/clear results assign outside the
+    // sequence and are adopted as merge bases instead.
+    let settingsCommit = null;
 
     // One notification slot per section: a new notify replaces the previous one in place.
     const toMinutes = (secs) => Math.max(1, Math.round(secs / 60));
@@ -97,7 +103,7 @@
         security.busy = true;
         let unlisten = () => {};
         try {
-            unlisten = await listen('rotation-started', () => (security.rotating = true));
+            unlisten = await api.onRotationStarted(() => (security.rotating = true));
             const key = await api.vaultRotateMasterKey(security.curPass);
             if (key === null) {
                 notify(EVENT_TYPE.INFO, 'Master key unchanged.');
@@ -159,11 +165,12 @@
             const outcome = which === 'json' ? await api.importJson() : await api.importMarkdown();
             if (outcome) {
                 let message = `Imported ${outcome.entries} entries and ${outcome.attachments} attachments.`;
+                if (outcome.folders > 0) message += ` ${outcome.folders} folders.`;
                 if (outcome.skippedEntries > 0 || outcome.skippedAttachments > 0) {
                     message += ` Skipped ${outcome.skippedEntries} entries and ${outcome.skippedAttachments} attachments (already present or unreadable).`;
                 }
                 notify(EVENT_TYPE.SAVED, message);
-                if (outcome.entries > 0) onImported?.();
+                if (outcome.entries > 0 || outcome.folders > 0) onImported?.();
             }
         } catch (e) {
             notify(EVENT_TYPE.ERROR, String(e) === 'locked' ? 'The diary is locked.' : somethingWrong(e));
@@ -188,12 +195,19 @@
         }
     }
 
+    // Folder results assign outside the write sequence: adopt
+    // them as merge bases so the next patch cannot clobber them.
+    function adoptSettings(next) {
+        general.settings = next;
+        settingsCommit.acknowledge(next);
+    }
+
     async function pickSync() {
         general.error = '';
         try {
             const updated = await api.syncPickFolder();
             if (updated) {
-                general.settings = updated;
+                adoptSettings(updated);
                 await loadSync();
             }
         } catch (e) {
@@ -204,7 +218,7 @@
     async function clearSync() {
         general.error = '';
         try {
-            general.settings = await api.syncClearFolder();
+            adoptSettings(await api.syncClearFolder());
             sync.pruneArm = false;
             sync.info = null;
             resetSyncReport();
@@ -262,14 +276,21 @@
     const runSyncApply = () =>
         runSync(async () => {
             const report = await api.syncApply();
-            notify(
-                EVENT_TYPE.INFO,
-                `Applied ${report.bundles_applied} of ${report.bundles_seen} bundles: ${report.entries_applied} entries, ${report.entries_conflicted} conflict copies, ${report.attachments_applied} attachments.`,
-            );
+            let summary = `Applied ${report.bundles_applied} of ${report.bundles_seen} bundles: ${report.entries_applied} entries, ${report.entries_conflicted} conflict copies, ${report.attachments_applied} attachments.`;
+            if (report.folders_applied > 0 || report.folders_conflicted > 0) {
+                summary += ` ${report.folders_applied} folders applied.`;
+            }
+            notify(EVENT_TYPE.INFO, summary);
             sync.problems = report.problems;
             sync.warnings = report.warnings;
             sync.ackAhead = report.ack_ahead;
-            if (report.entries_applied > 0) onImported?.();
+            if (
+                report.entries_applied > 0 ||
+                report.folders_applied > 0 ||
+                report.folders_conflicted > 0
+            ) {
+                onImported?.();
+            }
         });
 
     const runSyncPrune = () =>
@@ -349,6 +370,10 @@
     onMount(async () => {
         try {
             general.settings = await api.settingsGet();
+            settingsCommit = createSettingsCommit(general.settings, {
+                set: (next) => api.settingsSet(next),
+                get: () => api.settingsGet(),
+            });
             general.timeoutMin = toMinutes(general.settings.lock_timeout_secs);
             refreshTouchId();
             if (general.settings.sync_location) loadSync();
@@ -357,14 +382,23 @@
         }
     });
 
+    // Outstanding preference writes: the controls' pending
+    // state clears only when every queued write settles.
+    let pendingSaves = 0;
+
     async function saveSetting(patch, successMessage = 'Settings saved.') {
         general.error = '';
+        // The coordinator merges against the latest acknowledged
+        // snapshot at execution time.
+        pendingSaves++;
+        general.prefsSaving = true;
         try {
-            await api.settingsSet({ ...general.settings, ...patch });
-            general.settings = await api.settingsGet();
+            general.settings = await settingsCommit.save(patch);
             notify(EVENT_TYPE.SAVED, successMessage);
         } catch (e) {
             general.error = somethingWrong(e);
+        } finally {
+            general.prefsSaving = --pendingSaves > 0;
         }
     }
 
@@ -414,7 +448,7 @@
         general.error = '';
         try {
             const updated = await api.settingsPickBackupDir();
-            if (updated) general.settings = updated;
+            if (updated) adoptSettings(updated);
         } catch (e) {
             general.error = somethingWrong(e);
         }
@@ -423,7 +457,7 @@
     async function clearBackup() {
         general.error = '';
         try {
-            general.settings = await api.settingsClearBackupDir();
+            adoptSettings(await api.settingsClearBackupDir());
         } catch (e) {
             general.error = somethingWrong(e);
         }
@@ -464,6 +498,7 @@
         'sync-prune': sync.busy,
         restamp: sync.busy,
         'backup-now': !general.settings?.backup_location,
+        'save-timeout': general.prefsSaving,
     });
 
     const handlers = {

@@ -17,6 +17,10 @@
     let mainView = $state(MAIN_VIEW.WELCOME);
     let vaults = $state([]);
     let currentVault = $state(null);
+    // Workspace epoch for the diary: settings bumps it after any
+    // import or sync that changed entries, folders or tags. The
+    // diary treats a bump as "reload tree, list, calendar, day
+    // counts, tags and the visible search" — one place, no polling.
     let importTick = $state(0);
 
     async function refresh() {

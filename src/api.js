@@ -873,3 +873,13 @@ export function onVaultStatus(cb) {
 export function onLockRequested(cb) {
     return listen("lock-requested", (event) => cb(event.payload));
 }
+
+/**
+ * Fires when a master-key rotation begins, so the settings view
+ * can show progress instead of a hung button.
+ * @param {(payload: unknown) => void} cb
+ * @returns {Promise<() => void>} The unlisten function.
+ */
+export function onRotationStarted(cb) {
+    return listen("rotation-started", (event) => cb(event.payload));
+}

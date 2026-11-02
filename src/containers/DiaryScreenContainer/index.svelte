@@ -283,12 +283,23 @@
         navVersion++;
     }
 
+    // Workspace epoch (see App): bumped by settings after any
+    // import or sync that changed entries, folders or tags —
+    // folder-only changes count. The diary reloads every read
+    // model that can show those changes — tree, list, calendar,
+    // calendar-day, tags and the visible search — in this one
+    // place, never by polling. Drafts in the open editor are
+    // untouched: reconciliation only refreshes reads, never the
+    // loaded body (conflicts surface on the next save instead).
     let lastImportTick = 0;
 
     $effect(() => {
         if (importTick !== lastImportTick) {
             lastImportTick = importTick;
             navVersion++;
+            loadFolders();
+            const q = untrack(() => query.trim());
+            if (q) runSearch(q);
         }
     });
 
@@ -430,6 +441,7 @@
                         {navRestore}
                         {canGoBack}
                         {canGoForward}
+                        workspaceTick={importTick}
                         onOpenEntry={({ id }) => selectEntry(id, { push: true })}
                         onNavBack={() => goHistory(-1)}
                         onNavForward={() => goHistory(1)}
