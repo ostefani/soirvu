@@ -1,36 +1,23 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
-
 <script>
     import Checkbox from '@/components/Checkbox/index.svelte';
-    let { scopeFolderName, searchScoped, onSearchInput, query, onCheckboxChange } = $props();
-    let isFocused = $state(false);
 
-    function onFocus() {
-        isFocused = true;
-    }
-
-    function onUnFocus() {
-        isFocused = false;
-    }
-
-    $effect(() => {
-        if (isFocused) {
-        }
-    });
+    let { query, scopeFolderName, searchScoped, onQueryChange, onScopedChange } = $props();
 </script>
 
-<div class="search-block" class:isFocused>
+<div class="search-block">
     <input
         type="search"
         placeholder="Search the diary…"
         aria-label="Search the diary"
         value={query}
-        onfocus={onFocus}
-        onfocusout={onUnFocus}
-        oninput={onSearchInput} />
+        oninput={(e) => onQueryChange(e.currentTarget.value)} />
     {#if scopeFolderName}
-        <Checkbox checked={searchScoped} onchange={onCheckboxChange} label={`Only in ${scopeFolderName}`} />
+        <Checkbox
+            checked={searchScoped}
+            onchange={(e) => onScopedChange(e.currentTarget.checked)}
+            label={`Only in ${scopeFolderName}`} />
     {/if}
 </div>
 

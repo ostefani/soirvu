@@ -15,8 +15,6 @@
     padding: 16px 32px;
 }
 
-/* Hairlines everywhere: hardcoded rgba borders replaced with
-   the --border-subtle token, so the shell follows the theme. */
 .diary-head {
     display: flex;
     justify-content: space-between;
@@ -34,12 +32,12 @@
 }
 
 .dest {
-    align-self: center;
     font-size: 0.78rem;
     color: var(--color-ink-muted);
     white-space: nowrap;
 }
 
+/* Resets the heading's uppercase styling for the inline qualifier. */
 .vault-wide {
     font-weight: 400;
     text-transform: none;
@@ -56,8 +54,6 @@
     flex: 1;
     min-height: 0;
     margin-top: 16px;
-    margin-bottom: 0;
-    height: 100%;
 }
 
 .diary-body aside {
@@ -65,7 +61,6 @@
     flex-shrink: 0;
     overflow-y: auto;
     box-shadow: 16px 0 0 0 var(--separator-shadow);
-
 }
 
 .diary-body main {
@@ -79,9 +74,7 @@
    otherwise inherit the heavy global button chrome. */
 .on-this-day {
     width: 100%;
-    max-width: 620px;
     margin-top: 2rem;
-    text-align: left;
 }
 
 .on-this-day h3 {
@@ -110,7 +103,6 @@
 
 .otd-row:hover {
     background: var(--color-accent-soft);
-    border-color: transparent;
 }
 
 .otd-year {
@@ -130,7 +122,6 @@
 
     .diary-body aside {
         width: 100%;
-        flex-shrink: 0;
         overflow-y: visible;
         box-shadow: none;
         border-bottom: 1px solid var(--color-border-subtle);
