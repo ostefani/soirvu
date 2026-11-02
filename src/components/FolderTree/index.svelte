@@ -2,6 +2,8 @@
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     import * as api from '@/api.js';
+    import { resolveErrorText } from '@/lib/errors.js';
+    import { FOLDER_TREE_ERRORS } from './errors.js';
     import { breadcrumb, buildTree, descendantIds, flattenTree } from '@/lib/folders.js';
 
     let {
@@ -23,31 +25,10 @@
     let moveTarget = $state('root');
     let treeNote = $state('');
 
-    // Same short texts as the other screens: codes, never prose
-    // from below.
+    // Screen copy comes from the local table; unknown codes use the
+    // single shared rule instead of leaking the raw IPC code.
     function describeError(e) {
-        switch (String(e)) {
-            case 'locked':
-                return 'The vault is locked.';
-            case 'folder_exists':
-                return 'A folder with that name already exists here.';
-            case 'folder_not_found':
-                return 'That folder is gone.';
-            case 'folder_not_empty':
-                return 'Only empty folders can be removed.';
-            case 'folder_cycle':
-                return 'A folder cannot go inside itself or its subfolders.';
-            case 'folder_depth_exceeded':
-                return 'Folders cannot nest that deep.';
-            case 'revision_conflict':
-                return 'That folder changed elsewhere — try again.';
-            case 'invalid_input':
-                return 'That name was not accepted.';
-            case 'storage':
-                return 'A storage problem (storage).';
-            default:
-                return `Something went wrong (${String(e)}).`;
-        }
+        return resolveErrorText(FOLDER_TREE_ERRORS, e).text;
     }
 
     function isSelected(id) {

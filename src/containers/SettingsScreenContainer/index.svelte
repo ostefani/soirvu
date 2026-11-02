@@ -16,6 +16,14 @@
         createTouchIdModel,
     } from './settingsModel.js';
     import { ACTIONS, settingsText, fields } from './constants.js';
+    import { resolveErrorText, unknownErrorText } from '@/lib/errors.js';
+    import {
+        SETTINGS_BACKUP_ERRORS,
+        SETTINGS_EXPORT_ERRORS,
+        SETTINGS_GENERAL_ERRORS,
+        SETTINGS_SECURITY_ERRORS,
+        SETTINGS_SYNC_ERRORS,
+    } from './errors.js';
     import { EVENT_TYPE } from '@/constants.js';
     import { notify, clearNotifications } from '@/components/Notification/store.svelte.js';
 
@@ -37,46 +45,21 @@
 
     // One notification slot per section: a new notify replaces the previous one in place.
     const toMinutes = (secs) => Math.max(1, Math.round(secs / 60));
-    const somethingWrong = (e) => `Something went wrong (${e}).`;
 
     // ---------- errors ----------
 
+    // Area copy lives in ./errors.js tables; unknown codes use the
+    // single shared rule instead of leaking the raw IPC code.
     function secError(e) {
-        return e === 'wrong_passphrase' ? 'Wrong current passphrase.' : somethingWrong(e);
+        return resolveErrorText(SETTINGS_SECURITY_ERRORS, e).text;
     }
 
     function expError(e) {
-        switch (String(e)) {
-            case 'wrong_passphrase':
-                return 'Wrong passphrase.';
-            case 'folder_not_empty':
-                return 'That folder is not empty — pick an empty folder for the export.';
-            case 'export_target_exists':
-                return 'That folder already contains soirvu-export.json — pick another folder.';
-            case 'locked':
-                return 'The diary is locked.';
-            default:
-                return somethingWrong(e);
-        }
+        return resolveErrorText(SETTINGS_EXPORT_ERRORS, e).text;
     }
 
     function syncError(e) {
-        switch (String(e)) {
-            case 'sync_shared_identity':
-                return 'Another copy of this diary is using this device identity — restamp this copy below to fix it.';
-            case 'sync_unreadable':
-                return 'A file in the sync folder sits at a bundle name and cannot be read — remove it there and try again.';
-            case 'sync_folder_missing':
-                return 'The sync folder is not there — is the drive mounted?';
-            case 'sync_not_configured':
-                return 'Choose a sync folder first.';
-            case 'locked':
-                return 'The diary is locked.';
-            case 'sync':
-                return 'Sync failed.';
-            default:
-                return somethingWrong(e);
-        }
+        return resolveErrorText(SETTINGS_SYNC_ERRORS, e).text;
     }
 
     // ---------- security ----------
@@ -174,7 +157,7 @@
                 if (outcome.entries > 0 || outcome.folders > 0) onImported?.();
             }
         } catch (e) {
-            notify(EVENT_TYPE.ERROR, String(e) === 'locked' ? 'The diary is locked.' : somethingWrong(e));
+            notify(EVENT_TYPE.ERROR, resolveErrorText(SETTINGS_GENERAL_ERRORS, e).text);
         } finally {
             imp.busy = false;
         }
@@ -211,7 +194,7 @@
                 await loadSync();
             }
         } catch (e) {
-            general.error = somethingWrong(e);
+            general.error = unknownErrorText(e);
         }
     }
 
@@ -226,7 +209,7 @@
             sync.info = null;
             resetSyncReport();
         } catch (e) {
-            general.error = somethingWrong(e);
+            general.error = unknownErrorText(e);
         }
     }
 
@@ -348,7 +331,7 @@
             if (e === 'touch_id_unavailable') {
                 notify(EVENT_TYPE.INFO, 'Touch ID is not available in this build.');
             } else {
-                notify(EVENT_TYPE.ERROR, somethingWrong(e));
+                notify(EVENT_TYPE.ERROR, unknownErrorText(e));
             }
         } finally {
             touchId.busy = false;
@@ -362,7 +345,7 @@
             await refreshTouchId();
             notify(EVENT_TYPE.UPDATED, 'Touch ID is off for this diary.');
         } catch (e) {
-            notify(EVENT_TYPE.ERROR, somethingWrong(e));
+            notify(EVENT_TYPE.ERROR, unknownErrorText(e));
         } finally {
             touchId.busy = false;
         }
@@ -381,7 +364,7 @@
             refreshTouchId();
             if (general.settings.sync_location) loadSync();
         } catch (e) {
-            general.error = somethingWrong(e);
+            general.error = unknownErrorText(e);
         }
     });
 
@@ -399,7 +382,7 @@
             general.settings = await settingsCommit.save(patch);
             notify(EVENT_TYPE.SAVED, successMessage);
         } catch (e) {
-            general.error = somethingWrong(e);
+            general.error = unknownErrorText(e);
         } finally {
             general.prefsSaving = --pendingSaves > 0;
         }
@@ -432,18 +415,12 @@
         general.timeoutMin = value === '' ? null : Number(value);
     };
 
-    const backupErrors = {
-        backup_unavailable: 'The backup folder is not available.',
-        vault_mismatch:
-            'The open vault no longer matches this folder. Lock and re-open it, then try again.',
-    };
-
     async function backUpNow() {
         general.error = '';
         try {
             notify(EVENT_TYPE.SAVED, `Backed up to ${await api.backupNow()}.`);
         } catch (e) {
-            general.error = Object.hasOwn(backupErrors, e) ? backupErrors[e] : somethingWrong(e);
+            general.error = resolveErrorText(SETTINGS_BACKUP_ERRORS, e).text;
         }
     }
 
@@ -457,7 +434,7 @@
                 });
             }
         } catch (e) {
-            general.error = somethingWrong(e);
+            general.error = unknownErrorText(e);
         }
     }
 
@@ -469,7 +446,7 @@
                 backup_location: cleared.backup_location,
             });
         } catch (e) {
-            general.error = somethingWrong(e);
+            general.error = unknownErrorText(e);
         }
     }
 

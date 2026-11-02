@@ -3,6 +3,9 @@
 <script>
     import { onDestroy, untrack } from 'svelte';
     import * as api from '@/api.js';
+    import { resolveErrorText } from '@/lib/errors.js';
+    import { DIARY_ERRORS } from './errors.js';
+    import { createNavigator } from '@/lib/navigation.js';
     import { createRequestOwner } from '@/lib/request-owner.js';
     import { clearBacklinkCache } from '@/lib/links.js';
     import { searchScopeKey, shouldReissueSearch } from '@/lib/scope.js';
@@ -20,11 +23,19 @@
     let listDate = $state(null);
     let navVersion = $state(0);
     let onThisDay = $state([]);
-    // In-memory navigation history: entry id plus the context to
-    // restore (folder scope, search, date, selection, list scroll).
-    // Cleared on unmount (lock) and on vault switch below.
-    let history = $state([]);
-    let histIndex = $state(-1);
+    // Entry navigation history lives in the coordinator: pushes,
+    // replacements, back, forward, reopening and disposal. The
+    // flags below mirror it for the template; snapshots duplicate
+    // the visible filter state on purpose — that is what history
+    // restores. Cleared on unmount (lock) and on vault switch.
+    let canGoBack = $state(false);
+    let canGoForward = $state(false);
+    const nav = createNavigator({
+        onChange: () => {
+            canGoBack = nav.canGoBack;
+            canGoForward = nav.canGoForward;
+        },
+    });
     let navRestore = $state(null);
     let editorRef = $state(null);
     let mainEl = $state(null);
@@ -127,8 +138,7 @@
     let error = $state('');
     let creating = $state(false);
 
-    const canGoBack = $derived(histIndex > 0);
-    const canGoForward = $derived(histIndex < history.length - 1);
+    // Back/forward availability mirrors the coordinator above.
 
     // Session lifecycle: the first run starts the session's reads;
     // a re-run means the vault changed, so outstanding reads retire
@@ -141,8 +151,7 @@
     let sessionStarted = false;
     $effect(() => {
         void vault?.id;
-        history = [];
-        histIndex = -1;
+        nav.reset();
         navRestore = null;
         if (sessionStarted) {
             searchOwner.invalidate();
@@ -157,21 +166,19 @@
         return () => clearBacklinkCache();
     });
 
-    function pushHistory() {
-        if (!selectedId) return;
-        history = [
-            ...history.slice(0, histIndex + 1),
-            {
-                entryId: selectedId,
-                scope: scopeSel,
-                scoped: searchScoped,
-                query,
-                date: listDate,
-                sel: editorRef?.navCapture?.() ?? null,
-                scroll: mainEl?.scrollTop ?? 0,
-            },
-        ];
-        histIndex = history.length - 1;
+    // Snapshots the visible state the coordinator restores on
+    // back/forward. The coordinator owns the stack; this only
+    // captures what the UI currently shows.
+    function captureSnapshot() {
+        return {
+            entryId: selectedId,
+            scope: scopeSel,
+            scoped: searchScoped,
+            query,
+            date: listDate,
+            sel: editorRef?.navCapture?.() ?? null,
+            scroll: mainEl?.scrollTop ?? 0,
+        };
     }
 
     // The scope the last search ran under. The effect below
@@ -207,12 +214,14 @@
 
     async function selectEntry(id, opts = {}) {
         if (id === selectedId && !opts.restore) return true;
-        // The open entry settles uploads and flushes first; a
-        // failed save stays put with its error showing — and the
-        // history only records navigations that happen.
+        // A select that resolves after a newer select began is
+        // obsolete: it records and applies nothing. The open entry
+        // settles uploads and flushes first; a failed save stays
+        // put with its error showing.
+        const token = nav.beginSelect();
         const ok = (await editorRef?.flushForNavigation?.()) ?? true;
-        if (!ok) return false;
-        if (opts.push) pushHistory();
+        if (!ok || !nav.isLiveSelect(token)) return false;
+        if (opts.push && selectedId) nav.push(captureSnapshot());
         if (opts.context) {
             scopeSel = opts.context.scope;
             searchScoped = opts.context.scoped && opts.context.scope.kind === 'folder';
@@ -224,6 +233,7 @@
         if (opts.context && opts.context.query) {
             clearTimeout(searchTimer);
             await runSearch(opts.context.query);
+            if (!nav.isLiveSelect(token)) return false;
         }
         if (navRestore && mainEl) {
             // The remounted editor loads async; settle the scroll
@@ -239,29 +249,24 @@
     }
 
     async function goHistory(delta) {
-        const next = histIndex + delta;
-        if (next < 0 || next >= history.length) return;
-        const h = history[next];
-        const ok = await selectEntry(h.entryId, {
-            restore: { sel: h.sel, scroll: h.scroll },
-            context: { scope: h.scope, scoped: h.scoped, query: h.query, date: h.date },
+        const target = nav.peek(delta);
+        if (!target) return;
+        const ok = await selectEntry(target.entryId, {
+            restore: { sel: target.sel, scroll: target.scroll },
+            context: {
+                scope: target.scope,
+                scoped: target.scoped,
+                query: target.query,
+                date: target.date,
+            },
         });
-        if (ok) histIndex = next;
+        if (ok) nav.arriveAt(target);
     }
 
-    // Same short texts as the other screens: codes, never prose
-    // from below.
+    // Screen copy comes from the local table; unknown codes use the
+    // single shared rule instead of leaking the raw IPC code.
     function describeError(e) {
-        switch (String(e)) {
-            case 'locked':
-                return 'The vault is locked.';
-            case 'invalid_input':
-                return 'That was not accepted (invalid_input).';
-            case 'storage':
-                return 'A storage problem (storage).';
-            default:
-                return `Something went wrong (${String(e)}).`;
-        }
+        return resolveErrorText(DIARY_ERRORS, e).text;
     }
 
     async function loadOnThisDay() {
@@ -375,6 +380,7 @@
         searchOwner.dispose();
         folderOwner.dispose();
         dayOwner.dispose();
+        nav.dispose();
     });
 </script>
 

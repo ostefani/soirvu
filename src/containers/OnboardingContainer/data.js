@@ -3,6 +3,7 @@
 /**
  * OnboardingContainer — UI text data and messages.
  */
+import { unknownErrorText } from '@/lib/errors.js';
 
 export const onboardingText = {
     // Step 1: Choose Folder
@@ -50,5 +51,5 @@ export const onboardingText = {
     },
 
     /** @param {string} code */
-    unknownError: (code) => `Something went wrong (${code}).`,
+    unknownError: (code) => unknownErrorText(code),
 };

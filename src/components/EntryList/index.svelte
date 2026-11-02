@@ -4,6 +4,8 @@
     import { onDestroy } from 'svelte';
     import * as api from '@/api.js';
     import Checkbox from '@/components/Checkbox/index.svelte';
+    import { resolveErrorText } from '@/lib/errors.js';
+    import { ENTRY_LIST_ERRORS } from './errors.js';
     import { breadcrumb } from '@/lib/folders.js';
     import { nextCursorAfterPage } from '@/lib/list.js';
     import { createRequestOwner } from '@/lib/request-owner.js';
@@ -50,19 +52,10 @@
         tagOwner.dispose();
     });
 
-    // Same short texts as the other screens: codes, never prose
-    // from below.
+    // Screen copy comes from the local table; unknown codes use the
+    // single shared rule instead of leaking the raw IPC code.
     function describeError(e) {
-        switch (String(e)) {
-            case 'locked':
-                return 'The vault is locked.';
-            case 'invalid_input':
-                return 'That was not accepted (invalid_input).';
-            case 'storage':
-                return 'A storage problem (storage).';
-            default:
-                return `Something went wrong (${String(e)}).`;
-        }
+        return resolveErrorText(ENTRY_LIST_ERRORS, e).text;
     }
 
     async function load(reset) {
