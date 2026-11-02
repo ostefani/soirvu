@@ -86,7 +86,7 @@
         model.opBusy = true;
         try {
             if (await api.vaultRelocate(vault.id)) {
-                onVaultsChanged();
+                await onVaultsChanged();
             }
         } catch (error) {
             model.error = describeError(error);
@@ -101,7 +101,7 @@
         try {
             await api.vaultForget(vault.id);
             model.forgetArmed = null;
-            onVaultsChanged();
+            await onVaultsChanged();
         } catch (error) {
             model.error = describeError(error);
         } finally {
@@ -127,7 +127,7 @@
                 if (picked.warning) {
                     model.note = FILESYSTEM_WARNING_MESSAGES[picked.warning] ?? '';
                 }
-                onVaultsChanged();
+                await onVaultsChanged();
             }
         } catch (error) {
             model.error = describeError(error);
@@ -147,7 +147,7 @@
             model.forkSecret = '';
             model.forkNewId = forked.vault_id;
             model.forkKey = forked.recovery_key;
-            onVaultsChanged();
+            await onVaultsChanged();
         } catch (error) {
             model.forkError = describeError(error);
         } finally {
@@ -213,7 +213,13 @@
 
     const handlers = {
         select: (vault) => (model.selectedId = vault.id),
-        refresh: () => onVaultsChanged(),
+        refresh: async () => {
+            try {
+                await onVaultsChanged();
+            } catch (error) {
+                model.error = describeError(error);
+            }
+        },
         relocate,
         forget,
         armForget: (vault) => (model.forgetArmed = vault.id),
