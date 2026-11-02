@@ -17,7 +17,7 @@ import {
     wrapBlocks,
 } from "./commands.js";
 import { cursorMarks, TextSelection, selectionNear } from "./state.js";
-import { parseEntryTarget } from "../lib/links.js";
+import { parseEntryTarget } from "../lib/entry-target.js";
 import {
     addColumnCommand,
     addRowCommand,

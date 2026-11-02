@@ -23,8 +23,16 @@
     // counts, tags and the visible search" — one place, no polling.
     let importTick = $state(0);
 
+    // Self-guarding: status events, the boot load and the lock
+    // shortcut all fire this without awaiting it, so a backend
+    // failure must surface here instead of rejecting unobserved.
     async function refresh() {
-        vaults = await api.vaultList();
+        try {
+            vaults = await api.vaultList();
+        } catch {
+            notify(EVENT_TYPE.ERROR, applicationText.refreshFailed);
+            return;
+        }
         const openVault = vaults.find((vault) => vault.state === VAULT_STATUS.UNLOCKED);
         if (openVault) {
             currentVault = openVault;
@@ -37,7 +45,11 @@
     }
 
     async function lock() {
-        await api.vaultLock();
+        try {
+            await api.vaultLock();
+        } catch {
+            notify(EVENT_TYPE.ERROR, applicationText.lockFailed);
+        }
         await refresh();
     }
 

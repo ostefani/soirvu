@@ -12,65 +12,28 @@
 // fake an edge.
 
 import { parseMarkdown } from "../editor/markdown.js";
+import { parseEntryTarget } from "./entry-target.js";
 
-const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
-const ENTRY_HREF = new RegExp(`^entry:(${UUID})$`);
-
-/**
- * The target entry id (lowercased) when `href` is a canonical
- * vault-local link, else null. Comparison is case-insensitive
- * because imports may spell hex either way; app-generated links
- * are always literal lowercase.
- * @param {unknown} href
- * @returns {string | null}
- */
-export function parseEntryTarget(href) {
-    if (typeof href !== "string") return null;
-    const m = ENTRY_HREF.exec(href);
-    return m ? m[1].toLowerCase() : null;
-}
-
-/** Vault-local href predicate for the parser gate. */
-export function isEntryHref(href) {
-    return parseEntryTarget(href) !== null;
-}
+// Identity and classification live in the dependency-free leaf;
+// re-exported here so existing importers keep working while the
+// parser gate and editor helpers import the leaf directly.
+export { classifyHref, isEntryHref, parseEntryTarget } from "./entry-target.js";
 
 /**
- * Never broadens external permissions: only http(s)/mailto
- * leave the diary, only `attachment:` reaches the asset
- * protocol, only canonical `entry:` routes in-vault.
- * @param {unknown} href
- * @returns {"entry" | "external" | "attachment" | "other"}
- */
-export function classifyHref(href) {
-    if (typeof href !== "string" || href === "") return "other";
-    if (isEntryHref(href)) return "entry";
-    if (/^(https?:\/\/|mailto:)/i.test(href)) return "external";
-    if (/^attachment:/i.test(href)) return "attachment";
-    return "other";
-}
-
-/**
- * Entry ids linked from a body, in document order, deduplicated.
- * Images, code and raw blocks are nodes or unmarked text, never
- * link marks, so they contribute nothing by construction; inline
+ * One traversal of an already-parsed document producing every
+ * view the callers need: refs with labels and exact ranges in
+ * document order (adjacent text sharing one link mark merges),
+ * ordered unique target ids, and target membership. Images,
+ * code and raw blocks are nodes or unmarked text, never link
+ * marks, so they contribute nothing by construction; inline
  * code is additionally skipped defensively.
- * @param {string} markdown
- * @returns {string[]}
+ * @param {import("prosemirror-model").ProseMirrorNode} doc
+ * @returns {{ refs: { id: string, label: string, from: number, to: number }[], ids: string[], has: (id: string) => boolean }}
  */
-/**
- * Every entry link in a body with its label and exact document
- * range, in document order. Adjacent text sharing one link mark
- * merges into a single ref. The ranges slice their labels out
- * of the parsed document, so panel actions (navigate, remove)
- * anchor exactly. Images, code and raw blocks contribute
- * nothing, by construction and defensively, as above.
- * @param {string} markdown
- * @returns {{ id: string, label: string, from: number, to: number }[]}
- */
-export function outgoingEntryRefs(markdown) {
-    const doc = parseMarkdown(markdown ?? "");
+export function analyzeEntryLinks(doc) {
     const refs = [];
+    const seen = new Set();
+    const ids = [];
     doc.descendants((node, pos) => {
         if (!node.isText) return true;
         if (node.marks.some((m) => m.type.name === "code")) return false;
@@ -87,9 +50,41 @@ export function outgoingEntryRefs(markdown) {
         } else {
             refs.push({ id, label: node.text ?? "", from: start, to: end });
         }
+        if (!seen.has(id)) {
+            seen.add(id);
+            ids.push(id);
+        }
         return false;
     });
-    return refs;
+    return {
+        refs,
+        ids,
+        has: (id) => {
+            const key = parseEntryTarget(`entry:${id ?? ""}`);
+            return key !== null && seen.has(key);
+        },
+    };
+}
+
+/**
+ * Entry ids linked from a body, in document order, deduplicated.
+ * @param {string} markdown
+ * @returns {string[]}
+ */
+export function outgoingEntryLinks(markdown) {
+    return analyzeEntryLinks(parseMarkdown(markdown ?? "")).ids;
+}
+
+/**
+ * Every entry link in a body with its label and exact document
+ * range, in document order. The ranges slice their labels out
+ * of the parsed document, so panel actions (navigate, remove)
+ * anchor exactly.
+ * @param {string} markdown
+ * @returns {{ id: string, label: string, from: number, to: number }[]}
+ */
+export function outgoingEntryRefs(markdown) {
+    return analyzeEntryLinks(parseMarkdown(markdown ?? "")).refs;
 }
 
 /**
@@ -102,21 +97,7 @@ export function outgoingEntryRefs(markdown) {
 export function linksToTarget(markdown, targetId) {
     const want = parseEntryTarget(`entry:${targetId ?? ""}`);
     if (want === null) return false;
-    const doc = parseMarkdown(markdown ?? "");
-    let found = false;
-    doc.descendants((node) => {
-        if (found) return false;
-        if (!node.isText) return true;
-        if (node.marks.some((m) => m.type.name === "code")) return false;
-        for (const mark of node.marks) {
-            if (mark.type.name === "link" && parseEntryTarget(mark.attrs.href) === want) {
-                found = true;
-                return false;
-            }
-        }
-        return false;
-    });
-    return found;
+    return analyzeEntryLinks(parseMarkdown(markdown ?? "")).has(want);
 }
 
 /**
@@ -244,22 +225,4 @@ export function verifyBacklinkCandidates(targetId, candidates) {
     return { verified, pending };
 }
 
-export function outgoingEntryLinks(markdown) {
-    const doc = parseMarkdown(markdown ?? "");
-    const ids = [];
-    const seen = new Set();
-    doc.descendants((node) => {
-        if (!node.isText) return true;
-        if (node.marks.some((m) => m.type.name === "code")) return false;
-        for (const mark of node.marks) {
-            if (mark.type.name !== "link") continue;
-            const id = parseEntryTarget(mark.attrs.href);
-            if (id !== null && !seen.has(id)) {
-                seen.add(id);
-                ids.push(id);
-            }
-        }
-        return false;
-    });
-    return ids;
-}
+

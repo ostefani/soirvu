@@ -4,6 +4,8 @@
     import * as api from '@/api.js';
     import Button from '@/components/Button/index.svelte';
     import NoteComponent from '@/components/NoteComponent/index.svelte';
+    import ErrorComponent from '@/components/ErrorComponent/index.svelte';
+    import { unknownErrorText } from '@/lib/errors.js';
     import OnboardingContainer from '@/containers/OnboardingContainer/index.svelte';
     import LockScreenContainer from '@/containers/LockScreenContainer/index.svelte';
     import { MAIN_VIEW } from '@/constants.js';
@@ -13,6 +15,7 @@
     // Follows initialView, but can be overridden locally (assignable $derived, Svelte 5.25+).
     let view = $derived(initialView);
     let welcomeNote = $state('');
+    let welcomeError = $state('');
 
     const FS_WARNINGS = {
         cloud_sync:
@@ -23,10 +26,15 @@
 
     async function openExisting() {
         welcomeNote = '';
-        const picked = await api.vaultPickFolder('open');
-        if (picked) {
-            welcomeNote = FS_WARNINGS[picked.warning] ?? '';
-            await onVaultsChanged();
+        welcomeError = '';
+        try {
+            const picked = await api.vaultPickFolder('open');
+            if (picked) {
+                welcomeNote = FS_WARNINGS[picked.warning] ?? '';
+                await onVaultsChanged();
+            }
+        } catch (e) {
+            welcomeError = unknownErrorText(e);
         }
     }
 
@@ -46,6 +54,7 @@
         <Button label="Create a new diary" handler={showCreate} />
         <Button label="Open an existing diary folder…" kind="default" handler={openExisting} />
         <NoteComponent text={welcomeNote} />
+        <ErrorComponent text={welcomeError} />
     </div>
 {:else if view === MAIN_VIEW.CREATE}
     <OnboardingContainer onDone={onVaultsChanged} onCancel={cancelCreate} />

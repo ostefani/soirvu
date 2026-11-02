@@ -8,4 +8,6 @@
 
 export const applicationText = {
     bootMessage: 'Starting…',
+    refreshFailed: 'Could not load the diary list.',
+    lockFailed: 'Could not lock the diary.',
 };

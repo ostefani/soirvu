@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
-    import { onMount } from 'svelte';
+    import { onDestroy, onMount } from 'svelte';
     import * as api from '@/api.js';
     import { createSettingsCommit } from '@/lib/settings-commit.js';
     import Button from '@/components/Button/index.svelte';
@@ -28,6 +28,13 @@
     import { notify, clearNotifications } from '@/components/Notification/store.svelte.js';
 
     let { onBack, onImported = null } = $props();
+
+    // Completions must not repopulate abandoned models,
+    // notifications or secret/result fields after disposal. The
+    // persisting writes themselves always run to completion; only
+    // the local model refresh and feedback are skipped.
+    let alive = true;
+    onDestroy(() => (alive = false));
 
     let general = $state(createGeneralModel());
     let security = $state(createSecurityModel());
@@ -69,6 +76,7 @@
         security.busy = true;
         try {
             await api.vaultChangePassphrase(security.curPass, security.newPass);
+            if (!alive) return;
             security.curPass = security.newPass;
             security.newPass = '';
             security.newPass2 = '';
@@ -77,6 +85,7 @@
                 'Passphrase changed. The diary stays open — the new passphrase applies at the next unlock.',
             );
         } catch (e) {
+            if (!alive) return;
             notify(EVENT_TYPE.ERROR, secError(e));
         } finally {
             security.busy = false;
@@ -89,6 +98,7 @@
         try {
             unlisten = await api.onRotationStarted(() => (security.rotating = true));
             const key = await api.vaultRotateMasterKey(security.curPass);
+            if (!alive) return;
             if (key === null) {
                 notify(EVENT_TYPE.INFO, 'Master key unchanged.');
             } else {
@@ -101,6 +111,7 @@
                 );
             }
         } catch (e) {
+            if (!alive) return;
             notify(EVENT_TYPE.ERROR, secError(e));
         } finally {
             unlisten();
@@ -112,9 +123,12 @@
     async function regenerateRecovery() {
         security.busy = true;
         try {
-            security.newRecoveryKey = await api.vaultRegenerateRecovery(security.curPass);
+            const recovered = await api.vaultRegenerateRecovery(security.curPass);
+            if (!alive) return;
+            security.newRecoveryKey = recovered;
             security.curPass = '';
         } catch (e) {
+            if (!alive) return;
             security.newRecoveryKey = '';
             notify(EVENT_TYPE.ERROR, secError(e));
         } finally {
@@ -128,6 +142,7 @@
         exp.busy = true;
         try {
             const outcome = which === 'json' ? await api.exportJson(exp.pass) : await api.exportMarkdown(exp.pass);
+            if (!alive) return;
             if (outcome) {
                 exp.pass = '';
                 notify(
@@ -137,6 +152,7 @@
                 );
             }
         } catch (e) {
+            if (!alive) return;
             notify(EVENT_TYPE.ERROR, expError(e));
         } finally {
             exp.busy = false;
@@ -148,15 +164,20 @@
         try {
             const outcome = which === 'json' ? await api.importJson() : await api.importMarkdown();
             if (outcome) {
+                // The workspace refresh is workspace truth: it runs
+                // even after disposal so the diary never shows stale
+                // data for an import that did happen.
+                if (outcome.entries > 0 || outcome.folders > 0) onImported?.();
+                if (!alive) return;
                 let message = `Imported ${outcome.entries} entries and ${outcome.attachments} attachments.`;
                 if (outcome.folders > 0) message += ` ${outcome.folders} folders.`;
                 if (outcome.skippedEntries > 0 || outcome.skippedAttachments > 0) {
                     message += ` Skipped ${outcome.skippedEntries} entries and ${outcome.skippedAttachments} attachments (already present or unreadable).`;
                 }
                 notify(EVENT_TYPE.SAVED, message);
-                if (outcome.entries > 0 || outcome.folders > 0) onImported?.();
             }
         } catch (e) {
+            if (!alive) return;
             notify(EVENT_TYPE.ERROR, resolveErrorText(SETTINGS_GENERAL_ERRORS, e).text);
         } finally {
             imp.busy = false;
@@ -173,8 +194,11 @@
 
     async function loadSync() {
         try {
-            sync.info = await api.syncOverview();
+            const info = await api.syncOverview();
+            if (!alive) return;
+            sync.info = info;
         } catch {
+            if (!alive) return;
             sync.info = null;
         }
     }
@@ -188,12 +212,15 @@
         try {
             const updated = await api.syncPickFolder();
             if (updated) {
-                general.settings = await settingsCommit.save({
+                const next = await settingsCommit.save({
                     sync_location: updated.sync_location,
                 });
+                if (!alive) return;
+                general.settings = next;
                 await loadSync();
             }
         } catch (e) {
+            if (!alive) return;
             general.error = unknownErrorText(e);
         }
     }
@@ -202,13 +229,16 @@
         general.error = '';
         try {
             const cleared = await api.syncClearFolder();
-            general.settings = await settingsCommit.save({
+            const next = await settingsCommit.save({
                 sync_location: cleared.sync_location,
             });
+            if (!alive) return;
+            general.settings = next;
             sync.pruneArm = false;
             sync.info = null;
             resetSyncReport();
         } catch (e) {
+            if (!alive) return;
             general.error = unknownErrorText(e);
         }
     }
@@ -216,8 +246,11 @@
     async function dismissAckAhead() {
         sync.busy = true;
         try {
-            sync.info = await api.syncDismissAckAhead();
+            const info = await api.syncDismissAckAhead();
+            if (!alive) return;
+            sync.info = info;
         } catch (e) {
+            if (!alive) return;
             sync.problems = [syncError(e)];
         } finally {
             sync.busy = false;
@@ -231,6 +264,7 @@
             await task();
             await loadSync();
         } catch (e) {
+            if (!alive) return;
             notify(EVENT_TYPE.ERROR, syncError(e));
         } finally {
             sync.busy = false;
@@ -240,6 +274,7 @@
     const runSyncEmit = () =>
         runSync(async () => {
             const bundle = await api.syncEmit();
+            if (!alive) return;
             notify(
                 EVENT_TYPE.INFO,
                 bundle
@@ -251,6 +286,7 @@
     const runSyncReemit = () =>
         runSync(async () => {
             const bundle = await api.syncReemit();
+            if (!alive) return;
             notify(
                 EVENT_TYPE.INFO,
                 bundle
@@ -262,6 +298,16 @@
     const runSyncApply = () =>
         runSync(async () => {
             const report = await api.syncApply();
+            // Same workspace-truth rule as imports: the diary
+            // refresh runs even after disposal.
+            if (
+                report.entries_applied > 0 ||
+                report.folders_applied > 0 ||
+                report.folders_conflicted > 0
+            ) {
+                onImported?.();
+            }
+            if (!alive) return;
             let summary = `Applied ${report.bundles_applied} of ${report.bundles_seen} bundles: ${report.entries_applied} entries, ${report.entries_conflicted} conflict copies, ${report.attachments_applied} attachments.`;
             if (report.folders_applied > 0 || report.folders_conflicted > 0) {
                 summary += ` ${report.folders_applied} folders applied.`;
@@ -270,19 +316,13 @@
             sync.problems = report.problems;
             sync.warnings = report.warnings;
             sync.ackAhead = report.ack_ahead;
-            if (
-                report.entries_applied > 0 ||
-                report.folders_applied > 0 ||
-                report.folders_conflicted > 0
-            ) {
-                onImported?.();
-            }
         });
 
     const runSyncPrune = () =>
         runSync(async () => {
             try {
                 const report = await api.syncPrune();
+                if (!alive) return;
                 notify(
                     EVENT_TYPE.INFO,
                     report.covered_through > 0
@@ -298,6 +338,7 @@
         sync.busy = true;
         try {
             const id = await api.restampDevice();
+            if (!alive) return;
             sync.restampArm = false;
             notify(
                 EVENT_TYPE.UPDATED,
@@ -305,6 +346,7 @@
             );
             await loadSync();
         } catch (e) {
+            if (!alive) return;
             notify(EVENT_TYPE.ERROR, syncError(e));
         } finally {
             sync.busy = false;
@@ -315,8 +357,11 @@
 
     async function refreshTouchId() {
         try {
-            touchId.status = await api.touchIdStatus(null);
+            const status = await api.touchIdStatus(null);
+            if (!alive) return;
+            touchId.status = status;
         } catch {
+            if (!alive) return;
             touchId.status = null;
         }
     }
@@ -326,8 +371,10 @@
         try {
             await api.touchIdEnroll();
             await refreshTouchId();
+            if (!alive) return;
             notify(EVENT_TYPE.UPDATED, 'Touch ID is on for this diary.');
         } catch (e) {
+            if (!alive) return;
             if (e === 'touch_id_unavailable') {
                 notify(EVENT_TYPE.INFO, 'Touch ID is not available in this build.');
             } else {
@@ -343,8 +390,10 @@
         try {
             await api.touchIdDisable();
             await refreshTouchId();
+            if (!alive) return;
             notify(EVENT_TYPE.UPDATED, 'Touch ID is off for this diary.');
         } catch (e) {
+            if (!alive) return;
             notify(EVENT_TYPE.ERROR, unknownErrorText(e));
         } finally {
             touchId.busy = false;
@@ -355,7 +404,9 @@
 
     onMount(async () => {
         try {
-            general.settings = await api.settingsGet();
+            const settings = await api.settingsGet();
+            if (!alive) return;
+            general.settings = settings;
             settingsCommit = createSettingsCommit(general.settings, {
                 set: (next) => api.settingsSet(next),
                 get: () => api.settingsGet(),
@@ -364,6 +415,7 @@
             refreshTouchId();
             if (general.settings.sync_location) loadSync();
         } catch (e) {
+            if (!alive) return;
             general.error = unknownErrorText(e);
         }
     });
@@ -379,9 +431,14 @@
         pendingSaves++;
         general.prefsSaving = true;
         try {
-            general.settings = await settingsCommit.save(patch);
+            // The save itself always persists; only the local echo
+            // and feedback are skipped after disposal.
+            const next = await settingsCommit.save(patch);
+            if (!alive) return;
+            general.settings = next;
             notify(EVENT_TYPE.SAVED, successMessage);
         } catch (e) {
+            if (!alive) return;
             general.error = unknownErrorText(e);
         } finally {
             general.prefsSaving = --pendingSaves > 0;
@@ -418,8 +475,11 @@
     async function backUpNow() {
         general.error = '';
         try {
-            notify(EVENT_TYPE.SAVED, `Backed up to ${await api.backupNow()}.`);
+            const target = await api.backupNow();
+            if (!alive) return;
+            notify(EVENT_TYPE.SAVED, `Backed up to ${target}.`);
         } catch (e) {
+            if (!alive) return;
             general.error = resolveErrorText(SETTINGS_BACKUP_ERRORS, e).text;
         }
     }
@@ -429,11 +489,14 @@
         try {
             const updated = await api.settingsPickBackupDir();
             if (updated) {
-                general.settings = await settingsCommit.save({
+                const next = await settingsCommit.save({
                     backup_location: updated.backup_location,
                 });
+                if (!alive) return;
+                general.settings = next;
             }
         } catch (e) {
+            if (!alive) return;
             general.error = unknownErrorText(e);
         }
     }
@@ -442,10 +505,13 @@
         general.error = '';
         try {
             const cleared = await api.settingsClearBackupDir();
-            general.settings = await settingsCommit.save({
+            const next = await settingsCommit.save({
                 backup_location: cleared.backup_location,
             });
+            if (!alive) return;
+            general.settings = next;
         } catch (e) {
+            if (!alive) return;
             general.error = unknownErrorText(e);
         }
     }
@@ -493,7 +559,14 @@
         'change-passphrase': changePassphrase,
         'regenerate-recovery': regenerateRecovery,
         rotate: rotateMasterKey,
-        'rotate-done': () => api.vaultLock(),
+        'rotate-done': async () => {
+            try {
+                await api.vaultLock();
+            } catch (e) {
+                if (!alive) return;
+                notify(EVENT_TYPE.ERROR, secError(e));
+            }
+        },
         'export-markdown': () => runExport('markdown'),
         'export-json': () => runExport('json'),
         'import-markdown': () => runImport('markdown'),

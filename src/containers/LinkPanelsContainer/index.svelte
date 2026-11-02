@@ -78,16 +78,19 @@
     let resolving = $state(false);
     let resolveError = $state('');
 
-    async function resolveTargets() {
+    // Takes the already-computed target ids when the caller holds a
+    // current analysis (expand, post-save); parses fresh when the
+    // body may have moved underneath the display (workspace tick).
+    async function resolveTargets(ids = null) {
         const mine = ++metaRun;
         resolving = true;
         resolveError = '';
         try {
-            const ids = [...new Set(outgoingEntryRefs(readBody()).map((r) => r.id))];
+            const list = ids ?? [...new Set(outgoingEntryRefs(readBody()).map((r) => r.id))];
             const next = {};
-            for (let i = 0; i < ids.length; i += BATCH) {
+            for (let i = 0; i < list.length; i += BATCH) {
                 const chunk = await Promise.all(
-                    ids.slice(i, i + BATCH).map(async (id) => {
+                    list.slice(i, i + BATCH).map(async (id) => {
                         try {
                             const e = await api.entryGet(id);
                             return [id, { status: 'ok', title: e.title, date: e.entry_date }];
@@ -111,9 +114,13 @@
     $effect(() => {
         // Rev rides along so a save re-resolves visible metadata.
         // Progress writes below never retrigger this: only rev and
-        // the disclosure are tracked.
+        // the disclosure are tracked. Derived analyses flush
+        // before effects, so distinctTargets already reflects the
+        // saved body and no second parse is needed. Read untracked:
+        // subscribing would re-resolve on every removeTarget
+        // refresh, which the previous shape never did.
         void rev;
-        if (showOut) resolveTargets();
+        if (showOut) resolveTargets(untrack(() => distinctTargets));
         return () => {
             metaRun++;
         };

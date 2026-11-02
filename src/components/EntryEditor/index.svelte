@@ -3,7 +3,7 @@
 <script>
     import { onMount, untrack } from 'svelte';
     import { createEditor } from '@/editor/index.js';
-    import { classifyHref, parseEntryTarget } from '@/lib/links.js';
+    import { classifyHref, parseEntryTarget } from '@/lib/entry-target.js';
     import EditorToolbar from '@/components/EditorToolbar/index.svelte';
     import LinkPanelsContainer from '@/containers/LinkPanelsContainer/index.svelte';
     import LinkPickerContainer from '@/containers/LinkPickerContainer/index.svelte';

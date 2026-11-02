@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import { parseMarkdown, serializeMarkdown } from "../../editor/index.js";
 import {
+    analyzeEntryLinks,
     classifyHref,
     clearBacklinkCache,
     isEntryHref,
@@ -274,6 +275,42 @@ test("shouldYield fires on a spent budget", () => {
     assert.equal(shouldYield(108, 100, 8), true);
     assert.equal(shouldYield(107, 100, 8), false);
     assert.equal(shouldYield(100, 100, 8), false);
+});
+
+test("one analysis yields refs, ordered ids and membership", () => {
+    const src = `See [one](entry:${A}) and [two](entry:${B}) and [one again](entry:${A}).\n\n\`[fake](entry:${A})\`\n\n![img](entry:${B})\n\n[bad](entry:${A}extra)\n`;
+    const analysis = analyzeEntryLinks(parseMarkdown(src));
+    assert.deepEqual(
+        analysis.refs.map((r) => [r.id, r.label]),
+        [
+            [A, "one"],
+            [B, "two"],
+            [A, "one again"],
+        ],
+    );
+    assert.deepEqual(analysis.ids, [A, B]);
+    assert.ok(analysis.has(A));
+    assert.ok(analysis.has(A.toUpperCase()));
+    assert.ok(!analysis.has("01900000-0000-7000-8000-000000000099"));
+    assert.ok(!analysis.has("not-a-uuid"));
+});
+
+test("adjacent runs merge, separated runs stay separate", () => {
+    const src = `[a](entry:${A})[b](entry:${A}) and [c](entry:${A})`;
+    const analysis = analyzeEntryLinks(parseMarkdown(src));
+    assert.equal(analysis.refs.length, 2);
+    assert.equal(analysis.refs[0].label, "ab");
+    assert.equal(analysis.refs[0].to, analysis.refs[1].from - " and ".length);
+    assert.equal(analysis.refs[1].label, "c");
+    assert.deepEqual(analysis.ids, [A]);
+});
+
+test("formatting around links counts; reference definitions resolve", () => {
+    const src = `**[bold](entry:${A})** and *[em](entry:${B})* plus [ref][t].\n\n[t]: entry:${A}\n`;
+    const analysis = analyzeEntryLinks(parseMarkdown(src));
+    assert.deepEqual(analysis.ids, [A, B]);
+    assert.ok(analysis.has(B));
+    assert.equal(analysis.refs.length, 3);
 });
 
 test("only a confirmed-missing entry skips silently", () => {

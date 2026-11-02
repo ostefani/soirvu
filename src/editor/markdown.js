@@ -25,7 +25,7 @@ import {
 } from "prosemirror-markdown";
 
 import { schema } from "./schema.js";
-import { isEntryHref } from "../lib/links.js";
+import { isEntryHref } from "../lib/entry-target.js";
 
 const RAW_INFO = "soirvu-raw";
 
