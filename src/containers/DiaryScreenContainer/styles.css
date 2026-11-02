@@ -33,12 +33,6 @@
     gap: 8px;
 }
 
-.search-block {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
 .dest {
     align-self: center;
     font-size: 0.78rem;

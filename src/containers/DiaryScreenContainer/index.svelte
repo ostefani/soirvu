@@ -14,7 +14,7 @@
     import Calendar from '@/components/Calendar/index.svelte';
     import EntryEditor from '@/components/EntryEditor/index.svelte';
     import Button from '@/components/Button/index.svelte';
-    import Checkbox from '@/components/Checkbox/index.svelte';
+    import SearchContainer from '@/containers/SearchContainer/index.svelte';
     import NoteComponent from '@/components/NoteComponent/index.svelte';
 
     let { vault, onLock, onSettings, importTick = 0 } = $props();
@@ -66,9 +66,7 @@
               : null,
     );
 
-    const scopeFolderName = $derived(
-        scopeSel.kind === 'folder' ? (byId.get(scopeSel.id)?.name ?? '…') : null,
-    );
+    const scopeFolderName = $derived(scopeSel.kind === 'folder' ? (byId.get(scopeSel.id)?.name ?? '…') : null);
 
     // The New-entry destination shown beside the action.
     const destName = $derived(scopeFolderName ?? 'Root');
@@ -99,14 +97,6 @@
         if (scopeSel.kind !== 'folder' && searchScoped) searchScoped = false;
     });
 
-    // A visible search follows its scope inputs: checking the box,
-    // moving between folders or flipping the subtree flag re-runs
-    // it under the new scope instead of leaving stale hits. The
-    // query text is read untracked — typing stays on the debounced
-    // path and must not fire this — and the key recorded by the
-    // search itself keeps its own completion from looping it. An
-    // active query reissues even before its first results arrive:
-    // the old request retires and the new scope gets its own.
     $effect(() => {
         const key = searchScopeKey(searchScoped, listScope);
         const q = untrack(() => query.trim());
@@ -138,16 +128,6 @@
     let error = $state('');
     let creating = $state(false);
 
-    // Back/forward availability mirrors the coordinator above.
-
-    // Session lifecycle: the first run starts the session's reads;
-    // a re-run means the vault changed, so outstanding reads retire
-    // and the session restarts. Skipping invalidation on the first
-    // run matters: effects run after onMount-style startup, and an
-    // unconditional invalidate here would discard the initial
-    // folder response and leave the tree empty until another
-    // refresh. Beginning the replacement reads in the same tick as
-    // the invalidation keeps the switch deterministic either way.
     let sessionStarted = false;
     $effect(() => {
         void vault?.id;
@@ -190,10 +170,6 @@
 
     async function runSearch(q) {
         const token = searchOwner.begin();
-        // Capture the inputs this request runs under before
-        // awaiting: the completion checks the token instead of
-        // trusting later state, so a late response cannot replace
-        // a newer query or scope.
         const scoped = searchScoped && listScope !== null;
         const wireScope = scoped ? listScope : null;
         lastSearchKey = searchScopeKey(searchScoped, listScope);
@@ -206,9 +182,7 @@
             if (!searchOwner.current(token)) return;
             results = null;
             searchNote =
-                e === 'query_too_short'
-                    ? 'Type at least 3 characters (2 for Russian).'
-                    : `Search failed (${e}).`;
+                e === 'query_too_short' ? 'Type at least 3 characters (2 for Russian).' : `Search failed (${e}).`;
         }
     }
 
@@ -357,7 +331,8 @@
         }
     }
 
-    function onSearchInput() {
+    function onSearchInput(e) {
+        query = e.currentTarget.value;
         clearTimeout(searchTimer);
         // New intent retires the in-flight search immediately —
         // before this keystroke's debounce expires.
@@ -375,6 +350,10 @@
         }, 250);
     }
 
+    function onCheckboxChange(e) {
+        searchScoped = e.currentTarget.checked;
+    }
+
     onDestroy(() => {
         clearTimeout(searchTimer);
         searchOwner.dispose();
@@ -388,20 +367,7 @@
     <header class="diary-head">
         <span class="vault-label">{vault?.name}</span>
         <div class="diary-menu">
-            <div class="search-block">
-                <input
-                    type="search"
-                    placeholder="Search the diary…"
-                    aria-label="Search the diary"
-                    bind:value={query}
-                    oninput={onSearchInput} />
-                {#if scopeFolderName}
-                    <Checkbox
-                        checked={searchScoped}
-                        onchange={(e) => (searchScoped = e.currentTarget.checked)}
-                        label={`Only in ${scopeFolderName}`} />
-                {/if}
-            </div>
+            <SearchContainer {scopeFolderName} {searchScoped} {query} {onCheckboxChange} {onSearchInput} />
             <span class="dest" title="New entries file here">in {destName}</span>
             <Button label="New entry" kind="texture-button" handler={newEntry} disabled={creating} />
             <Button label="Settings" kind="texture-button" handler={onSettings} />
@@ -411,11 +377,7 @@
     </header>
     <div class="diary-body">
         <aside>
-            <FolderTree
-                {folders}
-                selection={scopeSel}
-                onSelect={handleScopeSelect}
-                onChanged={handleFoldersChanged} />
+            <FolderTree {folders} selection={scopeSel} onSelect={handleScopeSelect} onChanged={handleFoldersChanged} />
             <EntryList
                 version={navVersion}
                 {selectedId}
@@ -429,8 +391,6 @@
                 {filterEpoch}
                 onToggleDescendants={toggleDescendants}
                 onClearSearch={() => {
-                    // A late response must not repopulate the
-                    // search the list just cleared.
                     searchOwner.invalidate();
                     query = '';
                     results = null;
