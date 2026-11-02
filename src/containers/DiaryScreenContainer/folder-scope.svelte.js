@@ -17,8 +17,12 @@ const all = () => ({ kind: 'all' });
  * repair it afterwards:
  *  - the selection never points at a folder missing from a loaded tree;
  *  - "search only in this folder" is on only while a folder is selected.
+ *
+ * Vault I/O arrives through `deps` (the `@/api.js` namespace unless a
+ * caller passes fakes), so asynchronous behavior can be exercised
+ * without native Tauri.
  */
-export function createFolderScope() {
+export function createFolderScope(deps = api) {
     const owner = createRequestOwner();
 
     // API payloads and selections are replaced wholesale, never mutated.
@@ -61,7 +65,7 @@ export function createFolderScope() {
     async function load() {
         const token = owner.begin();
         try {
-            const next = await api.folderList();
+            const next = await deps.folderList();
             if (owner.current(token)) setFolders(next);
         } catch {
             // Keep the last good tree: counts may lag after a failed

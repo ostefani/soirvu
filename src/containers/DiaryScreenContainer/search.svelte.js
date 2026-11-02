@@ -18,8 +18,12 @@ function failureNote(e) {
  * null = whole vault) and `searchKey` (changes when either input
  * changes). Call from component initialisation: the timer and request
  * owner are torn down with the component.
+ *
+ * Vault I/O arrives through `deps` (the `@/api.js` namespace unless a
+ * caller passes fakes), so asynchronous behavior can be exercised
+ * without native Tauri.
  */
-export function createSearch(scope) {
+export function createSearch(scope, deps = api) {
     const owner = createRequestOwner();
 
     let query = $state('');
@@ -36,7 +40,7 @@ export function createSearch(scope) {
         lastKey = scope.searchKey;
         const wireScope = scope.searchScope;
         try {
-            const found = await api.search(q, wireScope ? { scope: wireScope } : {});
+            const found = await deps.search(q, wireScope ? { scope: wireScope } : {});
             if (!owner.current(token)) return;
             results = found;
             note = found.length === 0 ? 'Nothing found.' : '';
