@@ -9,7 +9,7 @@
     import EntryList from '@/components/EntryList/index.svelte';
     import FolderTree from '@/components/FolderTree/index.svelte';
     import Calendar from '@/components/Calendar/index.svelte';
-    import EntryEditor from '@/components/EntryEditor/index.svelte';
+    import EntryEditorContainer from '@/containers/EntryEditorContainer/index.svelte';
     import Button from '@/components/Button/index.svelte';
     import SearchContainer from '@/containers/SearchContainer/index.svelte';
     import NoteComponent from '@/components/NoteComponent/index.svelte';
@@ -255,7 +255,7 @@
         <main bind:this={mainEl}>
             {#if selectedId}
                 {#key selectedId}
-                    <EntryEditor
+                    <EntryEditorContainer
                         bind:this={editorRef}
                         entryId={selectedId}
                         folders={folderScope.folders}

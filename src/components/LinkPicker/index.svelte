@@ -1,18 +1,22 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
-    import { untrack } from 'svelte';
-    import * as api from '@/api.js';
     import { breadcrumb } from '@/lib/folders.js';
 
-    let { initialQuery = '', folders = [], onPick = null, onCancel = null } = $props();
+    let {
+        query = '',
+        candidates = [],
+        nextCursor = null,
+        loading = false,
+        error = '',
+        folders = [],
+        onQueryChange = null,
+        onMore = null,
+        onPick = null,
+        onCancel = null,
+    } = $props();
 
-    let query = $state(initialQuery);
-    let candidates = $state([]);
-    let nextCursor = $state(null);
-    let loading = $state(false);
     let active = $state(0);
-    let error = $state('');
     let box = $state(null);
 
     const byId = $derived(new Map(folders.map((f) => [f.id, f])));
@@ -22,49 +26,12 @@
         return breadcrumb(byId, folderId).join(' / ');
     }
 
-    let timer = null;
-    let runId = 0;
-    let queryEpoch = $state(0);
-
-    async function search(reset) {
-        // Read outside the effect's tracking: searches run on the
-        // debounced epoch, not on every keystroke.
-        const q = untrack(() => query);
-        const cursor = untrack(() => (reset ? null : nextCursor));
-        const mine = ++runId;
-        loading = true;
-        error = '';
-        try {
-            const page = await api.entryLinkCandidates(q, {
-                cursor,
-                limit: 20,
-            });
-            if (mine !== runId) return;
-            candidates = reset ? page.candidates : [...candidates, ...page.candidates];
-            nextCursor = page.next_cursor;
-            if (reset) active = 0;
-        } catch {
-            if (mine !== runId) return;
-            error = 'Could not search entries.';
-        } finally {
-            if (mine === runId) loading = false;
-        }
-    }
-
-    function onQueryInput() {
-        clearTimeout(timer);
-        timer = setTimeout(() => queryEpoch++, 200);
-    }
-
-    // Empty query lists recent entries; every committed keystroke
-    // re-runs the vault-wide two-tier search from the first page.
+    // A new result set restarts the highlight; paging appends, so
+    // the highlight stays where the keyboard left it. The query is
+    // container-owned: it changes only on a fresh search.
     $effect(() => {
-        void queryEpoch;
-        search(true);
-        return () => {
-            runId++;
-            clearTimeout(timer);
-        };
+        void query;
+        active = 0;
     });
 
     function pick(entry) {
@@ -77,6 +44,10 @@
             onCancel?.();
             return;
         }
+        // Native activation already picks the focused button (a
+        // candidate or More…): handling Enter here too would fire
+        // both the focused row and the highlighted one.
+        if (e.target instanceof HTMLButtonElement) return;
         if (e.key === 'ArrowDown') {
             e.preventDefault();
             active = Math.min(active + 1, candidates.length - 1);
@@ -109,19 +80,27 @@
     }
 </script>
 
-<div class="link-picker" role="dialog" aria-modal="true" aria-label="Link to entry" bind:this={box}>
+<!-- One dialog-boundary handler: input, results and the More…
+     footer all funnel through it, so Tab and Escape cannot bypass
+     the trap from the footer. -->
+<div
+    class="link-picker"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Link to entry"
+    bind:this={box}
+    onkeydown={onKeydown}>
     <input
         type="search"
         placeholder="Search entries…"
         aria-label="Search entries to link"
         autofocus
-        bind:value={query}
-        oninput={onQueryInput}
-        onkeydown={onKeydown} />
+        value={query}
+        oninput={(e) => onQueryChange?.(e.currentTarget.value)} />
     {#if error}
         <p class="note" role="status">{error}</p>
     {:else}
-        <ul class="candidates" onkeydown={onKeydown}>
+        <ul class="candidates">
             {#each candidates as c, i (c.id)}
                 <li>
                     <button
@@ -141,7 +120,7 @@
             <p class="note">No entries match.</p>
         {/if}
         {#if nextCursor}
-            <button class="more" onclick={() => search(false)} disabled={loading}>
+            <button class="more" onclick={onMore} disabled={loading}>
                 {loading ? 'Searching…' : 'More…'}
             </button>
         {/if}
