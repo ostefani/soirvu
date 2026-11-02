@@ -5,6 +5,7 @@
     import * as api from '@/api.js';
     import Checkbox from '@/components/Checkbox/index.svelte';
     import { breadcrumb } from '@/lib/folders.js';
+    import { nextCursorAfterPage } from '@/lib/list.js';
     import { createRequestOwner } from '@/lib/request-owner.js';
 
     let {
@@ -86,10 +87,25 @@
             });
             if (!listOwner.current(token)) return;
             entries = reset ? page.entries : [...entries, ...page.entries];
-            nextCursor = page.next_cursor;
+            nextCursor = nextCursorAfterPage({
+                reset,
+                failed: false,
+                pageCursor: page.next_cursor,
+                current: nextCursor,
+            });
             error = '';
         } catch (e) {
             if (!listOwner.current(token)) return;
+            // A failed first page invalidates the cursor: it still
+            // names the previous filter's position, so pagination
+            // must wait for a successful reset instead of appending
+            // old rows under the new scope (and clearing this error).
+            nextCursor = nextCursorAfterPage({
+                reset,
+                failed: true,
+                pageCursor: null,
+                current: nextCursor,
+            });
             error = describeError(e);
         } finally {
             // A superseded request leaves the flag to whoever is
