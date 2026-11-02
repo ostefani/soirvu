@@ -195,19 +195,18 @@
         }
     }
 
-    // Folder results assign outside the write sequence: adopt
-    // them as merge bases so the next patch cannot clobber them.
-    function adoptSettings(next) {
-        general.settings = next;
-        settingsCommit.acknowledge(next);
-    }
-
+    // Folder picker/clear results re-enter as one-field patches
+    // through the same sequence: merging over the latest
+    // acknowledgement keeps a racing preference write from
+    // reverting the picked folder, and vice versa.
     async function pickSync() {
         general.error = '';
         try {
             const updated = await api.syncPickFolder();
             if (updated) {
-                adoptSettings(updated);
+                general.settings = await settingsCommit.save({
+                    sync_location: updated.sync_location,
+                });
                 await loadSync();
             }
         } catch (e) {
@@ -218,7 +217,10 @@
     async function clearSync() {
         general.error = '';
         try {
-            adoptSettings(await api.syncClearFolder());
+            const cleared = await api.syncClearFolder();
+            general.settings = await settingsCommit.save({
+                sync_location: cleared.sync_location,
+            });
             sync.pruneArm = false;
             sync.info = null;
             resetSyncReport();
@@ -448,7 +450,11 @@
         general.error = '';
         try {
             const updated = await api.settingsPickBackupDir();
-            if (updated) adoptSettings(updated);
+            if (updated) {
+                general.settings = await settingsCommit.save({
+                    backup_location: updated.backup_location,
+                });
+            }
         } catch (e) {
             general.error = somethingWrong(e);
         }
@@ -457,7 +463,10 @@
     async function clearBackup() {
         general.error = '';
         try {
-            adoptSettings(await api.settingsClearBackupDir());
+            const cleared = await api.settingsClearBackupDir();
+            general.settings = await settingsCommit.save({
+                backup_location: cleared.backup_location,
+            });
         } catch (e) {
             general.error = somethingWrong(e);
         }

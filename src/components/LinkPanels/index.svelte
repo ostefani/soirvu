@@ -268,11 +268,25 @@
     $effect(() => {
         const target = entryId;
         const open = showBack;
-        // Auto-scan once on expand; Refresh/More… own the rest. A
-        // stop or a failure never restarts by itself, and collapsing
-        // aborts through the cleanup below.
-        if (open && autoStartedFor !== target && untrack(() => backlinks.length === 0 && !backDone)) {
+        if (!open) return;
+        // The workspace identity is read untracked on purpose:
+        // tracking it would re-run this effect on every tick while
+        // open, and the cleanup below would abort the tick effect's
+        // own scan. Ticks while open belong to that effect; ticks
+        // while collapsed surface as a gap on reopen.
+        const tick = untrack(() => workspaceTick);
+        if (autoStartedFor !== target) {
+            // First expand for this entry: the single lazy scan,
+            // reading whatever the workspace holds right now.
             autoStartedFor = target;
+            servedTick = tick;
+            if (untrack(() => backlinks.length === 0 && !backDone)) scanBacklinks(true);
+        } else if (untrack(() => servedTick) !== tick) {
+            // Reopening after a workspace tick that arrived while
+            // collapsed: the tick effect below left it unconsumed,
+            // so the reopen catches up now instead of fetching for
+            // a hidden panel earlier.
+            servedTick = tick;
             scanBacklinks(true);
         }
         return () => {
@@ -281,15 +295,20 @@
     });
 
     // Workspace changes (import/sync) may add or remove links to
-    // the open entry. Refresh only panels the user already opened:
-    // unopened panels keep their lazy first scan.
+    // the open entry. A tick that arrives while both panels are
+    // collapsed is not consumed: reopening rescans lazily through
+    // the effect above (backlinks) or re-resolves through the rev
+    // effect (outgoing metadata).
     let servedTick = 0;
     $effect(() => {
         const tick = workspaceTick;
         if (tick === servedTick) return;
+        const backOpen = untrack(() => autoStartedFor === entryId && showBack);
+        const outOpen = untrack(() => showOut);
+        if (!backOpen && !outOpen) return;
         servedTick = tick;
-        if (untrack(() => autoStartedFor === entryId && showBack)) scanBacklinks(true);
-        if (untrack(() => showOut)) resolveTargets();
+        if (backOpen) scanBacklinks(true);
+        if (outOpen) resolveTargets();
     });
 </script>
 

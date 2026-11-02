@@ -64,18 +64,67 @@ test("a failed write leaves the acknowledged snapshot for retry", async () => {
     assert.deepEqual(await commit.save({ b: 20 }), { a: 1, b: 20 });
 });
 
-test("externally obtained snapshots become the next merge base", async () => {
+test("a folder change racing a save persists both", async () => {
     const backend = fakeBackend({ a: 1, folder: null });
+    const gate = deferred();
+    let calls = 0;
     const commit = createSettingsCommit(backend.snapshot(), {
-        set: (s) => backend.set(s),
+        set: (s) => {
+            calls++;
+            if (calls === 1) return gate.promise.then(() => backend.set(s));
+            return backend.set(s);
+        },
         get: () => backend.get(),
     });
-    // A native folder pick assigns outside the sequence; without
-    // adopting it, the next patch would merge over the pre-pick
-    // snapshot and drop the picked folder.
-    commit.acknowledge({ a: 1, folder: "/sync" });
-    assert.deepEqual(await commit.save({ a: 10 }), { a: 10, folder: "/sync" });
+    // A slow preference write is in flight when the native picker
+    // resolves. The folder change arrives as a one-field patch
+    // through the same sequence — never as an adopted snapshot —
+    // so it merges over the write instead of reverting it.
+    const first = commit.save({ a: 10 });
+    const folder = commit.save({ folder: "/sync" });
+    await Promise.resolve();
+    gate.resolve();
+    assert.deepEqual(await Promise.all([first, folder]), [
+        { a: 10, folder: null },
+        { a: 10, folder: "/sync" },
+    ]);
     assert.deepEqual(backend.snapshot(), { a: 10, folder: "/sync" });
+});
+
+test("a failed reread forces reconciliation before the next write", async () => {
+    const backend = fakeBackend({ a: 1 });
+    let failGet = false;
+    const commit = createSettingsCommit(backend.snapshot(), {
+        set: (s) => backend.set(s),
+        get: () => (failGet ? Promise.reject("storage") : backend.get()),
+    });
+    // The write lands but the confirming re-read fails: the base
+    // is uncertain, so the save rejects without advancing it.
+    failGet = true;
+    await assert.rejects(commit.save({ a: 10 }), (e) => e === "storage");
+    assert.deepEqual(backend.snapshot(), { a: 10 });
+    // The next patch reconciles first instead of merging over the
+    // old base and reverting the landed write.
+    failGet = false;
+    assert.deepEqual(await commit.save({ b: 20 }), { a: 10, b: 20 });
+    assert.deepEqual(backend.snapshot(), { a: 10, b: 20 });
+});
+
+test("reconciliation failure refuses the write without losing place", async () => {
+    const backend = fakeBackend({ a: 1 });
+    let failGet = true;
+    const commit = createSettingsCommit(backend.snapshot(), {
+        set: (s) => backend.set(s),
+        get: () => (failGet ? Promise.reject("storage") : backend.get()),
+    });
+    await assert.rejects(commit.save({ a: 10 }), (e) => e === "storage");
+    // Still unreconciled: another patch refuses rather than
+    // writing blind over unknown state. Recovery reconciles once
+    // and then writes.
+    await assert.rejects(commit.save({ b: 20 }), (e) => e === "storage");
+    assert.deepEqual(backend.snapshot(), { a: 10 });
+    failGet = false;
+    assert.deepEqual(await commit.save({ b: 20 }), { a: 10, b: 20 });
 });
 
 test("slow writes still serialize in submission order", async () => {
