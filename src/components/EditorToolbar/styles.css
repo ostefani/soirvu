@@ -66,6 +66,15 @@
     text-decoration: line-through;
 }
 
+.tb-bold {
+    font-weight: 700;
+    font-style: normal;
+}
+
+.tb-italic {
+    font-style: italic;
+}
+
 .tb-sep {
     width: 1px;
     align-self: stretch;
