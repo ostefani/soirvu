@@ -37,6 +37,9 @@
         navigating = false,
         linkNote = '',
         deleteError = null,
+        copyNote = '',
+        copying = false,
+        onCopyNoteLink = null,
         pickerOpen = false,
         // Applied once on mount: { sel: { from, to } }.
         navRestore = null,
@@ -119,6 +122,24 @@
 
     /* ---- Compact meta chips: one popover open at a time. ---- */
     let openPop = $state(null);
+    let backlinksButton = $state.raw(null);
+    let backlinksStyle = $state('');
+
+    $effect(() => {
+        if (openPop !== 'backlinks' || !paneEl || !backlinksButton) return;
+        const position = () => {
+            const pane = paneEl.getBoundingClientRect();
+            const button = backlinksButton.getBoundingClientRect();
+            const width = Math.max(0, Math.min(360, pane.width - 16, window.innerWidth - 32));
+            const left = Math.max(pane.left + 8, Math.min(button.left, pane.right - width - 8));
+            backlinksStyle = `width: ${width}px; left: ${left - button.left}px; right: auto;`;
+        };
+        position();
+        const observer = new ResizeObserver(position);
+        observer.observe(paneEl);
+        observer.observe(backlinksButton);
+        return () => observer.disconnect();
+    });
 
     function togglePop(name) {
         openPop = openPop === name ? null : name;
@@ -316,7 +337,10 @@
 
 <svelte:window
     onkeydown={(e) => {
-        if (e.key === 'Escape') openPop = null;
+        if (e.key === 'Escape') {
+            if (openPop === 'backlinks') backlinksButton?.focus();
+            openPop = null;
+        }
     }} />
 
 {#if entry}
@@ -412,6 +436,26 @@
                         </div>
                     {/if}
                 </div>
+                <div class="chip-wrap">
+                    <button
+                        class="meta-chip"
+                        bind:this={backlinksButton}
+                        aria-expanded={openPop === 'backlinks'}
+                        aria-controls="entry-backlinks"
+                        disabled={frozen}
+                        onclick={() => togglePop('backlinks')}>
+                        {ENTRY_EDITOR_TEXT.linkedFrom}
+                        <span class="chev">▾</span>
+                    </button>
+                    <div class="popover backlinks-popover" style={backlinksStyle} id="entry-backlinks" hidden={openPop !== 'backlinks'}>
+                        <h4>{ENTRY_EDITOR_TEXT.linkedFrom}</h4>
+                        {@render panels?.(openPop === 'backlinks')}
+                    </div>
+                </div>
+                <button class="meta-chip" disabled={frozen || copying} onclick={() => onCopyNoteLink?.()}>
+                    {copying ? ENTRY_EDITOR_TEXT.copyingLink : ENTRY_EDITOR_TEXT.copyNoteLink}
+                </button>
+                {#if copyNote}<span class="copy-note" role="status">{copyNote}</span>{/if}
             </div>
         </div>
 
@@ -424,7 +468,6 @@
             {onLinkEntry} />
         <input type="file" multiple hidden bind:this={fileInput} onchange={onFilesPicked} />
         <div class="editor-mount" {@attach mountEditor}></div>
-        {@render panels?.()}
         {#if showPopover}
             {@const targetId = parseEntryTarget(linkInfo.href)}
             <div

@@ -3,11 +3,14 @@
 <script>
     import { untrack } from 'svelte';
     import * as api from '@/api.js';
+    import { LINK_PICKER_TEXT } from './data.js';
+    import { readEntryLink } from '@/lib/links.js';
     import LinkPicker from '@/components/LinkPicker/index.svelte';
 
-    let { initialQuery = '', folders = [], onPick = null, onCancel = null } = $props();
+    let { initialQuery = '', initialLabel = '', folders = [], onPick = null, onCancel = null } = $props();
 
-    let query = $state(initialQuery);
+    let query = $state(untrack(() => initialQuery));
+    let linkError = $state('');
     let candidates = $state([]);
     let nextCursor = $state(null);
     let loading = $state(false);
@@ -47,6 +50,16 @@
         timer = setTimeout(() => queryEpoch++, 200);
     }
 
+    function applyPastedLink(value, label) {
+        const link = readEntryLink(value);
+        if (!link) {
+            linkError = LINK_PICKER_TEXT.invalidLink;
+            return;
+        }
+        linkError = '';
+        onPick?.({ id: link.id, title: link.label || LINK_PICKER_TEXT.untitledLink, linkLabel: label });
+    }
+
     // Empty query lists recent entries; every committed keystroke
     // re-runs the vault-wide two-tier search from the first page.
     $effect(() => {
@@ -61,6 +74,9 @@
 
 <LinkPicker
     {query}
+    {initialLabel}
+    {linkError}
+    onPasteLink={applyPastedLink}
     {candidates}
     {nextCursor}
     {loading}

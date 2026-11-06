@@ -307,3 +307,126 @@ test('successful lock preparation freezes the session', async () => {
     assert.equal(saves.length, 1);
     session.dispose();
 });
+
+
+test('copying the current note uses its live title, stable id and clipboard registration', async () => {
+    const id = '01900000-0000-7000-8000-000000000001';
+    const copied = [];
+    let registered = 0;
+    const session = createEntrySession({
+        api: {
+            entryGet: async () => ({ id, rev: 1, title: 'Old title', entry_date: '2026-11-01', tags: [] }),
+            clipboardNoteCopy: async () => { registered++; },
+        },
+        copyText: async (text) => copied.push(text),
+        delay: 10000,
+    });
+    await session.load(id);
+    session.setField('title', 'Updated [title]');
+    assert.equal(await session.copyNoteLink(), true);
+    assert.equal(copied[0], `[Updated \\[title\\]](entry:${id})`);
+    assert.equal(registered, 1);
+    assert.equal(session.copyNote, 'Internal link copied.');
+    session.dispose();
+});
+
+test('copying an untitled note uses its date and reports clipboard failures', async () => {
+    const id = '01900000-0000-7000-8000-000000000001';
+    let copied;
+    let fail = false;
+    const session = createEntrySession({
+        api: {
+            entryGet: async () => ({ id, rev: 1, title: '', entry_date: '2026-11-01', tags: [] }),
+            clipboardNoteCopy: async () => {},
+        },
+        copyText: async (text) => {
+            if (fail) throw new Error('Clipboard unavailable');
+            copied = text;
+        },
+    });
+    await session.load(id);
+    assert.equal(await session.copyNoteLink(), true);
+    assert.equal(copied, `[Untitled — 2026-11-01](entry:${id})`);
+    fail = true;
+    assert.equal(await session.copyNoteLink(), false);
+    assert.equal(session.copyNote, 'Could not copy the link.');
+    session.dispose();
+});
+
+test('frozen notes cannot copy and disposed sessions ignore late copy feedback', async () => {
+    const id = '01900000-0000-7000-8000-000000000001';
+    const gate = deferred();
+    let copied = 0;
+    const session = createEntrySession({
+        api: {
+            entryGet: async () => ({ id, rev: 1, title: 'Title', entry_date: '2026-11-01', tags: [] }),
+            clipboardNoteCopy: async () => {},
+        },
+        copyText: async () => { copied++; await gate.promise; },
+    });
+    await session.load(id);
+    const copying = session.copyNoteLink();
+    assert.equal(await session.copyNoteLink(), false);
+    session.dispose();
+    gate.resolve();
+    assert.equal(await copying, false);
+    assert.equal(session.copyNote, '');
+    assert.equal(copied, 1);
+    const { session: locked } = setup();
+    await locked.load('e1');
+    await locked.prepareLock();
+    assert.equal(await locked.copyNoteLink(), false);
+    locked.dispose();
+});
+
+
+test('the toolbar Link action wraps the original selection even after dialog focus moves', async () => {
+    const { session } = setup();
+    await session.load('e1');
+    let selection = { from: 7, to: 12, empty: false };
+    const view = fakeViewApi({
+        query: () => selection,
+        readText: (from, to) => from === 7 && to === 12 ? 'words' : '',
+    });
+    session.setViewApi(view);
+    session.openLinkPicker();
+    assert.equal(session.linkPicker.label, 'words');
+    selection = { from: 1, to: 1, empty: true };
+    session.pickLinkTarget({ id: '01900000-0000-7000-8000-000000000001', title: 'Original title' });
+    assert.deepEqual(view.calls[0], ['insertEntryLink', {
+        targetId: '01900000-0000-7000-8000-000000000001', label: 'words', from: 7, to: 12,
+    }]);
+    session.dispose();
+});
+
+test('the Link dialog can rename a reference without changing its destination', async () => {
+    const { session } = setup();
+    await session.load('e1');
+    const id = '01900000-0000-7000-8000-000000000001';
+    const view = fakeViewApi({
+        query: () => ({ from: 10, to: 10, empty: true, link: { from: 7, to: 15, href: `entry:${id}` } }),
+        readText: () => 'Old name',
+    });
+    session.setViewApi(view);
+    session.openLinkPicker();
+    session.pickLinkTarget({ id, title: 'Target title', linkLabel: 'My label' });
+    assert.deepEqual(view.calls[0], ['insertEntryLink', { targetId: id, label: 'My label', from: 7, to: 15 }]);
+    session.dispose();
+});
+
+test('bracket links keep their title fallback and accept an optional custom label', async () => {
+    const { session } = setup();
+    await session.load('e1');
+    const view = fakeViewApi();
+    const target = { id: '01900000-0000-7000-8000-000000000001', title: 'Target title' };
+    session.setViewApi(view);
+    session.requestBracketPicker(5);
+    session.pickLinkTarget(target);
+    assert.equal(view.calls[0][1].label, 'Target title');
+    assert.equal(view.calls[0][1].from, 5);
+    assert.equal(view.calls[0][1].to, 7);
+    session.requestBracketPicker(5);
+    session.pickLinkTarget({ ...target, linkLabel: 'My label' });
+    assert.equal(view.calls[1][1].label, 'My label');
+    session.dispose();
+});

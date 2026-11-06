@@ -2,6 +2,7 @@
 import { createRequestOwner } from '../../lib/request-owner.js';
 import { createAutosave } from '../../lib/autosave.svelte.js';
 import { createEntryCommit, mayFinishAfterFlush } from '../../lib/entry-commit.js';
+import { entryLinkMarkdown } from '../../lib/links.js';
 import { classifyHref, parseEntryTarget } from '../../lib/entry-target.js';
 import { ATTACH_CHUNK_SIZE, AUTOSAVE_DELAY, MAX_CONCURRENT_UPLOADS } from './constants.js';
 import {
@@ -67,12 +68,15 @@ export function createEntrySession({
     let pendingNavId = $state(null);
     let deleteError = $state(null);
     let linkNote = $state('');
+    let copyNote = $state('');
+    let copying = $state(false);
 
     let viewApi = null;
     let commitSeq = null;
     let started = false;
 
     const loadOwner = createRequestOwner();
+    const copyOwner = createRequestOwner();
     const attachmentQueue = [];
     let activeAttachments = 0;
     let abortUploads = false;
@@ -133,6 +137,7 @@ export function createEntrySession({
 
     function dispose() {
         loadOwner.dispose();
+        copyOwner.dispose();
         autosave.cancel();
     }
 
@@ -281,7 +286,11 @@ export function createEntrySession({
 
     function openLinkPicker() {
         if (frozen || !viewApi) return;
-        linkPicker = { bracketPos: null, initialText: '' };
+        const selection = viewApi.query();
+        if (!selection) return;
+        const from = selection.link?.from ?? selection.from;
+        const to = selection.link?.to ?? selection.to;
+        linkPicker = { bracketPos: null, initialText: '', from, to, label: viewApi.readText(from, to) };
     }
 
     function requestBracketPicker(bracketPos) {
@@ -296,7 +305,7 @@ export function createEntrySession({
 
     function pickLinkTarget(target) {
         const picker = linkPicker;
-        if (!viewApi || !picker) return;
+        if (!viewApi || !picker || frozen) return;
         linkPicker = null;
         let from;
         let to;
@@ -304,16 +313,16 @@ export function createEntrySession({
         if (picker.bracketPos != null) {
             from = picker.bracketPos;
             to = picker.bracketPos + 2;
-            label = defaultLinkLabel(target);
+            label = target.linkLabel?.trim() || defaultLinkLabel(target);
         } else {
-            const sel = viewApi.query();
+            const sel = picker.from != null ? picker : viewApi.query();
             if (!sel) {
                 viewApi.focus();
                 return;
             }
             from = sel.from;
             to = sel.to;
-            label = sel.empty ? defaultLinkLabel(target) : viewApi.readText(from, to);
+            label = target.linkLabel?.trim() || (from === to ? defaultLinkLabel(target) : viewApi.readText(from, to));
         }
         if (!label.trim()) {
             viewApi.focus();
@@ -383,12 +392,32 @@ export function createEntrySession({
         viewApi?.exec('removeLink', range);
     }
 
+    async function copyNoteLink() {
+        if (!entry || frozen || copying) return false;
+        const token = copyOwner.begin();
+        copying = true;
+        copyNote = '';
+        try {
+            const label = defaultLinkLabel({ title: title.trim(), entry_date: entryDate });
+            await copyText(entryLinkMarkdown(entry.id, label));
+            const registered = await noteLinkCopied();
+            if (!copyOwner.current(token) || frozen) return false;
+            copyNote = registered ? ENTRY_EDITOR_TEXT.linkCopied : ENTRY_EDITOR_TEXT.linkCopyFailed;
+            return registered;
+        } catch {
+            if (copyOwner.current(token) && !frozen) copyNote = ENTRY_EDITOR_TEXT.linkCopyFailed;
+            return false;
+        } finally {
+            if (copyOwner.current(token)) copying = false;
+        }
+    }
+
     async function copyInternalLink(link) {
         const live = liveLinkRange(link);
         if (!live) return;
         const label = viewApi.readText(live.from, live.to);
         try {
-            await copyText(`[${label}](${link.href})`);
+            await copyText(entryLinkMarkdown(parseEntryTarget(link.href), label));
             linkNote = (await noteLinkCopied())
                 ? ENTRY_EDITOR_TEXT.linkCopied
                 : ENTRY_EDITOR_TEXT.linkCopyFailed;
@@ -505,6 +534,13 @@ export function createEntrySession({
         get linkNote() {
             return linkNote;
         },
+        get copyNote() {
+            return copyNote;
+        },
+        get copying() {
+            return copying;
+        },
+        copyNoteLink,
         load,
         dispose,
         setViewApi,

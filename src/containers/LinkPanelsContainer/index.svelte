@@ -4,34 +4,23 @@
     import { onDestroy, untrack } from 'svelte';
     import * as api from '@/api.js';
     import { breadcrumb } from '@/lib/folders.js';
-    import { isMissingEntryError, outgoingEntryRefs, shouldYield, verifyBacklinkCandidates } from '@/lib/links.js';
+    import { isMissingEntryError, shouldYield, verifyBacklinkCandidates } from '@/lib/links.js';
     import LinkPanels from '@/components/LinkPanels/index.svelte';
 
     let {
         entryId,
-        rev,
-        readBody,
+        showBack = false,
         folders = [],
         // Workspace epoch (import/sync changes) from the diary:
         // refreshes visible panels without touching the draft.
         workspaceTick = 0,
         onOpenEntry = null,
-        onRemoveLink = null,
     } = $props();
 
     const PAGE = 20;
-    const BATCH = 8;
 
-    let showOut = $state(false);
-    let showBack = $state(false);
-    let refreshed = $state(0);
-
-    // Generations: lock, vault switch and unmount discard late
-    // responses instead of rendering them under a new entry.
-    let metaRun = 0;
     let scanRun = 0;
     onDestroy(() => {
-        metaRun++;
         scanRun++;
     });
 
@@ -41,113 +30,6 @@
         if (folderId == null) return '';
         return breadcrumb(byId, folderId).join(' / ');
     }
-
-    /* ---- Outgoing links: labels and ranges recompute from the
-       live body; target metadata resolves in bounded batches on
-       expand and after every save. ---- */
-
-    const refs = $derived.by(() => {
-        void entryId;
-        void rev;
-        void refreshed;
-        void showOut;
-        return outgoingEntryRefs(readBody());
-    });
-
-    const distinctTargets = $derived([...new Set(refs.map((r) => r.id))]);
-
-    function labelFor(id) {
-        return refs.find((r) => r.id === id)?.label || 'Untitled link';
-    }
-
-    // Fully resolved rows for the view: no link parsing there.
-    const targets = $derived(
-        distinctTargets.map((id) => {
-            const meta = targetMeta[id];
-            return {
-                id,
-                label: labelFor(id),
-                metaTitle: meta?.status === 'ok' ? (meta.title ?? 'Untitled') : null,
-                metaDate: meta?.status === 'ok' ? meta.date : null,
-                metaStatus: meta ? meta.status : null,
-            };
-        }),
-    );
-
-    let targetMeta = $state({});
-    let resolving = $state(false);
-    let resolveError = $state('');
-
-    // Takes the already-computed target ids when the caller holds a
-    // current analysis (expand, post-save); parses fresh when the
-    // body may have moved underneath the display (workspace tick).
-    async function resolveTargets(ids = null) {
-        const mine = ++metaRun;
-        resolving = true;
-        resolveError = '';
-        try {
-            const list = ids ?? [...new Set(outgoingEntryRefs(readBody()).map((r) => r.id))];
-            const next = {};
-            for (let i = 0; i < list.length; i += BATCH) {
-                const chunk = await Promise.all(
-                    list.slice(i, i + BATCH).map(async (id) => {
-                        try {
-                            const e = await api.entryGet(id);
-                            return [id, { status: 'ok', title: e.title, date: e.entry_date }];
-                        } catch (e) {
-                            return [id, { status: e === 'entry_not_found' ? 'deleted' : 'missing' }];
-                        }
-                    }),
-                );
-                if (mine !== metaRun) return;
-                for (const [id, meta] of chunk) next[id] = meta;
-                targetMeta = next;
-            }
-        } catch {
-            if (mine !== metaRun) return;
-            resolveError = 'Could not read the targets.';
-        } finally {
-            if (mine === metaRun) resolving = false;
-        }
-    }
-
-    $effect(() => {
-        // Rev rides along so a save re-resolves visible metadata.
-        // Progress writes below never retrigger this: only rev and
-        // the disclosure are tracked. Derived analyses flush
-        // before effects, so distinctTargets already reflects the
-        // saved body and no second parse is needed. Read untracked:
-        // subscribing would re-resolve on every removeTarget
-        // refresh, which the previous shape never did.
-        void rev;
-        if (showOut) resolveTargets(untrack(() => distinctTargets));
-        return () => {
-            metaRun++;
-        };
-    });
-
-    function removeTarget(id) {
-        // Recompute against the live body: positions stored at
-        // expand time may predate keystrokes. Back-to-front keeps
-        // the remaining ranges valid as each mark comes out.
-        const live = outgoingEntryRefs(readBody())
-            .filter((r) => r.id === id)
-            .sort((a, b) => b.from - a.from);
-        if (!live.length) {
-            refreshed++;
-            return;
-        }
-        for (const ref of live) onRemoveLink?.({ from: ref.from, to: ref.to });
-        refreshed++;
-    }
-
-    /* ---- Backlinks: candidates verify one by one, in page
-       order, until a page of verified rows fills or the
-       candidates run out. Unverified sources never render, and
-       oversized rows never reorder past newer ones. Oversized
-       sources travel as metadata and load whole one at a time,
-       so peak memory is one large document instead of a page of
-       them; only a confirmed-missing source skips silently. ---- */
 
     let backlinks = $state([]);
     let backCursor = $state(null);
@@ -277,21 +159,6 @@
         pendingLarge = 0;
     }
 
-    function toggleOut() {
-        showOut = !showOut;
-        // Collapsing stops the resolve; the effect cleanup aborts
-        // the loop, this resets the visible flag it would leave set.
-        if (!showOut && resolving) {
-            metaRun++;
-            resolving = false;
-        }
-    }
-
-    function toggleBack() {
-        showBack = !showBack;
-        if (!showBack && scanning) stopScan();
-    }
-
     // Which entry the auto-scan already served. Plain (not
     // reactive) state on purpose: progress publishes must never
     // retrigger this effect and abort their own scan.
@@ -322,36 +189,21 @@
             scanBacklinks(true);
         }
         return () => {
-            scanRun++;
+            stopScan();
         };
     });
 
-    // Workspace changes (import/sync) may add or remove links to
-    // the open entry. A tick that arrives while both panels are
-    // collapsed is not consumed: reopening rescans lazily through
-    // the effect above (backlinks) or re-resolves through the rev
-    // effect (outgoing metadata). Each panel tracks its own epoch:
-    // an outgoing refresh must not mark collapsed backlinks served.
     let servedBackTick = 0;
     $effect(() => {
         const tick = workspaceTick;
         const backOpen = untrack(() => autoStartedFor === entryId && showBack);
-        const outOpen = untrack(() => showOut);
-        if (!backOpen && !outOpen) return;
-        if (backOpen) {
-            servedBackTick = tick;
-            scanBacklinks(true);
-        }
-        if (outOpen) resolveTargets();
+        if (!backOpen) return;
+        servedBackTick = tick;
+        scanBacklinks(true);
     });
 </script>
 
 <LinkPanels
-    {showOut}
-    {showBack}
-    {targets}
-    {resolving}
-    {resolveError}
     {backRows}
     {backDone}
     {checked}
@@ -359,9 +211,6 @@
     {scanStopped}
     {scanError}
     {pendingLarge}
-    onToggleOut={toggleOut}
-    onToggleBack={toggleBack}
-    onRemoveTarget={removeTarget}
     onRetryScan={() => scanBacklinks(true)}
     onMoreScan={() => scanBacklinks(false)}
     onRefreshScan={() => scanBacklinks(true)}

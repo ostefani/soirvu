@@ -93,3 +93,21 @@
 .more:hover:not(:disabled) {
     background-color: var(--color-accent-soft);
 }
+
+.link-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.85rem;
+    color: var(--color-ink-muted);
+}
+
+.link-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.search-heading {
+    font-size: 0.8rem;
+    color: var(--color-ink-muted);
+}

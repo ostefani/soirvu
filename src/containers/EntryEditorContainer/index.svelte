@@ -62,16 +62,14 @@
     }
 </script>
 
-{#snippet panels()}
+{#snippet panels(open)}
     {#if session.entry}
         <LinkPanelsContainer
             entryId={session.entry.id}
-            rev={session.entry.rev}
-            readBody={() => session.readBody()}
+            showBack={open}
             {folders}
             {workspaceTick}
-            onOpenEntry={(id) => session.followEntryLink(id)}
-            onRemoveLink={({ from, to }) => session.removeLinkRange({ from, to })} />
+            onOpenEntry={(id) => session.followEntryLink(id)} />
     {/if}
 {/snippet}
 
@@ -84,6 +82,7 @@
             }}>
             <LinkPickerContainer
                 initialQuery={session.linkPicker.initialText}
+                initialLabel={session.linkPicker.label ?? ''}
                 {folders}
                 onPick={(target) => session.pickLinkTarget(target)}
                 onCancel={() => session.cancelPicker()} />
@@ -108,6 +107,9 @@
     navigating={session.navigating}
     linkNote={session.linkNote}
     deleteError={session.deleteError}
+    copyNote={session.copyNote}
+    copying={session.copying}
+    onCopyNoteLink={() => session.copyNoteLink()}
     pickerOpen={session.linkPicker !== null}
     {folders}
     {navRestore}

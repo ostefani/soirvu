@@ -19,14 +19,22 @@ import { inputRulesPlugin, keymapPlugin } from "./rules.js";
 import { deleteSelectionIn, insertTextIn } from "./commands.js";
 import { locateLink, selectionInfo, toolbarCommands, toggleTaskAt } from "./toolbar.js";
 import { schema } from "./schema.js";
+import { isEntryHref } from "../lib/entry-target.js";
 import { parseMarkdown, serializeMarkdown } from "./markdown.js";
 
 export { schema, parseMarkdown, serializeMarkdown };
 
 function looksLikeMarkdown(text) {
-    return /(^|\n)\s{0,3}(#{1,6}\s|>|```|~~~|- |\d+\.\s)|(\*\*|__)[^*\n]+\1|\[[^\]\n]+\]\(https?:[^)\s]+\)/.test(
+    const formatted = /(^|\n)\s{0,3}(#{1,6}\s|>|```|~~~|- |\d+\.\s)|(\*\*|__)[^*\n]+\1|\[[^\]\n]+\]\(https?:[^)\s]+\)/.test(
         text,
     );
+    if (formatted) return true;
+    if (!/\]\(entry:/i.test(text)) return false;
+    let internalLink = false;
+    parseMarkdown(text).descendants((node) => {
+        if (node.isText && node.marks.some((mark) => mark.type.name === 'link' && isEntryHref(mark.attrs.href))) internalLink = true;
+    });
+    return internalLink;
 }
 
 /** Paste policy (§6.5): plain text goes in as text (newlines as

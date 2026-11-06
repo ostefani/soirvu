@@ -11,13 +11,35 @@
 // source text — so code samples, images and raw blocks cannot
 // fake an edge.
 
-import { parseMarkdown } from "../editor/markdown.js";
+import { parseMarkdown, serializeMarkdown } from "../editor/markdown.js";
+import { schema } from "../editor/schema.js";
 import { parseEntryTarget } from "./entry-target.js";
 
 // Identity and classification live in the dependency-free leaf;
 // re-exported here so existing importers keep working while the
 // parser gate and editor helpers import the leaf directly.
 export { classifyHref, isEntryHref, parseEntryTarget } from "./entry-target.js";
+
+export function entryLinkMarkdown(id, label) {
+    const target = parseEntryTarget(`entry:${id}`);
+    if (!target || typeof label !== 'string' || !label.trim()) throw new Error('Invalid entry link');
+    const mark = schema.marks.link.create({ href: `entry:${target}` });
+    const text = schema.text(label.replace(/\s+/g, ' ').trim(), [mark]);
+    return serializeMarkdown(schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, text))).replace(/&/g, '&amp;');
+}
+
+
+export function readEntryLink(text) {
+    const source = text.trim();
+    const id = parseEntryTarget(source);
+    if (id) return { id, label: '' };
+    const doc = parseMarkdown(source);
+    if (doc.childCount !== 1 || doc.firstChild.type.name !== 'paragraph') return null;
+    const refs = analyzeEntryLinks(doc).refs;
+    if (refs.length !== 1 || refs[0].from !== 1 || refs[0].to !== doc.firstChild.content.size + 1) return null;
+    return { id: refs[0].id, label: refs[0].label };
+}
+
 
 /**
  * One traversal of an already-parsed document producing every

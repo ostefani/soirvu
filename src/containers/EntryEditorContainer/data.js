@@ -36,6 +36,9 @@ export const ENTRY_EDITOR_TEXT = {
     dateHeading: 'Date',
     moodHeading: 'Mood',
     tagsHeading: 'Tags',
+    linkedFrom: 'Linked from',
+    copyNoteLink: 'Copy link to this note',
+    copyingLink: 'Copying…',
     clearMood: 'Clear mood',
     removeTagLabel: 'Remove tag',
     addTagPlaceholder: 'Add tag… (Enter)',
@@ -75,7 +78,7 @@ export const TOOLBAR_TEXT = {
     toolbarLabel: 'Formatting',
     attach: 'Attach…',
     linkEntry: 'Link…',
-    linkEntryTitle: 'Link to entry',
+    linkEntryTitle: 'Link selected text to an entry',
     languagePlaceholder: 'language',
 };
 

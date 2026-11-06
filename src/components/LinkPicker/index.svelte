@@ -1,10 +1,15 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
+    import { LINK_PICKER_TEXT } from '@/containers/LinkPickerContainer/data.js';
+    import { untrack } from 'svelte';
     import { breadcrumb } from '@/lib/folders.js';
 
     let {
         query = '',
+        initialLabel = '',
+        linkError = '',
+        onPasteLink = null,
         candidates = [],
         nextCursor = null,
         loading = false,
@@ -16,6 +21,8 @@
         onCancel = null,
     } = $props();
 
+    let label = $state(untrack(() => initialLabel));
+    let pastedLink = $state('');
     let active = $state(0);
     let box = $state(null);
 
@@ -35,7 +42,7 @@
     });
 
     function pick(entry) {
-        onPick?.(entry);
+        onPick?.({ ...entry, linkLabel: label });
     }
 
     function onKeydown(e) {
@@ -50,6 +57,11 @@
         // (notably Tab) must still reach their handlers below no
         // matter which control holds focus.
         if (e.key === 'Enter' && e.target instanceof HTMLButtonElement) return;
+        if (e.key === 'Enter' && e.target.name === 'pasted-link') {
+            e.preventDefault();
+            onPasteLink?.(pastedLink, label);
+            return;
+        }
         if (e.key === 'ArrowDown') {
             e.preventDefault();
             active = Math.min(active + 1, candidates.length - 1);
@@ -88,10 +100,34 @@
 <div
     class="link-picker"
     role="dialog"
+    tabindex="-1"
     aria-modal="true"
     aria-label="Link to entry"
     bind:this={box}
     onkeydown={onKeydown}>
+    <label class="link-field">
+        {LINK_PICKER_TEXT.label}
+        <input
+            type="text"
+            placeholder={LINK_PICKER_TEXT.labelPlaceholder}
+            value={label}
+            oninput={(event) => (label = event.currentTarget.value)} />
+    </label>
+    <label class="link-field">
+        {LINK_PICKER_TEXT.pasteLabel}
+        <input
+            type="text"
+            name="pasted-link"
+            placeholder={LINK_PICKER_TEXT.pastePlaceholder}
+            value={pastedLink}
+            oninput={(event) => (pastedLink = event.currentTarget.value)} />
+    </label>
+    <div class="link-actions">
+        <button class="more" disabled={!pastedLink.trim()} onclick={() => onPasteLink?.(pastedLink, label)}>{LINK_PICKER_TEXT.apply}</button>
+        <button class="more" onclick={onCancel}>{LINK_PICKER_TEXT.cancel}</button>
+    </div>
+    {#if linkError}<p class="note" role="status">{linkError}</p>{/if}
+    <span class="search-heading">{LINK_PICKER_TEXT.chooseNote}</span>
     <input
         type="search"
         placeholder="Search entries…"

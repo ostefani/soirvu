@@ -659,3 +659,21 @@
     z-index: 40;
     pointer-events: none;
 }
+
+.popover.backlinks-popover {
+    left: auto;
+    right: 0;
+    width: min(360px, calc(100vw - 3rem));
+    min-width: 0;
+    max-width: none;
+    box-sizing: border-box;
+}
+
+.popover[hidden] {
+    display: none;
+}
+
+.copy-note {
+    color: var(--color-ink-muted);
+    font-size: 0.8rem;
+}
