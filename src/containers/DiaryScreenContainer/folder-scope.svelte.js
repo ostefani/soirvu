@@ -5,7 +5,7 @@ import * as api from '@/api.js';
 import { createRequestOwner } from '@/lib/request-owner.js';
 import { searchScopeKey } from '@/lib/scope.js';
 
-const all = () => ({ kind: 'all' });
+const root = () => ({ kind: 'root' });
 
 /**
  * The folder tree and the scope selected in it. The scope drives the
@@ -27,7 +27,7 @@ export function createFolderScope(deps = api) {
 
     // API payloads and selections are replaced wholesale, never mutated.
     let folders = $state.raw([]);
-    let selection = $state.raw(all());
+    let selection = $state.raw(root());
     let searchScoped = $state(false);
     let loaded = false;
 
@@ -46,10 +46,10 @@ export function createFolderScope(deps = api) {
     const searchScope = $derived(searchScoped ? listScope : null);
     const searchKey = $derived(searchScopeKey(searchScoped, listScope));
 
-    // A folder deleted elsewhere drops back to the whole vault.
+    // A folder deleted elsewhere drops back to the root.
     // Before the first load every folder is trusted.
     function live(sel) {
-        return loaded && sel.kind === 'folder' && !byId.has(sel.id) ? all() : sel;
+        return loaded && sel.kind === 'folder' && !byId.has(sel.id) ? root() : sel;
     }
 
     function setFolders(next) {

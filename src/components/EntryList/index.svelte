@@ -18,23 +18,18 @@
         // Search state lives in the screen; the list only renders it.
         results = null, // null = not searching
         searchNote = '',
-        onClearSearch,
         version = 0,
         // Folder scope: null is the whole vault. Tag and date
         // filters intersect it; the server applies the rest.
         scope = null,
         folders = [],
-        // Bumped after entry creation so the tag filter clears
-        // with the search and date filters (the new entry stays
-        // visible in the kept folder context).
-        filterEpoch = 0,
+        tagFilter = null,
         onToggleDescendants = null,
+        onShowAllChange = null,
     } = $props();
 
     let entries = $state([]);
     let nextCursor = $state(null);
-    let tags = $state([]);
-    let tagFilter = $state(null);
     let error = $state('');
     // One list request in flight at most (reset or page): a
     // "More…" click during a reset would start a newer token with
@@ -42,14 +37,10 @@
     // page and appending old rows to new ones.
     let listBusy = $state(false);
 
-    // Separate owners for the entry pages and the tag counts: a
-    // new filter retires its own in-flight read, never the other's.
     const listOwner = createRequestOwner();
-    const tagOwner = createRequestOwner();
 
     onDestroy(() => {
         listOwner.dispose();
-        tagOwner.dispose();
     });
 
     // Screen copy comes from the local table; unknown codes use the
@@ -108,27 +99,6 @@
         }
     }
 
-    async function loadTags() {
-        const token = tagOwner.begin();
-        const wireScope = scope ?? null;
-        try {
-            const next = await api.tagList(wireScope);
-            if (!tagOwner.current(token)) return;
-            tags = next;
-            tagNote = '';
-        } catch (e) {
-            // Unlike the entries load, the tag block owns no error
-            // slot of its own: a rejection here must not escape as
-            // an unhandled promise rejection.
-            if (!tagOwner.current(token)) return;
-            tagNote = describeError(e);
-        }
-    }
-
-    async function refresh() {
-        await Promise.all([load(true), loadTags()]);
-    }
-
     const byId = $derived(new Map(folders.map((f) => [f.id, f])));
 
     const scopeLabel = $derived(
@@ -144,18 +114,13 @@
         return breadcrumb(byId, folderId).join(' / ');
     }
 
-    let lastFilterEpoch = 0;
-
     $effect(() => {
         void version;
         void scope?.kind;
         void scope?.id;
         void scope?.includeDescendants;
-        if (filterEpoch !== lastFilterEpoch) {
-            lastFilterEpoch = filterEpoch;
-            tagFilter = null;
-        }
-        refresh();
+        void tagFilter;
+        load(true);
     });
 
     function segments(snippet) {
@@ -174,34 +139,6 @@
         if (buf) out.push({ text: buf, marked });
         return out;
     }
-
-    function pickTag(name) {
-        tagFilter = tagFilter === name ? null : name;
-        // A fresh filter needs the plain list, not stale search
-        // results — the screen owns that state and resets it.
-        onClearSearch?.();
-        load(true);
-    }
-
-    // The section folds away for people who do not use tags.
-    // The × on a tag (shown on hover) removes it from every
-    // entry at once; removing a tag from one entry is done in
-    // that entry's own tag field. Two-step, like entry deletion.
-    let tagsOpen = $state(false);
-    let confirmRemove = $state(null); // tag name awaiting confirmation
-    let tagNote = $state('');
-
-    async function removeTag(name) {
-        try {
-            await api.tagDelete(name);
-            if (tagFilter === name) tagFilter = null;
-            confirmRemove = null;
-            tagNote = '';
-            await refresh();
-        } catch (e) {
-            tagNote = describeError(e);
-        }
-    }
 </script>
 
 <div class="entry-list">
@@ -213,6 +150,11 @@
                 checked={scope.includeDescendants}
                 onchange={() => onToggleDescendants?.()}
                 label="Include subfolders" />
+        {:else}
+            <Checkbox
+                label="Show All"
+                checked={scope == null || scope.kind === 'all'}
+                onchange={(event) => onShowAllChange?.(event.currentTarget.checked)} />
         {/if}
     </div>
     {#if error}<p class="form-error">{error}</p>{/if}
@@ -222,52 +164,6 @@
             Entries for {date}
             <button class="quiet" onclick={() => onClearDate?.()}>Show all</button>
         </p>
-    {/if}
-
-    {#if tags.length}
-        <div class="tags-block">
-            <button class="tags-toggle" onclick={() => (tagsOpen = !tagsOpen)} aria-expanded={tagsOpen}>
-                <span class="tags-toggle-chevron">{tagsOpen ? '▾' : '▸'}</span>
-                <span class="tags-toggle-label">Tags</span>
-                <span class="tags-toggle-count">{tags.length}</span>
-            </button>
-            {#if tagsOpen}
-                <div class="tag-flow">
-                    {#each tags as t (t.name)}
-                        {#if confirmRemove === t.name}
-                            <div class="tag-confirm">
-                                <span class="confirm-message">Remove “{t.name}” from all {t.entries} entries?</span>
-                                <div class="confirm-actions">
-                                    <button class="confirm-action remove" onclick={() => removeTag(t.name)}
-                                        >Remove</button>
-                                    <button class="confirm-action cancel" onclick={() => (confirmRemove = null)}
-                                        >Cancel</button>
-                                </div>
-                            </div>
-                        {:else}
-                            <div class="tag-pill" class:active={tagFilter === t.name}>
-                                <button
-                                    class="tag-button"
-                                    class:active={tagFilter === t.name}
-                                    title={tagFilter === t.name ? `Clear filter: ${t.name}` : `Filter by: ${t.name}`}
-                                    onclick={() => pickTag(t.name)}>
-                                    <span class="tag-name">{t.name}</span>
-                                    <span class="tag-count">{t.entries}</span>
-                                </button>
-                                <button
-                                    class="tag-remove"
-                                    title="Remove this tag from all entries"
-                                    aria-label="Remove tag {t.name}"
-                                    onclick={() => (confirmRemove = t.name)}>
-                                    ×
-                                </button>
-                            </div>
-                        {/if}
-                    {/each}
-                </div>
-                {#if tagNote}<p class="note">{tagNote}</p>{/if}
-            {/if}
-        </div>
     {/if}
 
     {#if searchNote}<p class="note">{searchNote}</p>{/if}

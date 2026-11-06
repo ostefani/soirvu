@@ -9,11 +9,16 @@
     overflow: hidden;
 }
 
+.workspace.animating {
+    transition: grid-template-columns 240ms ease;
+}
+
 .navigation-pane {
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+    overflow: hidden;
 }
 
 .pane-toggle {
@@ -57,15 +62,21 @@
     min-height: 0;
     overflow: auto;
     padding: 12px 4px;
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 160ms ease, visibility 0s;
 }
 
-.pane-content[hidden] {
-    display: none;
+.collapsed .pane-content {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 120ms ease, visibility 0s 120ms;
 }
 
 .collapsed-divider {
-    border-left: 1px solid var(--color-border-subtle);
-    margin-left: 5px;
+    background: var(--separator-shadow);
+    box-shadow: inset 2px 0 4px var(--elevation-shadow);
 }
 
 .workspace-main {
@@ -101,5 +112,13 @@
 
     .workspace-main {
         grid-column: 1 / -1;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .workspace.animating,
+    .pane-content,
+    .collapsed .pane-content {
+        transition: none;
     }
 }

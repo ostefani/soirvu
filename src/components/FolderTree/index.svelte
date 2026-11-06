@@ -8,7 +8,7 @@
 
     let {
         folders = [],
-        selection = { kind: 'all' },
+        selection = { kind: 'root' },
         onSelect,
         onChanged,
     } = $props();
@@ -18,6 +18,8 @@
     const rows = $derived(flattenTree(tree.roots, collapsed));
     const recoveredRows = $derived(flattenTree(tree.recovered, collapsed));
 
+    let rootExpanded = $state(true);
+    let rootAnimating = $state(false);
     let expandedIds = $state(new Set());
     const collapsed = $derived(new Set(folders.filter((folder) => !expandedIds.has(folder.id)).map((folder) => folder.id)));
     let openMenu = $state(null); // folder id with its ⋯ menu open
@@ -42,6 +44,21 @@
         onSelect?.({ kind: 'folder', id, includeDescendants: false });
     }
 
+    function setRootExpanded(expanded) {
+        if (rootExpanded === expanded) return;
+        rootAnimating = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        rootExpanded = expanded;
+    }
+
+    function finishRootAnimation(event) {
+        if (event.target === event.currentTarget && event.propertyName === 'grid-template-rows') rootAnimating = false;
+    }
+
+    function selectRoot() {
+        setRootExpanded(true);
+        onSelect?.({ kind: 'root' });
+    }
+
     function toggle(id) {
         const next = new Set(expandedIds);
         if (next.has(id)) next.delete(id);
@@ -55,6 +72,7 @@
     }
 
     function openCreate(parentId) {
+        setRootExpanded(true);
         if (parentId) expandedIds = new Set([...expandedIds, parentId]);
         nameValue = '';
         treeNote = '';
@@ -301,58 +319,66 @@
 {/snippet}
 
 <div class="folder-tree">
-    <button
-        class="scope-row"
-        class:active={selection.kind === 'all'}
-        onclick={() => onSelect?.({ kind: 'all' })}>
-        All entries
-    </button>
-    <button
-        class="scope-row"
-        class:active={selection.kind === 'root'}
-        onclick={() => onSelect?.({ kind: 'root' })}>
-        Root entries
-    </button>
-
-    <div class="folders-head">
-        <span class="folders-title">Folders</span>
+    <div class="folder-row root-row" class:active={selection.kind !== 'folder'}>
+        <button
+            class="disclosure"
+            aria-expanded={rootExpanded}
+            aria-controls="root-folders"
+            aria-label={rootExpanded ? 'Collapse ROOT' : 'Expand ROOT'}
+            onclick={() => setRootExpanded(!rootExpanded)}>
+            {rootExpanded ? '▾' : '▸'}
+        </button>
+        <button
+            class="folder-name root-name"
+            aria-current={selection.kind !== 'folder' ? 'location' : undefined}
+            onclick={selectRoot}>ROOT</button>
         <button class="new-root" aria-label="New folder at the vault root" onclick={() => openCreate(null)}>
             +
         </button>
     </div>
+    <div
+        class="root-children"
+        class:closed={!rootExpanded}
+        class:animating={rootAnimating}
+        id="root-folders"
+        inert={!rootExpanded}
+        aria-hidden={!rootExpanded}
+        ontransitionend={finishRootAnimation}>
+        <div class="root-children-clip">
+            {#if editing?.mode === 'create' && editing.parentId == null}
+                <div class="inline-form" onkeydown={onKeyEscape}>
+                    <input
+                        type="text"
+                        placeholder="Folder name"
+                        aria-label="New folder name"
+                        autofocus
+                        bind:value={nameValue}
+                        onkeydown={(e) => e.key === 'Enter' && createFolder()} />
+                    <div class="form-actions">
+                        <button class="mini primary" onclick={createFolder}>Create</button>
+                        <button class="mini" onclick={closeForms}>Cancel</button>
+                    </div>
+                </div>
+            {/if}
 
-    {#if editing?.mode === 'create' && editing.parentId == null}
-        <div class="inline-form" onkeydown={onKeyEscape}>
-            <input
-                type="text"
-                placeholder="Folder name"
-                aria-label="New folder name"
-                autofocus
-                bind:value={nameValue}
-                onkeydown={(e) => e.key === 'Enter' && createFolder()} />
-            <div class="form-actions">
-                <button class="mini primary" onclick={createFolder}>Create</button>
-                <button class="mini" onclick={closeForms}>Cancel</button>
-            </div>
+            {#if treeNote}<p class="note" role="status">{treeNote}</p>{/if}
+
+            <ul class="tree">
+                {#each rows as { node, depth } (node.folder.id)}
+                    {@render folderRow(node, depth + 1, false)}
+                {/each}
+            </ul>
+
+            {#if recoveredRows.length > 0}
+                <p class="recovered-head">Recovered</p>
+                <ul class="tree">
+                    {#each recoveredRows as { node, depth } (node.folder.id)}
+                        {@render folderRow(node, depth + 1, true)}
+                    {/each}
+                </ul>
+            {/if}
         </div>
-    {/if}
-
-    {#if treeNote}<p class="note" role="status">{treeNote}</p>{/if}
-
-    <ul class="tree">
-        {#each rows as { node, depth } (node.folder.id)}
-            {@render folderRow(node, depth, false)}
-        {/each}
-    </ul>
-
-    {#if recoveredRows.length > 0}
-        <p class="recovered-head">Recovered</p>
-        <ul class="tree">
-            {#each recoveredRows as { node, depth } (node.folder.id)}
-                {@render folderRow(node, depth, true)}
-            {/each}
-        </ul>
-    {/if}
+    </div>
 </div>
 
 <style src="./styles.css"></style>

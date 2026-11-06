@@ -7,44 +7,9 @@
     padding-bottom: 0.75rem;
 }
 
-.scope-row {
-    display: block;
-    width: 100%;
-    text-align: left;
-    padding: 0.35rem 0.5rem;
-    font-size: 0.9rem;
+.root-name {
     font-weight: 600;
-    color: var(--color-ink-muted);
-    background: transparent;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-}
-
-.scope-row:hover {
-    color: var(--color-ink-primary);
-    background-color: var(--color-accent-soft);
-}
-
-.scope-row.active {
-    color: var(--color-ink-primary);
-    background-color: var(--color-accent-soft);
-}
-
-.folders-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-top: 0.5rem;
-    padding: 0 0.5rem;
-}
-
-.folders-title {
-    font-size: 0.8rem;
-    font-weight: 600;
-    text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: var(--color-ink-muted);
 }
 
 .new-root {
@@ -279,4 +244,35 @@
     color: var(--color-ink-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
+}
+
+.root-children {
+    display: grid;
+    grid-template-rows: 1fr;
+    opacity: 1;
+    visibility: visible;
+    transition: grid-template-rows 200ms ease, opacity 160ms ease, visibility 0s;
+}
+
+.root-children.closed {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    visibility: hidden;
+    transition: grid-template-rows 200ms ease, opacity 120ms ease, visibility 0s 200ms;
+}
+
+.root-children-clip {
+    min-height: 0;
+}
+
+.root-children.closed > .root-children-clip,
+.root-children.animating > .root-children-clip {
+    overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .root-children,
+    .root-children.closed {
+        transition: none;
+    }
 }

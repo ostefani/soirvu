@@ -6,13 +6,15 @@
     touch-action: none;
     position: relative;
     outline-offset: -3px;
+    background: var(--separator-shadow);
+    box-shadow: inset 2px 0 4px var(--elevation-shadow);
 }
 
 .pane-divider::after {
     content: '';
     position: absolute;
     inset: 0 5px;
-    background: var(--color-border-subtle);
+    background: transparent;
 }
 
 .pane-divider:hover::after,

@@ -9,6 +9,7 @@
     let { folders, entries, children, entryLabel = 'Entries' } = $props();
     let model = $state(createModel());
     let workspace;
+    let animating = $state(false);
     const widths = $derived(paneWidths(model));
 
     onMount(() => {
@@ -24,13 +25,25 @@
         return Math.max(PANE_MIN[pane], model.width - widths[other] - MAIN_MIN - DIVIDERS_WIDTH);
     }
 
+    function finishAnimation(event) {
+        if (event.target === workspace && event.propertyName === 'grid-template-columns') animating = false;
+    }
+
+    function togglePane(pane) {
+        animating = true;
+        model[pane].collapsed = !model[pane].collapsed;
+    }
+
     function resize(pane, width) {
+        animating = false;
         model[pane].width = width;
     }
 </script>
 
 <div
     class="workspace"
+    class:animating
+    ontransitionend={finishAnimation}
     bind:this={workspace}
     style:--folders-width={`${widths.folders}px`}
     style:--entries-width={`${widths.entries}px`}>
@@ -41,11 +54,11 @@
                 aria-label={`${model[pane].collapsed ? 'Expand' : 'Collapse'} ${PANE_LABELS[pane].toLowerCase()} pane`}
                 aria-expanded={!model[pane].collapsed}
                 aria-controls={`workspace-${pane}`}
-                onclick={() => (model[pane].collapsed = !model[pane].collapsed)}>
+                onclick={() => togglePane(pane)}>
                 <span title={pane === 'entries' ? entryLabel : PANE_LABELS[pane]}>{pane === 'entries' ? entryLabel : PANE_LABELS[pane]}</span>
                 <span aria-hidden="true">{model[pane].collapsed ? '›' : '‹'}</span>
             </button>
-            <div class="pane-content" id={`workspace-${pane}`} hidden={model[pane].collapsed}>
+            <div class="pane-content" id={`workspace-${pane}`} inert={model[pane].collapsed} aria-hidden={model[pane].collapsed}>
                 {#if pane === 'folders'}
                     {@render folders()}
                 {:else}

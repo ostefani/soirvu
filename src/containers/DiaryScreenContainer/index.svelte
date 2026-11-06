@@ -6,6 +6,7 @@
     import { clearBacklinkCache } from '@/lib/links.js';
     import EntryList from '@/components/EntryList/index.svelte';
     import WorkspaceLayoutContainer from '@/containers/WorkspaceLayoutContainer/index.svelte';
+    import TagsContainer from '@/containers/TagsContainer/index.svelte';
     import FolderTree from '@/components/FolderTree/index.svelte';
     import Calendar from '@/components/Calendar/index.svelte';
     import EntryEditorContainer from '@/containers/EntryEditorContainer/index.svelte';
@@ -28,8 +29,7 @@
     let listDate = $state(null);
     // Bumped whenever the list, calendar or "on this day" must re-read.
     let navVersion = $state(0);
-    // Bumped when a new entry resets the list's own tag/date filters.
-    let filterEpoch = $state(0);
+    let tagFilter = $state(null);
     let error = $state('');
     let creating = $state(false);
 
@@ -184,7 +184,7 @@
             // the folder context is kept.
             search.clear();
             listDate = null;
-            filterEpoch++;
+            tagFilter = null;
             bumpNavigation();
             error = '';
             await selectEntry(created.id, { push: true });
@@ -232,8 +232,17 @@
         </div>
         {#if error}<p class="form-error">{error}</p>{/if}
     </header>
-    <WorkspaceLayoutContainer entryLabel={folderScope.folderName ?? (folderScope.selection.kind === 'root' ? 'Root entries' : 'All entries')}>
+    <WorkspaceLayoutContainer entryLabel={folderScope.folderName ?? (folderScope.selection.kind === 'root' ? 'ROOT' : 'ROOT · Show All')}>
         {#snippet folders()}
+            <TagsContainer
+                scope={folderScope.listScope}
+                version={navVersion}
+                selected={tagFilter}
+                onFilterChange={(name) => {
+                    tagFilter = name;
+                    search.clear();
+                }}
+                onChanged={bumpNavigation} />
             <FolderTree
                 folders={folderScope.folders}
                 selection={folderScope.selection}
@@ -251,9 +260,9 @@
                 searchNote={search.note}
                 scope={folderScope.listScope}
                 folders={folderScope.folders}
-                {filterEpoch}
-                onToggleDescendants={folderScope.toggleDescendants}
-                onClearSearch={search.clear} />
+                {tagFilter}
+                onShowAllChange={(checked) => selectFolderScope({ kind: checked ? 'all' : 'root' })}
+                onToggleDescendants={folderScope.toggleDescendants} />
         {/snippet}
         <main bind:this={mainEl}>
             {#if selectedId}
