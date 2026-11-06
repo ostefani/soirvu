@@ -312,6 +312,7 @@ test('successful lock preparation freezes the session', async () => {
 test('copying the current note uses its live title, stable id and clipboard registration', async () => {
     const id = '01900000-0000-7000-8000-000000000001';
     const copied = [];
+    const notifications = [];
     let registered = 0;
     const session = createEntrySession({
         api: {
@@ -319,6 +320,7 @@ test('copying the current note uses its live title, stable id and clipboard regi
             clipboardNoteCopy: async () => { registered++; },
         },
         copyText: async (text) => copied.push(text),
+        notifyCopied: (message) => notifications.push(message),
         delay: 10000,
     });
     await session.load(id);
@@ -326,7 +328,7 @@ test('copying the current note uses its live title, stable id and clipboard regi
     assert.equal(await session.copyNoteLink(), true);
     assert.equal(copied[0], `[Updated \\[title\\]](entry:${id})`);
     assert.equal(registered, 1);
-    assert.equal(session.copyNote, 'Internal link copied.');
+    assert.deepEqual(notifications, ['Internal link copied.']);
     session.dispose();
 });
 
@@ -334,11 +336,13 @@ test('copying an untitled note uses its date and reports clipboard failures', as
     const id = '01900000-0000-7000-8000-000000000001';
     let copied;
     let fail = false;
+    const errors = [];
     const session = createEntrySession({
         api: {
             entryGet: async () => ({ id, rev: 1, title: '', entry_date: '2026-11-01', tags: [] }),
             clipboardNoteCopy: async () => {},
         },
+        notifyError: (message) => errors.push(message),
         copyText: async (text) => {
             if (fail) throw new Error('Clipboard unavailable');
             copied = text;
@@ -349,7 +353,7 @@ test('copying an untitled note uses its date and reports clipboard failures', as
     assert.equal(copied, `[Untitled — 2026-11-01](entry:${id})`);
     fail = true;
     assert.equal(await session.copyNoteLink(), false);
-    assert.equal(session.copyNote, 'Could not copy the link.');
+    assert.deepEqual(errors, ['Could not copy the link.']);
     session.dispose();
 });
 
@@ -357,12 +361,15 @@ test('frozen notes cannot copy and disposed sessions ignore late copy feedback',
     const id = '01900000-0000-7000-8000-000000000001';
     const gate = deferred();
     let copied = 0;
+    const notifications = [];
     const session = createEntrySession({
         api: {
             entryGet: async () => ({ id, rev: 1, title: 'Title', entry_date: '2026-11-01', tags: [] }),
             clipboardNoteCopy: async () => {},
         },
         copyText: async () => { copied++; await gate.promise; },
+        notifyCopied: (message) => notifications.push(message),
+        notifyError: (message) => notifications.push(message),
     });
     await session.load(id);
     const copying = session.copyNoteLink();
@@ -370,7 +377,7 @@ test('frozen notes cannot copy and disposed sessions ignore late copy feedback',
     session.dispose();
     gate.resolve();
     assert.equal(await copying, false);
-    assert.equal(session.copyNote, '');
+    assert.deepEqual(notifications, []);
     assert.equal(copied, 1);
     const { session: locked } = setup();
     await locked.load('e1');
@@ -428,5 +435,43 @@ test('bracket links keep their title fallback and accept an optional custom labe
     session.requestBracketPicker(5);
     session.pickLinkTarget({ ...target, linkLabel: 'My label' });
     assert.equal(view.calls[1][1].label, 'My label');
+    session.dispose();
+});
+
+
+test('the toolbar Link dialog removes a link at the original range while keeping its text', async () => {
+    const { session } = setup();
+    await session.load('e1');
+    const view = fakeViewApi({
+        query: () => ({ from: 10, to: 10, empty: true, link: { from: 7, to: 15, href: 'entry:01900000-0000-7000-8000-000000000001' } }),
+        readText: () => 'My label',
+    });
+    session.setViewApi(view);
+    session.openLinkPicker();
+    assert.equal(session.linkPicker.canRemove, true);
+    session.removePickerLink();
+    assert.deepEqual(view.calls[0], ['removeLink', { from: 7, to: 15 }]);
+    assert.equal(session.linkPicker, null);
+    session.dispose();
+});
+
+test('Remove link is offered for selected links and omitted for ordinary text', async () => {
+    const { session } = setup();
+    await session.load('e1');
+    let hasLink = false;
+    const view = fakeViewApi({
+        query: () => ({ from: 3, to: 9, empty: false, hasLink }),
+        readText: () => 'Words',
+    });
+    session.setViewApi(view);
+    session.openLinkPicker();
+    assert.equal(session.linkPicker.canRemove, false);
+    session.removePickerLink();
+    assert.equal(view.calls.length, 0);
+    hasLink = true;
+    session.openLinkPicker();
+    assert.equal(session.linkPicker.canRemove, true);
+    session.removePickerLink();
+    assert.deepEqual(view.calls[0], ['removeLink', { from: 3, to: 9 }]);
     session.dispose();
 });

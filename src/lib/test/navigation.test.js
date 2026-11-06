@@ -180,3 +180,11 @@ test("a blocked settle records nothing", async () => {
     assert.equal(nav.current().entryId, "a");
     assert.equal(nav.canGoForward, false);
 });
+
+
+test('a vault reset invalidates in-flight entry location reads', () => {
+    const nav = createNavigator();
+    const token = nav.beginSelect();
+    nav.reset();
+    assert.equal(nav.isLiveSelect(token), false);
+});

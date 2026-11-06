@@ -37,7 +37,7 @@ export const ENTRY_EDITOR_TEXT = {
     moodHeading: 'Mood',
     tagsHeading: 'Tags',
     linkedFrom: 'Linked from',
-    copyNoteLink: 'Copy link to this note',
+    copyNoteLink: 'Copy link',
     copyingLink: 'Copying…',
     clearMood: 'Clear mood',
     removeTagLabel: 'Remove tag',

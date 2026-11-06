@@ -44,7 +44,8 @@
     {#if onLinkEntry}
         <button
             type="button"
-            class:active={!!selection?.link}
+            class:active={!!selection?.linkActive}
+            aria-pressed={!!selection?.linkActive}
             onmousedown={keepFocus}
             onclick={() => onLinkEntry()}
             title={TOOLBAR_TEXT.linkEntryTitle}>{TOOLBAR_TEXT.linkEntry}</button>

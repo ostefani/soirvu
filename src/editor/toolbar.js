@@ -43,6 +43,8 @@ export function selectionInfo(state) {
         em: false,
         strike: false,
         code: false,
+        hasLink: false,
+        linkActive: false,
         block: "other",
         headingLevel: null,
         quote: false,
@@ -68,7 +70,14 @@ export function selectionInfo(state) {
         info.block = "paragraph";
     }
     info.inTable = Boolean(tableContext(state));
+    info.linkActive = markActive(state, marks.link);
     info.link = linkAt(state);
+    info.hasLink = info.link !== null;
+    if (!sel.empty) {
+        state.doc.nodesBetween(sel.from, sel.to, (node) => {
+            if (node.isText && marks.link.isInSet(node.marks)) info.hasLink = true;
+        });
+    }
     for (let d = 1; d <= $from.depth; d++) {
         const node = $from.node(d);
         if (node.type === nodes.blockquote) info.quote = true;

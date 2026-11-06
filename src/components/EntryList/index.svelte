@@ -12,6 +12,7 @@
 
     let {
         selectedId,
+        focusedEntry = null,
         onSelect,
         date = null,
         onClearDate,
@@ -141,6 +142,18 @@
     }
 </script>
 
+{#snippet entryRow(entry)}
+    <button
+        {@attach (node) => {
+            if (selectedId === entry.id) node.scrollIntoView({ block: 'nearest' });
+        }}
+        class="entry-row" class:active={selectedId === entry.id} aria-current={selectedId === entry.id ? 'page' : undefined} onclick={() => onSelect(entry.id)}>
+        <span class="entry-date">{entry.entry_date}</span>
+        <span class="entry-title">{entry.title ?? entry.excerpt ?? 'Untitled'}</span>
+        {#if entry.folder_id}<span class="crumb">{crumb(entry.folder_id)}</span>{/if}
+    </button>
+{/snippet}
+
 <div class="entry-list">
     <div class="list-head">
         <!-- <h2 class="list-title">Entries · {scopeLabel}</h2> -->
@@ -166,12 +179,19 @@
         </p>
     {/if}
 
+    {#if focusedEntry?.id === selectedId && !listBusy && results === null && !entries.some((entry) => entry.id === selectedId)}
+        <div class="open-entry">
+            <span class="open-entry-label">Open entry</span>
+            {@render entryRow(focusedEntry)}
+        </div>
+    {/if}
+
     {#if searchNote}<p class="note">{searchNote}</p>{/if}
 
     {#if results !== null}
         <div class="results">
             {#each results as r (r.id)}
-                <button class="result" onclick={() => onSelect(r.id)}>
+                <button class="result" class:active={selectedId === r.id} onclick={() => onSelect(r.id)}>
                     <span class="result-head">{r.entry_date} — {r.title ?? 'Untitled'}</span>
                     {#if r.folder_id}<span class="crumb">{crumb(r.folder_id)}</span>{/if}
                     <span class="snippet">
@@ -185,11 +205,7 @@
     {:else}
         <div class="entries">
             {#each entries as entry (entry.id)}
-                <button class="entry-row" class:active={selectedId === entry.id} onclick={() => onSelect(entry.id)}>
-                    <span class="entry-date">{entry.entry_date}</span>
-                    <span class="entry-title">{entry.title ?? entry.excerpt ?? 'Untitled'}</span>
-                    {#if entry.folder_id}<span class="crumb">{crumb(entry.folder_id)}</span>{/if}
-                </button>
+                {@render entryRow(entry)}
             {/each}
             {#if entries.length === 0}<p class="note">No entries yet.</p>{/if}
             {#if nextCursor}

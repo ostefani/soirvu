@@ -18,7 +18,7 @@
    the caret (see keepPopoverFocus), so actions read live ranges. */
 .link-popover {
     position: absolute;
-    z-index: 10;
+    z-index: 60;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -78,11 +78,13 @@
 
 /* One meta row: back button + metadata chips. */
 .meta-row {
+    position: relative;
+    z-index: 40;
     display: flex;
     gap: 1.4rem;
     align-items: center;
     flex-wrap: wrap;
-    background: var(--color-surface)
+    background: var(--color-surface);
 }
 
 .meta-chips {
@@ -671,9 +673,4 @@
 
 .popover[hidden] {
     display: none;
-}
-
-.copy-note {
-    color: var(--color-ink-muted);
-    font-size: 0.8rem;
 }

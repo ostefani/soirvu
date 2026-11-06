@@ -37,7 +37,6 @@
         navigating = false,
         linkNote = '',
         deleteError = null,
-        copyNote = '',
         copying = false,
         onCopyNoteLink = null,
         pickerOpen = false,
@@ -77,6 +76,8 @@
     let info = $state.raw(null);
     let editor = $state.raw(null);
     let paneEl = $state(null);
+    let linkPopoverEl = $state.raw(null);
+    let linkPopoverDismissed = $state(true);
     const titleField = { name: 'title', placeholder: ENTRY_EDITOR_TEXT.titlePlaceholder };
 
     // Lock freeze reaches the engine here: the container owns the
@@ -201,11 +202,14 @@
        inside .chip-wrap, so clicks on them are "inside" and stay. */
     onMount(() => {
         const onDocClick = (e) => {
-            if (e.target.closest('.chip-wrap')) return;
-            openPop = null;
+            if (!linkPopoverEl?.contains(e.target)) {
+                const anchor = e.target.closest('.editor-mount a[href]');
+                linkPopoverDismissed = !(anchor && paneEl?.contains(anchor));
+            }
+            if (!e.target.closest('.chip-wrap')) openPop = null;
         };
-        document.addEventListener('click', onDocClick);
-        return () => document.removeEventListener('click', onDocClick);
+        document.addEventListener('click', onDocClick, true);
+        return () => document.removeEventListener('click', onDocClick, true);
     });
 
     const ASSET_PREFIXES = ['soirvu-asset://localhost/', 'http://soirvu-asset.localhost/'];
@@ -225,14 +229,16 @@
                 onRequestLinkPicker: ({ bracketPos }) => onRequestBracketPicker(bracketPos),
             }),
         );
-        editor = instance;
-        if (navRestore?.sel) {
-            try {
-                editor.setTextSelection(navRestore.sel.from, navRestore.sel.to);
-            } catch {
-                // A changed document keeps the default top selection.
+        untrack(() => {
+            editor = instance;
+            if (navRestore?.sel) {
+                try {
+                    instance.setTextSelection(navRestore.sel.from, navRestore.sel.to);
+                } catch {
+                }
             }
-        }
+            refreshToolbar();
+        });
         node.addEventListener('dblclick', onEditorDblClick);
 
         return () => {
@@ -320,7 +326,7 @@
 
     const linkInfo = $derived(!frozen && !pickerOpen && info?.link ? info.link : null);
     const linkKind = $derived(linkInfo ? classifyHref(linkInfo.href) : null);
-    const showPopover = $derived(linkInfo !== null && (linkKind === 'entry' || linkKind === 'external'));
+    const showPopover = $derived(linkInfo !== null && !linkPopoverDismissed && (linkKind === 'entry' || linkKind === 'external'));
 
     /* Every departure settles through the same session gate; the
        view stays on the entry when it reports failure. */
@@ -338,6 +344,7 @@
 <svelte:window
     onkeydown={(e) => {
         if (e.key === 'Escape') {
+            linkPopoverDismissed = true;
             if (openPop === 'backlinks') backlinksButton?.focus();
             openPop = null;
         }
@@ -347,7 +354,7 @@
     <div class="editor-pane" bind:this={paneEl}>
         <!-- One compact meta row: back + chips. Date, mood and
              tags each open a popover instead of stacking rows. -->
-        <div class="meta-row">
+        <div class="meta-row" inert={pickerOpen}>
             <Button kind="quiet" handler={goBack} aria-label={ENTRY_EDITOR_TEXT.back}
                 ><IconLeft />{ENTRY_EDITOR_TEXT.back}</Button>
             <div class="meta-chips">
@@ -455,23 +462,23 @@
                 <button class="meta-chip" disabled={frozen || copying} onclick={() => onCopyNoteLink?.()}>
                     {copying ? ENTRY_EDITOR_TEXT.copyingLink : ENTRY_EDITOR_TEXT.copyNoteLink}
                 </button>
-                {#if copyNote}<span class="copy-note" role="status">{copyNote}</span>{/if}
             </div>
         </div>
 
         <Input field={titleField} class="title-input" value={title} oninput={onTitleInput} disabled={frozen} />
         <EditorToolbar
             selection={info}
-            disabled={frozen}
+            disabled={frozen || pickerOpen}
             onCommand={(name, arg) => editor?.exec(name, arg)}
             onAttach={() => fileInput?.click()}
             {onLinkEntry} />
         <input type="file" multiple hidden bind:this={fileInput} onchange={onFilesPicked} />
-        <div class="editor-mount" {@attach mountEditor}></div>
+        <div class="editor-mount" inert={pickerOpen} {@attach mountEditor}></div>
         {#if showPopover}
             {@const targetId = parseEntryTarget(linkInfo.href)}
             <div
                 class="link-popover"
+                bind:this={linkPopoverEl}
                 style={popoverStyle(linkInfo)}
                 role="dialog"
                 aria-label={ENTRY_EDITOR_TEXT.linkActionsLabel}>

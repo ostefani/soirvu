@@ -96,6 +96,7 @@ export function createNavigator({ onChange = null } = {}) {
         },
         /** Forgets the whole trail (vault switch, lock). */
         reset() {
+            generation++;
             stack = [];
             index = -1;
             changed();

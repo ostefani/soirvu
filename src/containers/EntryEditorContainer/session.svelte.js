@@ -48,6 +48,7 @@ export function createEntrySession({
     onDeleted = null,
     onOpenEntry = null,
     notifyError = null,
+    notifyCopied = null,
     copyText = defaultCopyText,
 }) {
     let entry = $state(null);
@@ -68,7 +69,6 @@ export function createEntrySession({
     let pendingNavId = $state(null);
     let deleteError = $state(null);
     let linkNote = $state('');
-    let copyNote = $state('');
     let copying = $state(false);
 
     let viewApi = null;
@@ -290,7 +290,7 @@ export function createEntrySession({
         if (!selection) return;
         const from = selection.link?.from ?? selection.from;
         const to = selection.link?.to ?? selection.to;
-        linkPicker = { bracketPos: null, initialText: '', from, to, label: viewApi.readText(from, to) };
+        linkPicker = { bracketPos: null, initialText: '', from, to, label: viewApi.readText(from, to), canRemove: !!(selection.link || selection.hasLink) };
     }
 
     function requestBracketPicker(bracketPos) {
@@ -301,6 +301,13 @@ export function createEntrySession({
     function cancelPicker() {
         linkPicker = null;
         viewApi?.focus();
+    }
+
+    function removePickerLink() {
+        if (frozen || !viewApi || !linkPicker?.canRemove) return;
+        const { from, to } = linkPicker;
+        viewApi.exec('removeLink', { from, to });
+        cancelPicker();
     }
 
     function pickLinkTarget(target) {
@@ -392,38 +399,37 @@ export function createEntrySession({
         viewApi?.exec('removeLink', range);
     }
 
-    async function copyNoteLink() {
-        if (!entry || frozen || copying) return false;
+    async function copyLinkText(text) {
+        if (frozen || copying) return false;
         const token = copyOwner.begin();
         copying = true;
-        copyNote = '';
         try {
-            const label = defaultLinkLabel({ title: title.trim(), entry_date: entryDate });
-            await copyText(entryLinkMarkdown(entry.id, label));
+            await copyText(text);
             const registered = await noteLinkCopied();
             if (!copyOwner.current(token) || frozen) return false;
-            copyNote = registered ? ENTRY_EDITOR_TEXT.linkCopied : ENTRY_EDITOR_TEXT.linkCopyFailed;
+            if (registered) notifyCopied?.(ENTRY_EDITOR_TEXT.linkCopied);
+            else notifyError?.(ENTRY_EDITOR_TEXT.linkCopyFailed);
             return registered;
         } catch {
-            if (copyOwner.current(token) && !frozen) copyNote = ENTRY_EDITOR_TEXT.linkCopyFailed;
+            if (copyOwner.current(token) && !frozen) notifyError?.(ENTRY_EDITOR_TEXT.linkCopyFailed);
             return false;
         } finally {
             if (copyOwner.current(token)) copying = false;
         }
     }
 
+    async function copyNoteLink() {
+        if (!entry || frozen) return false;
+        const label = defaultLinkLabel({ title: title.trim(), entry_date: entryDate });
+        return copyLinkText(entryLinkMarkdown(entry.id, label));
+    }
+
     async function copyInternalLink(link) {
+        if (frozen) return false;
         const live = liveLinkRange(link);
-        if (!live) return;
+        if (!live) return false;
         const label = viewApi.readText(live.from, live.to);
-        try {
-            await copyText(entryLinkMarkdown(parseEntryTarget(link.href), label));
-            linkNote = (await noteLinkCopied())
-                ? ENTRY_EDITOR_TEXT.linkCopied
-                : ENTRY_EDITOR_TEXT.linkCopyFailed;
-        } catch {
-            linkNote = ENTRY_EDITOR_TEXT.linkCopyFailed;
-        }
+        return copyLinkText(entryLinkMarkdown(parseEntryTarget(link.href), label));
     }
 
     async function refreshLinkLabel(link) {
@@ -534,9 +540,6 @@ export function createEntrySession({
         get linkNote() {
             return linkNote;
         },
-        get copyNote() {
-            return copyNote;
-        },
         get copying() {
             return copying;
         },
@@ -556,6 +559,7 @@ export function createEntrySession({
         openLinkPicker,
         requestBracketPicker,
         cancelPicker,
+        removePickerLink,
         pickLinkTarget,
         followEntryLink,
         retryPendingNav,

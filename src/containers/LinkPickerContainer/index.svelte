@@ -7,7 +7,7 @@
     import { readEntryLink } from '@/lib/links.js';
     import LinkPicker from '@/components/LinkPicker/index.svelte';
 
-    let { initialQuery = '', initialLabel = '', folders = [], onPick = null, onCancel = null } = $props();
+    let { initialQuery = '', initialLabel = '', folders = [], canRemove = false, onRemoveLink = null, onPick = null, onCancel = null } = $props();
 
     let query = $state(untrack(() => initialQuery));
     let linkError = $state('');
@@ -75,6 +75,8 @@
 <LinkPicker
     {query}
     {initialLabel}
+    {canRemove}
+    {onRemoveLink}
     {linkError}
     onPasteLink={applyPastedLink}
     {candidates}

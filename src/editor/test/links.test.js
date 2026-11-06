@@ -9,10 +9,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { parseMarkdown, serializeMarkdown } from "../index.js";
-import { EditorState, TextSelection } from "../state.js";
+import { EditorState, TextSelection, cursorMarks } from "../state.js";
+import { insertTextIn } from "../commands.js";
 import { schema } from "../schema.js";
 import { inputRulesPlugin } from "../rules.js";
-import { insertEntryLink, linkAt, locateLink, toolbarCommands } from "../toolbar.js";
+import { insertEntryLink, linkAt, locateLink, selectionInfo, toolbarCommands } from "../toolbar.js";
 
 const A = "01900000-0000-7000-8000-000000000001";
 const B = "01900000-0000-7000-8000-000000000002";
@@ -135,4 +136,71 @@ test("typing [[ outside code opens the picker; code stays literal", () => {
     code = code.apply(((tr) => (tr.setSelection(new TextSelection(textStart + 1)), tr))(code.tr()));
     props.handleTextInput(code, textStart + 1, textStart + 1, "[", dispatch);
     assert.deepEqual(calls, []);
+});
+
+
+test('link menu detects links inside mixed selections and removal preserves other formatting', () => {
+    const markdown = `Before **[label](entry:${A})** after`;
+    const state = stateFor(markdown, 1, 19);
+    assert.equal(selectionInfo(state).hasLink, true);
+    const result = run(toolbarCommands(schema).removeLink, state, { from: 1, to: 19 });
+    assert.equal(result.ok, true);
+    assert.equal(serializeMarkdown(result.next.doc), 'Before **label** after');
+    assert.equal(selectionInfo(result.next).hasLink, false);
+});
+
+
+function typeText(state, text) {
+    const transaction = state.tr();
+    insertTextIn(transaction, state, text);
+    return state.apply(transaction);
+}
+
+test('typing spaces, symbols and letters after a newly created link stays outside its label', () => {
+    const created = run(toolbarCommands(schema).insertEntryLink, stateFor('', 1), { targetId: A, label: 'Target' });
+    let next = created.next;
+    for (const text of [' ', '!?', ' word', ' 🐈']) next = typeText(next, text);
+    const linkText = [];
+    next.doc.descendants((node) => {
+        if (node.isText && node.marks.some((mark) => mark.type === schema.marks.link)) linkText.push(node.text);
+    });
+    assert.deepEqual(linkText, ['Target']);
+    assert.equal(next.doc.textContent, 'Target !? word 🐈');
+    assert.equal(linkAt(next), null);
+});
+
+test('existing internal and web links are non-inclusive at both boundaries', () => {
+    for (const href of [`entry:${A}`, 'https://example.com']) {
+        const markdown = `[Target](${href})`;
+        assert.equal(cursorMarks(stateFor(markdown, 1)).some((mark) => mark.type === schema.marks.link), false);
+        assert.equal(cursorMarks(stateFor(markdown, 7)).some((mark) => mark.type === schema.marks.link), false);
+        assert.equal(cursorMarks(stateFor(markdown, 4)).some((mark) => mark.type === schema.marks.link), true);
+        assert.equal(serializeMarkdown(typeText(stateFor(markdown, 7), '!').doc), `[Target](${href})!`);
+        const before = typeText(stateFor(markdown, 1), '!');
+        assert.equal(before.doc.textContent, '!Target');
+        assert.equal(before.doc.firstChild.firstChild.marks.some((mark) => mark.type === schema.marks.link), false);
+    }
+});
+
+test('link text remains editable inside the label and surrounding formatting still continues', () => {
+    const state = stateFor(`**[Target](entry:${A})**`, 4);
+    assert.equal(serializeMarkdown(typeText(state, 'X').doc), `**[TarXget](entry:${A})**`);
+    const end = stateFor(`**[Target](entry:${A})**`, 7);
+    const next = typeText(end, '!');
+    assert.equal(next.doc.lastChild.lastChild.text, '!');
+    assert.equal(next.doc.lastChild.lastChild.marks.some((mark) => mark.type === schema.marks.strong), true);
+    assert.equal(next.doc.lastChild.lastChild.marks.some((mark) => mark.type === schema.marks.link), false);
+});
+
+
+test('the toolbar Link active state follows typing marks instead of popup hit ranges', () => {
+    const markdown = `[Target](entry:${A})`;
+    const end = stateFor(markdown, 7);
+    assert.notEqual(selectionInfo(end).link, null);
+    assert.equal(selectionInfo(end).linkActive, false);
+    assert.equal(selectionInfo(stateFor(markdown, 4)).linkActive, true);
+    const plain = typeText(end, ' plain text');
+    assert.equal(selectionInfo(plain).linkActive, false);
+    assert.equal(selectionInfo(plain).link, null);
+    assert.equal(selectionInfo(plain).hasLink, false);
 });

@@ -117,10 +117,6 @@ export function cursorMarks(state) {
     if (!isTextSelection(sel)) return [];
     if (!sel.empty) return [];
     const $pos = doc.resolve(sel.from);
-    const before = $pos.nodeBefore;
-    if (before && (before.isText || before.isInline)) return before.marks;
-    const after = $pos.nodeAfter;
-    if (after && (after.isText || after.isInline)) return after.marks;
     return $pos.marks();
 }
 

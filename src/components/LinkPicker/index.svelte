@@ -8,6 +8,8 @@
     let {
         query = '',
         initialLabel = '',
+        canRemove = false,
+        onRemoveLink = null,
         linkError = '',
         onPasteLink = null,
         candidates = [],
@@ -40,6 +42,10 @@
         void query;
         active = 0;
     });
+
+    function focusSearch(node) {
+        node.focus();
+    }
 
     function pick(entry) {
         onPick?.({ ...entry, linkLabel: label });
@@ -123,6 +129,9 @@
             oninput={(event) => (pastedLink = event.currentTarget.value)} />
     </label>
     <div class="link-actions">
+        {#if canRemove}
+            <button class="more" onclick={onRemoveLink}>{LINK_PICKER_TEXT.remove}</button>
+        {/if}
         <button class="more" disabled={!pastedLink.trim()} onclick={() => onPasteLink?.(pastedLink, label)}>{LINK_PICKER_TEXT.apply}</button>
         <button class="more" onclick={onCancel}>{LINK_PICKER_TEXT.cancel}</button>
     </div>
@@ -132,7 +141,7 @@
         type="search"
         placeholder="Search entries…"
         aria-label="Search entries to link"
-        autofocus
+        {@attach focusSearch}
         value={query}
         oninput={(e) => onQueryChange?.(e.currentTarget.value)} />
     {#if error}

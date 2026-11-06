@@ -7,6 +7,7 @@ export const LINK_PICKER_TEXT = {
     pasteLabel: 'Paste note link',
     pastePlaceholder: 'Paste a copied note link or entry:…',
     apply: 'Apply link',
+    remove: 'Remove link',
     cancel: 'Cancel',
     chooseNote: 'Or choose a note',
     invalidLink: 'Paste a copied note link or an entry: link.',

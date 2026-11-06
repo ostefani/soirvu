@@ -3,6 +3,7 @@
     import * as api from '@/api.js';
     import { resolveErrorText } from '@/lib/errors.js';
     import { createNavigator } from '@/lib/navigation.js';
+    import { entryLocationScope } from '@/lib/entry-location.js';
     import { clearBacklinkCache } from '@/lib/links.js';
     import EntryList from '@/components/EntryList/index.svelte';
     import WorkspaceLayoutContainer from '@/containers/WorkspaceLayoutContainer/index.svelte';
@@ -26,6 +27,8 @@
     const onThisDay = createOnThisDay();
 
     let selectedId = $state(null);
+    let revealedEntry = $state.raw(null);
+    let revealVersion = $state(0);
     let listDate = $state(null);
     // Bumped whenever the list, calendar or "on this day" must re-read.
     let navVersion = $state(0);
@@ -55,6 +58,7 @@
     $effect(() => {
         void vault?.id;
         nav.reset();
+        revealedEntry = null;
         navRestore = null;
         search.invalidate();
         folderScope.load();
@@ -120,8 +124,8 @@
         );
     }
 
-    async function selectEntry(id, { push = false, restore = null, context = null } = {}) {
-        if (id === selectedId && !restore) return true;
+    async function selectEntry(id, { push = false, restore = null, context = null, reveal = false } = {}) {
+        if (id === selectedId && !restore && !reveal) return true;
         // A select that resolves after a newer select began is obsolete:
         // it records and applies nothing. The open entry settles uploads
         // and flushes first; a failed save stays put with its error showing.
@@ -129,14 +133,41 @@
         const ok = (await editorRef?.flushForNavigation?.()) ?? true;
         if (!ok || !nav.isLiveSelect(token)) return false;
 
+        let destination = null;
+        if (reveal) {
+            try {
+                destination = await api.entryGet(id);
+            } catch (failure) {
+                if (!nav.isLiveSelect(token)) return false;
+                if (failure !== 'entry_not_found' && failure !== 'invalid_input') {
+                    error = resolveErrorText(DIARY_ERRORS, failure).text;
+                    return false;
+                }
+            }
+            if (!nav.isLiveSelect(token)) return false;
+        }
+
         // Snapshot the entry left before context and selection move on.
-        const left = push && selectedId ? captureSnapshot() : null;
+        const left = push && selectedId && id !== selectedId ? captureSnapshot() : null;
         let searching;
-        if (context) {
+        if (destination) {
+            folderScope.restore(entryLocationScope(destination, folderScope.folders), false);
+            search.clear();
+            listDate = null;
+            tagFilter = null;
+            revealVersion++;
+        } else if (context) {
             folderScope.restore(context.scope, context.scoped);
             listDate = context.date;
             searching = search.restore(context.query);
         }
+        revealedEntry = destination ? {
+            id: destination.id,
+            title: destination.title,
+            entry_date: destination.entry_date,
+            folder_id: destination.folder_id,
+        } : null;
+        error = '';
         navRestore = restore;
         selectedId = id;
         if (restore && mainEl) restoreScroll(id, restore.scroll ?? 0);
@@ -159,6 +190,7 @@
         const target = nav.peek(delta);
         if (!target) return;
         const ok = await selectEntry(target.entryId, {
+            reveal: true,
             restore: { sel: target.sel, scroll: target.scroll },
             context: { scope: target.scope, scoped: target.scoped, query: target.query, date: target.date },
         });
@@ -198,6 +230,7 @@
     }
 
     function selectFolderScope(selection) {
+        revealedEntry = null;
         folderScope.select(selection);
         listDate = null;
     }
@@ -240,12 +273,14 @@
                 selected={tagFilter}
                 onFilterChange={(name) => {
                     tagFilter = name;
+                    revealedEntry = null;
                     search.clear();
                 }}
                 onChanged={bumpNavigation} />
             <FolderTree
                 folders={folderScope.folders}
                 selection={folderScope.selection}
+                {revealVersion}
                 onSelect={selectFolderScope}
                 onChanged={handleFoldersChanged} />
         {/snippet}
@@ -253,6 +288,7 @@
             <EntryList
                 version={navVersion}
                 {selectedId}
+                focusedEntry={revealedEntry}
                 onSelect={open}
                 date={listDate}
                 onClearDate={() => (listDate = null)}
@@ -275,7 +311,7 @@
                         {canGoBack}
                         {canGoForward}
                         workspaceTick={importTick}
-                        onOpenEntry={({ id }) => open(id)}
+                        onOpenEntry={({ id }) => selectEntry(id, { push: true, reveal: true })}
                         onNavBack={() => goHistory(-1)}
                         onNavForward={() => goHistory(1)}
                         onBack={() => (selectedId = null)}

@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
+    import { untrack } from 'svelte';
+    import { folderPathIds } from '@/lib/entry-location.js';
     import * as api from '@/api.js';
     import { resolveErrorText } from '@/lib/errors.js';
     import { FOLDER_TREE_ERRORS } from './errors.js';
@@ -9,6 +11,7 @@
     let {
         folders = [],
         selection = { kind: 'root' },
+        revealVersion = 0,
         onSelect,
         onChanged,
     } = $props();
@@ -27,6 +30,16 @@
     let nameValue = $state('');
     let moveTarget = $state('root');
     let treeNote = $state('');
+
+    $effect(() => {
+        void revealVersion;
+        untrack(() => {
+            setRootExpanded(true);
+            if (selection.kind === 'folder') {
+                expandedIds = new Set([...expandedIds, ...folderPathIds(folders, selection.id)]);
+            }
+        });
+    });
 
     // Screen copy comes from the local table; unknown codes use the
     // single shared rule instead of leaking the raw IPC code.
@@ -218,7 +231,11 @@
             {:else}
                 <span class="disclosure-spacer" aria-hidden="true"></span>
             {/if}
-            <button class="folder-name" aria-current={isSelected(f.id) ? 'location' : undefined} onclick={() => selectFolder(f.id)}>
+            <button
+                {@attach (node) => {
+                    if (isSelected(f.id)) node.scrollIntoView({ block: 'nearest' });
+                }}
+                class="folder-name" aria-current={isSelected(f.id) ? 'location' : undefined} onclick={() => selectFolder(f.id)}>
                 {f.name}
                 {#if showRecovered}<span class="recovered-tag">recovered</span>{/if}
             </button>

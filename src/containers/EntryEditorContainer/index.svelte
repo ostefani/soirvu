@@ -35,6 +35,7 @@
         onDeleted: (...args) => onDeleted?.(...args),
         onOpenEntry: (target) => onOpenEntry?.(target),
         notifyError: (message) => notify(EVENT_TYPE.ERROR, message),
+        notifyCopied: (message) => notify(EVENT_TYPE.COPIED, message),
     });
 
     // The view's narrow engine interface (insertAttachment,
@@ -83,6 +84,8 @@
             <LinkPickerContainer
                 initialQuery={session.linkPicker.initialText}
                 initialLabel={session.linkPicker.label ?? ''}
+                canRemove={session.linkPicker.canRemove ?? false}
+                onRemoveLink={() => session.removePickerLink()}
                 {folders}
                 onPick={(target) => session.pickLinkTarget(target)}
                 onCancel={() => session.cancelPicker()} />
@@ -107,7 +110,6 @@
     navigating={session.navigating}
     linkNote={session.linkNote}
     deleteError={session.deleteError}
-    copyNote={session.copyNote}
     copying={session.copying}
     onCopyNoteLink={() => session.copyNoteLink()}
     pickerOpen={session.linkPicker !== null}

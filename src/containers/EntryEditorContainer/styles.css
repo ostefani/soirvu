@@ -1,18 +1,20 @@
-/* The link picker is a centered dialog over a dimmed pane: it
-   must never slide under the sticky toolbar, where its search
-   box would be unreachable. The pane positioning lives with the
-   editor layout that renders this snippet. */
+/* The viewport overlay sits above metadata menus and the sticky
+   toolbar. Its dialog scrolls within short windows. */
 .picker-overlay {
-    position: absolute;
+    position: fixed;
     inset: 0;
-    z-index: 20;
+    z-index: 100;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 1rem;
+    box-sizing: border-box;
+    overflow-y: auto;
     background-color: #00000040;
 }
 
 .picker-overlay> :global(*) {
     width: min(28rem, 100%);
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
 }
