@@ -1,16 +1,10 @@
 /* SPDX-License-Identifier: MIT
    Copyright (c) 2026 Olha Stefanishyna */
-/* The folder navigator sits above the entry list. Rows are quiet:
-   separation comes from indentation and an accent-soft hover
-   tint, not boxed button chrome — the same language as the
-   entry rows below it. */
 .folder-tree {
     display: flex;
     flex-direction: column;
     gap: 0.15rem;
     padding-bottom: 0.75rem;
-    border-bottom: 1px solid var(--color-border-subtle);
-    margin-bottom: 0.75rem;
 }
 
 .scope-row {

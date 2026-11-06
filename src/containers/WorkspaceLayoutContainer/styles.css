@@ -1,0 +1,105 @@
+/* SPDX-License-Identifier: MIT
+   Copyright (c) 2026 Olha Stefanishyna */
+.workspace {
+    display: grid;
+    grid-template-columns: var(--folders-width) 12px var(--entries-width) 12px minmax(0, 1fr);
+    flex: 1;
+    min-height: 0;
+    margin-top: 16px;
+    overflow: hidden;
+}
+
+.navigation-pane {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+
+.pane-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-shrink: 0;
+    width: 100%;
+    padding: 12px 10px;
+    border: 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--color-ink-muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.pane-toggle > span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pane-toggle:hover {
+    background: var(--color-accent-soft);
+    color: var(--color-ink-primary);
+}
+
+.collapsed .pane-toggle {
+    writing-mode: vertical-rl;
+    width: 40px;
+    height: auto;
+    min-height: 110px;
+}
+
+.pane-content {
+    min-height: 0;
+    overflow: auto;
+    padding: 12px 4px;
+}
+
+.pane-content[hidden] {
+    display: none;
+}
+
+.collapsed-divider {
+    border-left: 1px solid var(--color-border-subtle);
+    margin-left: 5px;
+}
+
+.workspace-main {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+}
+
+@media (max-width: 760px) {
+    .workspace {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-rows: minmax(120px, 36%) minmax(0, 1fr);
+    }
+
+    .workspace > :global(.pane-divider),
+    .collapsed-divider {
+        display: none;
+    }
+
+    .navigation-pane {
+        border-bottom: 1px solid var(--color-border-subtle);
+    }
+
+    .navigation-pane:first-child {
+        border-right: 1px solid var(--color-border-subtle);
+    }
+
+    .collapsed .pane-toggle {
+        writing-mode: horizontal-tb;
+        width: 100%;
+        min-height: 0;
+    }
+
+    .workspace-main {
+        grid-column: 1 / -1;
+    }
+}

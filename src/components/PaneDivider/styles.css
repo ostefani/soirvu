@@ -1,0 +1,22 @@
+/* SPDX-License-Identifier: MIT
+   Copyright (c) 2026 Olha Stefanishyna */
+.pane-divider {
+    width: 12px;
+    cursor: col-resize;
+    touch-action: none;
+    position: relative;
+    outline-offset: -3px;
+}
+
+.pane-divider::after {
+    content: '';
+    position: absolute;
+    inset: 0 5px;
+    background: var(--color-border-subtle);
+}
+
+.pane-divider:hover::after,
+.pane-divider:focus-visible::after,
+.pane-divider.dragging::after {
+    background: var(--color-accent);
+}

@@ -206,7 +206,8 @@
 
 <div class="entry-list">
     <div class="list-head">
-        <h2 class="list-title">Entries · {scopeLabel}</h2>
+        <!-- <h2 class="list-title">Entries · {scopeLabel}</h2> -->
+        <h2 class="list-title">Entries</h2>
         {#if scope?.kind === 'folder'}
             <Checkbox
                 checked={scope.includeDescendants}

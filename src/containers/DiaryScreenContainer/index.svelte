@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: MIT
-     Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     import { untrack } from 'svelte';
     import * as api from '@/api.js';
@@ -7,6 +5,7 @@
     import { createNavigator } from '@/lib/navigation.js';
     import { clearBacklinkCache } from '@/lib/links.js';
     import EntryList from '@/components/EntryList/index.svelte';
+    import WorkspaceLayoutContainer from '@/containers/WorkspaceLayoutContainer/index.svelte';
     import FolderTree from '@/components/FolderTree/index.svelte';
     import Calendar from '@/components/Calendar/index.svelte';
     import EntryEditorContainer from '@/containers/EntryEditorContainer/index.svelte';
@@ -50,9 +49,6 @@
     // bind:this targets, read only from handlers.
     let editorRef = $state.raw(null);
     let mainEl;
-
-    // The New-entry destination shown beside the action.
-    const destName = $derived(folderScope.folderName ?? 'Root');
 
     // A new vault retires everything read for the previous one.
     // The navigator is also cleared on unmount (lock).
@@ -201,6 +197,11 @@
         }
     }
 
+    function selectFolderScope(selection) {
+        folderScope.select(selection);
+        listDate = null;
+    }
+
     async function handleFoldersChanged() {
         await folderScope.load();
         bumpNavigation();
@@ -224,20 +225,22 @@
                 searchScoped={folderScope.searchScoped}
                 onQueryChange={search.setQuery}
                 onScopedChange={folderScope.setSearchScoped} />
-            <span class="dest" title="New entries file here">in {destName}</span>
+            <!-- <span class="dest" title="New entries file here">in {destName}</span> -->
             <Button label="New entry" kind="texture-button" handler={newEntry} disabled={creating} />
             <Button label="Settings" kind="texture-button" handler={onSettings} />
             <Button label="Lock" kind="texture-button" handler={onLock} />
         </div>
         {#if error}<p class="form-error">{error}</p>{/if}
     </header>
-    <div class="diary-body">
-        <aside>
+    <WorkspaceLayoutContainer entryLabel={folderScope.folderName ?? (folderScope.selection.kind === 'root' ? 'Root entries' : 'All entries')}>
+        {#snippet folders()}
             <FolderTree
                 folders={folderScope.folders}
                 selection={folderScope.selection}
-                onSelect={folderScope.select}
+                onSelect={selectFolderScope}
                 onChanged={handleFoldersChanged} />
+        {/snippet}
+        {#snippet entries()}
             <EntryList
                 version={navVersion}
                 {selectedId}
@@ -251,7 +254,7 @@
                 {filterEpoch}
                 onToggleDescendants={folderScope.toggleDescendants}
                 onClearSearch={search.clear} />
-        </aside>
+        {/snippet}
         <main bind:this={mainEl}>
             {#if selectedId}
                 {#key selectedId}
@@ -280,7 +283,7 @@
                         scope={folderScope.listScope} />
                     <NoteComponent
                         variant="info"
-                        text="Pick a day to see its entries in the list — or pick a recent entry on the left." />
+                        text="Pick a day to see its entries in the list — or select an entry in the entries pane." />
                     {#if onThisDay.entries.length}
                         <div class="on-this-day">
                             <h3>On this day <span class="vault-wide">· whole vault</span></h3>
@@ -295,7 +298,7 @@
                 </div>
             {/if}
         </main>
-    </div>
+    </WorkspaceLayoutContainer>
 </div>
 
 <style src="./styles.css"></style>

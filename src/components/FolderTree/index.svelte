@@ -18,7 +18,8 @@
     const rows = $derived(flattenTree(tree.roots, collapsed));
     const recoveredRows = $derived(flattenTree(tree.recovered, collapsed));
 
-    let collapsed = $state(new Set());
+    let expandedIds = $state(new Set());
+    const collapsed = $derived(new Set(folders.filter((folder) => !expandedIds.has(folder.id)).map((folder) => folder.id)));
     let openMenu = $state(null); // folder id with its ⋯ menu open
     let editing = $state(null); // { mode, id?, parentId? }
     let nameValue = $state('');
@@ -36,15 +37,16 @@
     }
 
     function selectFolder(id) {
-        // Reselecting the open folder keeps its descendants toggle.
+        expandedIds = new Set([...expandedIds, id]);
         if (isSelected(id)) return;
         onSelect?.({ kind: 'folder', id, includeDescendants: false });
     }
 
     function toggle(id) {
-        if (collapsed.has(id)) collapsed.delete(id);
-        else collapsed.add(id);
-        collapsed = new Set(collapsed);
+        const next = new Set(expandedIds);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        expandedIds = next;
     }
 
     function closeForms() {
@@ -53,6 +55,7 @@
     }
 
     function openCreate(parentId) {
+        if (parentId) expandedIds = new Set([...expandedIds, parentId]);
         nameValue = '';
         treeNote = '';
         editing = { mode: 'create', parentId };
@@ -197,7 +200,7 @@
             {:else}
                 <span class="disclosure-spacer" aria-hidden="true"></span>
             {/if}
-            <button class="folder-name" onclick={() => selectFolder(f.id)}>
+            <button class="folder-name" aria-current={isSelected(f.id) ? 'location' : undefined} onclick={() => selectFolder(f.id)}>
                 {f.name}
                 {#if showRecovered}<span class="recovered-tag">recovered</span>{/if}
             </button>

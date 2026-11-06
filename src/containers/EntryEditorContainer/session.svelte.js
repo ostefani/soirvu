@@ -1,5 +1,4 @@
-// SPDX-License-Identifier: MIT
-// Copyright (c) 2026 Olha Stefanishyna
+
 import { createRequestOwner } from '../../lib/request-owner.js';
 import { createAutosave } from '../../lib/autosave.svelte.js';
 import { createEntryCommit, mayFinishAfterFlush } from '../../lib/entry-commit.js';
@@ -188,7 +187,7 @@ export function createEntrySession({
             uploadId = await api.attachmentBegin(entry.id, file.name, file.type || null);
             for (let offset = 0; offset < file.size; offset += ATTACH_CHUNK_SIZE) {
                 if (abortUploads) {
-                    await api.attachmentAbort(uploadId).catch(() => {});
+                    await api.attachmentAbort(uploadId).catch(() => { });
                     return null;
                 }
                 const slice = await file.slice(offset, offset + ATTACH_CHUNK_SIZE).arrayBuffer();
@@ -196,7 +195,7 @@ export function createEntrySession({
             }
             const saved = await autosave.flush();
             if (!mayFinishAfterFlush(saved, autosave.state)) {
-                await api.attachmentAbort(uploadId).catch(() => {});
+                await api.attachmentAbort(uploadId).catch(() => { });
                 uploadId = null;
                 return attachError(file.name, ENTRY_EDITOR_TEXT.staleAttach);
             }
@@ -206,7 +205,7 @@ export function createEntrySession({
             viewApi?.insertAttachment?.({ id: added.id, mime: added.mime, name: file.name });
             return null;
         } catch (e) {
-            if (uploadId) await api.attachmentAbort(uploadId).catch(() => {});
+            if (uploadId) await api.attachmentAbort(uploadId).catch(() => { });
             if (e === 'revision_conflict') saveConflict = true;
             return uploadFailureText(file.name, e);
         }
@@ -444,11 +443,11 @@ export function createEntrySession({
     }
 
     function openAttachment(id) {
-        api.attachmentOpen(id).catch(() => {});
+        api.attachmentOpen(id).catch(() => { });
     }
 
     function openExternalLink(href) {
-        api.openLink(href).catch(() => {});
+        api.openLink(href).catch(() => { });
     }
 
     return {

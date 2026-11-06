@@ -309,7 +309,7 @@ button.result.active {
 /* Scope heading: which slice of the vault the rows below show. */
 .list-head {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
     padding: 0 0.6rem;

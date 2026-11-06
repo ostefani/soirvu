@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: MIT
-     Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     import { onDestroy, onMount } from 'svelte';
     import * as api from '@/api.js';

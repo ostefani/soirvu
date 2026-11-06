@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: MIT
-     Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     import { onMount, untrack } from 'svelte';
     import { createEditor } from '@/editor/index.js';
@@ -423,7 +421,7 @@
             disabled={frozen}
             onCommand={(name, arg) => editor?.exec(name, arg)}
             onAttach={() => fileInput?.click()}
-            onLinkEntry={onLinkEntry} />
+            {onLinkEntry} />
         <input type="file" multiple hidden bind:this={fileInput} onchange={onFilesPicked} />
         <div class="editor-mount" {@attach mountEditor}></div>
         {@render panels?.()}
@@ -493,8 +491,7 @@
             {/if}
             <span class="status">{saveConflict ? ENTRY_EDITOR_TEXT.conflictStatus : status}</span>
             {#if deleteArmed}
-                <Button kind="danger" class="confirm-button" handler={remove}
-                    >{ENTRY_EDITOR_TEXT.confirmDelete}</Button>
+                <Button kind="danger" class="confirm-button" handler={remove}>{ENTRY_EDITOR_TEXT.confirmDelete}</Button>
                 <Button kind="quiet" class="keep-button" handler={() => (deleteArmed = false)}
                     >{ENTRY_EDITOR_TEXT.keepEntry}</Button>
             {:else}

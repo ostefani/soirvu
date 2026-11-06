@@ -7,12 +7,14 @@
 }
 
 .calendar-home {
+    width: 100%;
+    box-sizing: border-box;
     max-width: 620px;
     margin: 0 auto;
     display: flex;
     flex-direction: column;
     row-gap: 32px;
-    padding: 16px 32px;
+    padding: 16px 8px;
 }
 
 .diary-head {
@@ -49,24 +51,11 @@
     letter-spacing: 0.01em;
 }
 
-.diary-body {
-    display: flex;
+main {
     flex: 1;
-    min-height: 0;
-    margin-top: 16px;
-}
-
-.diary-body aside {
-    width: 28%;
-    flex-shrink: 0;
+    min-width: 0;
     overflow-y: auto;
-    box-shadow: 16px 0 0 0 var(--separator-shadow);
-}
-
-.diary-body main {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px 16px 32px 32px;
+    padding: 16px 16px 32px;
     position: relative;
 }
 
@@ -111,24 +100,22 @@
     min-width: 3.2em;
 }
 
-/* Narrow windows stack the navigator above the editor instead of
-   squeezing three columns side by side. A full navigation drawer
-   is a later polish item; stacking keeps everything reachable. */
-@media (max-width: 700px) {
-    .diary-body {
-        flex-direction: column;
-        overflow-y: auto;
+@media (max-width: 760px) {
+    .diary-head,
+    .diary-menu {
+        flex-wrap: wrap;
+        gap: 8px;
     }
 
-    .diary-body aside {
-        width: 100%;
-        overflow-y: visible;
-        box-shadow: none;
-        border-bottom: 1px solid var(--color-border-subtle);
+    .diary-head {
+        padding: 8px;
     }
 
-    .diary-body main {
-        overflow-y: visible;
-        padding: 16px;
+    main {
+        padding: 12px;
+    }
+
+    .calendar-home {
+        padding: 8px 0;
     }
 }
