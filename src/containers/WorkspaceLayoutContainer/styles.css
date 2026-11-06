@@ -61,7 +61,7 @@
 .pane-content {
     min-height: 0;
     overflow: auto;
-    padding: 12px 4px;
+    padding: 12px 0;
     opacity: 1;
     visibility: visible;
     transition: opacity 160ms ease, visibility 0s;

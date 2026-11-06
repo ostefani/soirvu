@@ -26,6 +26,7 @@ import { Fragment, Slice } from "prosemirror-model";
 import { NodeSelection, TextSelection, selectionNear } from "./state.js";
 import { deleteSelection as deleteSelectionCmd, insertTextIn } from "./commands.js";
 import { inlineSlice } from "./transform.js";
+import { caretScrollDelta } from "./scroll.js";
 import { tokenize } from "./highlight.js";
 
 // ---------------------------------------------------------------------------
@@ -551,6 +552,23 @@ export class EditorView {
             }
         }
         return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+    }
+
+    scrollSelectionIntoView() {
+        if (this.composing || this.state.selection.type !== 'text' || !this.dom.contains(document.activeElement)) return;
+        const position = this.state.selection.head;
+        let container = this.dom;
+        while (container && container !== document.documentElement) {
+            const style = getComputedStyle(container);
+            if (/auto|scroll/.test(style.overflowY) && container.scrollHeight > container.clientHeight) {
+                const bounds = container.getBoundingClientRect();
+                const top = bounds.top + container.clientTop;
+                const viewport = { top, bottom: top + container.clientHeight };
+                const delta = caretScrollDelta(this.coordsAtPos(position), viewport);
+                if (delta) container.scrollTop += delta;
+            }
+            container = container.parentElement;
+        }
     }
 
     syncSelection() {

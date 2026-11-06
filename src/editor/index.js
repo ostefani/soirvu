@@ -160,6 +160,7 @@ export function createEditor(el, options = {}) {
         dispatchTransaction(tr) {
             const next = view.state.apply(tr);
             view.updateState(next);
+            if (tr.docChanged) view.scrollSelectionIntoView();
             if (tr.docChanged) onChange(serializeMarkdown(next.doc));
             if (onSelectionChange) onSelectionChange();
             hydrateAttachments();

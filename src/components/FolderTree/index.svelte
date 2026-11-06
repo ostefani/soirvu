@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
+    import AnchoredMenu from '@/components/AnchoredMenu/index.svelte';
+    import { FOLDER_ACTIONS } from './data.js';
     import { untrack } from 'svelte';
     import { folderPathIds } from '@/lib/entry-location.js';
     import * as api from '@/api.js';
@@ -25,6 +27,7 @@
     let rootAnimating = $state(false);
     let expandedIds = $state(new Set());
     const collapsed = $derived(new Set(folders.filter((folder) => !expandedIds.has(folder.id)).map((folder) => folder.id)));
+    let menuAnchor = $state.raw(null);
     let openMenu = $state(null); // folder id with its ⋯ menu open
     let editing = $state(null); // { mode, id?, parentId? }
     let nameValue = $state('');
@@ -61,6 +64,7 @@
         if (rootExpanded === expanded) return;
         rootAnimating = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         rootExpanded = expanded;
+        if (!expanded) closeMenu();
     }
 
     function finishRootAnimation(event) {
@@ -79,9 +83,33 @@
         expandedIds = next;
     }
 
+    function closeMenu() {
+        openMenu = null;
+        menuAnchor = null;
+    }
+
+    function toggleMenu(id, anchor) {
+        if (openMenu === id) {
+            closeMenu();
+            return;
+        }
+        editing = null;
+        menuAnchor = anchor;
+        openMenu = id;
+    }
+
+    function selectMenuAction(action) {
+        const folder = byId.get(openMenu);
+        if (!folder) return closeMenu();
+        if (action === 'create') openCreate(folder.id);
+        else if (action === 'rename') openRename(folder);
+        else if (action === 'move') openMove(folder);
+        else if (action === 'delete') openDelete(folder);
+    }
+
     function closeForms() {
         editing = null;
-        openMenu = null;
+        closeMenu();
     }
 
     function openCreate(parentId) {
@@ -90,27 +118,27 @@
         nameValue = '';
         treeNote = '';
         editing = { mode: 'create', parentId };
-        openMenu = null;
+        closeMenu();
     }
 
     function openRename(folder) {
         nameValue = folder.name;
         treeNote = '';
         editing = { mode: 'rename', id: folder.id };
-        openMenu = null;
+        closeMenu();
     }
 
     function openMove(folder) {
         moveTarget = folder.parent_id ?? 'root';
         treeNote = '';
         editing = { mode: 'move', id: folder.id };
-        openMenu = null;
+        closeMenu();
     }
 
     function openDelete(folder) {
         treeNote = '';
         editing = { mode: 'delete', id: folder.id };
-        openMenu = null;
+        closeMenu();
     }
 
     function onKeyEscape(e) {
@@ -249,19 +277,12 @@
             <button
                 class="menu-btn"
                 aria-label={`Actions for ${f.name}`}
+                aria-haspopup="menu"
                 aria-expanded={openMenu === f.id}
-                onclick={() => ((openMenu = openMenu === f.id ? null : f.id), (editing = null))}>
+                onclick={(event) => toggleMenu(f.id, event.currentTarget)}>
                 ⋯
             </button>
         </div>
-        {#if openMenu === f.id}
-            <div class="menu" onkeydown={onKeyEscape}>
-                <button onclick={() => openCreate(f.id)}>New subfolder</button>
-                <button onclick={() => openRename(f)}>Rename</button>
-                <button onclick={() => openMove(f)}>Move</button>
-                <button onclick={() => openDelete(f)}>Remove</button>
-            </div>
-        {/if}
         {#if editing?.mode === 'create' && editing.parentId === f.id}
             <div class="inline-form indented" onkeydown={onKeyEscape}>
                 <input
@@ -397,5 +418,14 @@
         </div>
     </div>
 </div>
+
+{#if openMenu && menuAnchor && byId.has(openMenu)}
+    <AnchoredMenu
+        anchor={menuAnchor}
+        actions={FOLDER_ACTIONS}
+        label={`Actions for ${byId.get(openMenu).name}`}
+        onSelect={selectMenuAction}
+        onClose={closeMenu} />
+{/if}
 
 <style src="./styles.css"></style>

@@ -123,8 +123,8 @@ export function moodChipLabel(mood) {
 
 export function tagsChipLabel(tags) {
     if (tags.length === 0) return ENTRY_EDITOR_TEXT.tagsChip;
-    if (tags.length <= 2) return tags.join(', ');
-    return `${tags.slice(0, 2).join(', ')} +${tags.length - 2}`;
+    if (tags.length === 1) return tags[0];
+    return `${tags[0]} +${tags.length - 1}`;
 }
 
 export function untitledForDate(date) {

@@ -11,7 +11,12 @@
     display: flex;
     flex-direction: column;
     max-width: 100%;
-    height: 100%;
+    min-height: 100%;
+    box-sizing: border-box;
+}
+
+.editor-pane > :global(*) {
+    flex-shrink: 0;
 }
 
 /* The link popover anchors under the marked run. Buttons keep
@@ -345,6 +350,11 @@
 /* Borderless writing surface that sits directly on the
    canvas. Padding only for caret breathing room. */
 .editor-mount {
+    flex: 1 1 0;
+    height: 0;
+    min-height: 8rem;
+    box-sizing: border-box;
+    overflow-y: auto;
     border: 1px solid transparent;
     padding: 1.0rem 1.5rem;
 
@@ -356,35 +366,37 @@
 }
 
 .editor-foot {
-    display: grid;
-    grid-template-columns: repeat(12, 1fr);
-    bottom: 0;
-    right: 0;
-    background-color: #0000001a;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0;
     width: 100%;
+    box-sizing: border-box;
+    min-height: 46px;
+    padding: 0;
     margin-top: 16px;
-    height: 46px;
-    overflow-x: hidden;
-    align-items: center;
+    background-color: #0000001a;
     border-radius: 12px;
 }
 
-:global(.keep-button) {
-    grid-column: 10 / -1;
+.footer-navigation,
+.footer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0;
 }
 
-:global(.confirm-button) {
-    grid-column: 6 / 10;
-}
-
-:global(.delete-button) {
-    grid-column: 10 / -1;
+.footer-actions {
+    margin-left: auto;
 }
 
 .status {
+    flex: 1 1 8rem;
+    min-width: 0;
+    overflow-wrap: anywhere;
     font-size: 0.8em;
     color: var(--color-ink-muted);
-    grid-column: 4 / 6;
 }
 
 .conflict {
@@ -397,10 +409,8 @@
     border: 1px solid currentColor;
 }
 
-/* To do: move height components into vars */
 :global(.editor-mount.ProseMirror) {
     outline: none;
-    height: calc(100% - 78px - 30px - 16px - 10px - 2.4rem - 2.95rem);
     white-space: break-spaces;
     overflow-y: auto;
 }

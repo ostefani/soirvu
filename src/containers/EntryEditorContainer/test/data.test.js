@@ -66,8 +66,8 @@ test('chip and label helpers format values without side effects', () => {
     assert.equal(moodChipLabel('3'), 'Mood 3/5');
     assert.equal(tagsChipLabel([]), ENTRY_EDITOR_TEXT.tagsChip);
     assert.equal(tagsChipLabel(['a']), 'a');
-    assert.equal(tagsChipLabel(['a', 'b']), 'a, b');
-    assert.equal(tagsChipLabel(['a', 'b', 'c']), 'a, b +1');
+    assert.equal(tagsChipLabel(['a', 'b']), 'a +1');
+    assert.equal(tagsChipLabel(['a', 'b', 'c']), 'a +2');
     assert.equal(untitledForDate('2026-10-20'), 'Untitled — 2026-10-20');
     assert.equal(attachmentLabel('a.png', 2048), 'a.png · 2 KB');
     assert.match(linkTargetError('gone'), /gone/);
