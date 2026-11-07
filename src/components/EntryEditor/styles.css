@@ -382,8 +382,7 @@
     position: relative;
 }
 
-.footer-navigation,
-.footer-actions {
+.footer-navigation {
     display: flex;
     flex-wrap: wrap;
     align-items: stretch;
@@ -395,11 +394,60 @@
 }
 
 .footer-actions {
-    margin-left: auto;
+    display: flex;
     position: absolute;
     right: 0;
     top: 50%;
+    white-space: nowrap;
     transform: translateY(-50%);
+}
+
+.footer-actions > :global(button) {
+    flex: 1;
+    min-width: 0;
+}
+
+.delete-label {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 60ms ease-out;
+}
+
+.delete-label.current {
+    position: static;
+    opacity: 1;
+    transition-delay: 60ms;
+}
+
+.footer-delete-confirmation {
+    position: absolute;
+    right: 100%;
+    inset-block: 0;
+    display: flex;
+    width: max-content;
+    overflow: hidden;
+}
+
+.footer-delete-confirmation :global(.confirm-button) {
+    transform: translateX(100%);
+    transition: transform 200ms ease;
+}
+
+.footer-actions.armed .footer-delete-confirmation :global(.confirm-button) {
+    transform: translateX(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+    .delete-label,
+    .delete-label.current,
+    .footer-delete-confirmation :global(.confirm-button) {
+        transition: none;
+    }
 }
 
 .status {

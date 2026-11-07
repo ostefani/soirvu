@@ -1,5 +1,5 @@
 <script>
-    import { onMount, untrack } from 'svelte';
+    import { onMount, tick, untrack } from 'svelte';
     import { createEditor } from '@/editor/index.js';
     import { classifyHref, parseEntryTarget } from '@/lib/entry-target.js';
     import EditorToolbar from '@/components/EditorToolbar/index.svelte';
@@ -72,6 +72,8 @@
     } = $props();
 
     let deleteArmed = $state(false);
+    let deleteActions = $state(null);
+    let deleteWidthAnimation;
     let fileInput = $state(null);
     let info = $state.raw(null);
     let editor = $state.raw(null);
@@ -340,6 +342,22 @@
         if (frozen) return;
         await deleteEntry();
     }
+
+    async function toggleDeleteArmed() {
+        const actions = deleteActions;
+        const startWidth = actions.getBoundingClientRect().width;
+        deleteWidthAnimation?.cancel();
+        deleteArmed = !deleteArmed;
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+        await tick();
+        if (!actions.isConnected) return;
+        const endWidth = actions.getBoundingClientRect().width;
+        deleteWidthAnimation = actions.animate(
+            { width: [`${startWidth}px`, `${endWidth}px`] },
+            { duration: 120, easing: 'ease-in-out' },
+        );
+    }
 </script>
 
 <svelte:window
@@ -549,16 +567,19 @@
                 {/if}
             </div>
             <span class="status">{saveConflict ? ENTRY_EDITOR_TEXT.conflictStatus : status}</span>
-            <div class="footer-actions">
-                {#if deleteArmed}
+            <div class="footer-actions" class:armed={deleteArmed} bind:this={deleteActions}>
+                <Button
+                    kind="quiet-button"
+                    aria-expanded={deleteArmed}
+                    aria-label={deleteArmed ? ENTRY_EDITOR_TEXT.keepEntry : ENTRY_EDITOR_TEXT.deleteEntry}
+                    handler={toggleDeleteArmed}>
+                    <span class="delete-label" class:current={!deleteArmed} aria-hidden="true">{ENTRY_EDITOR_TEXT.deleteEntry}</span>
+                    <span class="delete-label" class:current={deleteArmed} aria-hidden="true">{ENTRY_EDITOR_TEXT.keepEntry}</span>
+                </Button>
+                <div class="footer-delete-confirmation" inert={!deleteArmed}>
                     <Button kind="danger-button" class="confirm-button" handler={remove}
                         >{ENTRY_EDITOR_TEXT.confirmDelete}</Button>
-                    <Button kind="quiet-button" class="keep-button" handler={() => (deleteArmed = false)}
-                        >{ENTRY_EDITOR_TEXT.keepEntry}</Button>
-                {:else}
-                    <Button kind="quiet-button" class="delete-button" handler={() => (deleteArmed = true)}
-                        >{ENTRY_EDITOR_TEXT.deleteEntry}</Button>
-                {/if}
+                </div>
             </div>
         </div>
     </div>
