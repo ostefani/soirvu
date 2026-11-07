@@ -321,6 +321,37 @@ test('successful lock preparation freezes the session', async () => {
     session.dispose();
 });
 
+test('locking during the last upload chunk aborts the upload before it can commit', async () => {
+    const { api, session } = setup();
+    await session.load('e1');
+    const view = fakeViewApi();
+    session.attachEditor(view);
+    const chunkStarted = deferred();
+    const chunkFinished = deferred();
+    const aborted = [];
+    let commits = 0;
+    api.attachmentChunk = async () => {
+        chunkStarted.resolve();
+        await chunkFinished.promise;
+    };
+    api.attachmentAbort = async (id) => { aborted.push(id); };
+    api.attachmentFinish = async () => {
+        commits++;
+        return { id: 'att1', mime: 'image/png', rev: 2 };
+    };
+
+    session.attachFiles([fakeFile()]);
+    await chunkStarted.promise;
+    const locking = session.prepareLock();
+    chunkFinished.resolve();
+
+    assert.equal(await locking, true);
+    assert.deepEqual(aborted, ['u1']);
+    assert.equal(commits, 0);
+    assert.deepEqual(view.calls, []);
+    session.dispose();
+});
+
 for (const transition of ['lock', 'failed lock', 'editor replacement']) {
     test(`a pending link-title refresh is discarded after ${transition}`, async () => {
         const { api, session } = setup();
