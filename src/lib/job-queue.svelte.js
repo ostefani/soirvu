@@ -6,6 +6,7 @@ export function createJobQueue({ concurrency, run }) {
     let failures = $state.raw([]);
 
     function add(items) {
+        if (aborted) return;
         if (pending === 0) failures = [];
         for (const item of items) waiting.push(item);
         pending += items.length;
