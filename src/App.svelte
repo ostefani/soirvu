@@ -10,8 +10,8 @@
 
     import { APPLICATION_SCREEN, MAIN_VIEW, VAULT_STATUS, KEYBOARD_SHORTCUT, EVENT_TYPE } from '@/constants.js';
     import { notify } from '@/components/Notification/store.svelte.js';
-    import { runFlushHooks } from '@/lib/lock-hooks.js';
     import { applicationText } from '@/data.js';
+    import { startVaultLifecycle } from '@/vault-lifecycle.js';
 
     let screen = $state(APPLICATION_SCREEN.BOOT);
     let mainView = $state(MAIN_VIEW.WELCOME);
@@ -86,44 +86,7 @@
         event.preventDefault();
     }
 
-    onMount(() => {
-        let unlisten;
-        let unlistenLock;
-        let destroyed = false;
-
-        api.onVaultStatus(({ status }) => {
-            if (status !== VAULT_STATUS.UNLOCKED) refresh();
-        }).then((stop) => {
-            if (destroyed) stop?.();
-            else unlisten = stop;
-        });
-
-        api.onLockRequested(async ({ generation }) => {
-            let ok = false;
-            try {
-                ok = await runFlushHooks();
-            } finally {
-                api.vaultLockReady(generation, ok).catch(() => {});
-            }
-        }).then((stop) => {
-            if (destroyed) stop?.();
-            else unlistenLock = stop;
-        });
-
-        api.lockNoticeTake()
-            .then((dropped) => {
-                if (dropped) notify(EVENT_TYPE.ERROR, 'The diary locked before your latest edits could be saved.');
-            })
-            .catch(() => {});
-
-        refresh();
-
-        return () => {
-            destroyed = true;
-            unlisten?.();
-            unlistenLock?.();
-        };
-    });
+    onMount(() => startVaultLifecycle({ refresh }));
 </script>
 
 <svelte:window onkeydown={handleKeydown} onpointerdown={noteActivity} onwheel={noteActivity} ontouchstart={noteActivity} onmousemove={noteActivity} ondragover={swallowDrop} ondrop={swallowDrop} />
