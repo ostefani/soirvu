@@ -43,27 +43,5 @@ p {
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-end;
-    gap: 0.5rem;
     margin-top: 1.25rem;
-}
-
-button {
-    padding: 0.5rem 0.8rem;
-    font: inherit;
-    color: var(--color-ink-primary);
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    cursor: pointer;
-}
-
-button:hover:not(:disabled) {
-    border-color: var(--color-border-strong);
-}
-
-button.danger,
-button.danger:hover:not(:disabled) {
-    color: var(--color-surface);
-    background: var(--color-danger);
-    border-color: var(--color-danger);
 }

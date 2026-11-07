@@ -85,7 +85,7 @@
                             disabled={model.opBusy} />
                         <Button
                             label={textData.forgetCancelButton ?? 'Cancel'}
-                            kind="quiet"
+                            kind="quiet-button"
                             handler={handlers.disarmForget}
                             disabled={model.opBusy} />
                     {:else}
@@ -156,11 +156,7 @@
         kind="texture-button"
         handler={handlers.openAnother}
         disabled={model.opBusy} />
-    <Button
-        label={textData.createNewButton}
-        kind="texture-button"
-        handler={handlers.create}
-        disabled={model.opBusy} />
+    <Button label={textData.createNewButton} kind="texture-button" handler={handlers.create} disabled={model.opBusy} />
 
     <NoteComponent text={model.note} />
     <ErrorComponent text={model.error} />

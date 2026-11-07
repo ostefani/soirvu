@@ -10,7 +10,7 @@ button {
     align-items: center;
     column-gap: 8px;
 
-    border: 1px solid transparent;
+    border: 2px solid transparent;
     padding: 0.6rem 1.2rem;
     font-size: 1rem;
     font-weight: 500;
@@ -22,32 +22,14 @@ button {
     cursor: pointer;
 }
 
-button:hover {
-    border-color: var(--color-accent);
-}
-
-button:active {
-    border-color: var(--color-accent);
-    background-color: var(--color-surface-pressed);
-}
-
-/* Active / selected state */
-button.active,
-.active {
-    border-color: var(--color-accent);
-}
-
 /* Quiet (ghost / secondary action) button */
-button.quiet,
-.quiet {
+.quiet-button {
     box-shadow: none;
     background: transparent;
-    border-color: transparent;
     color: var(--color-ink-muted);
 }
 
 .service-button {
-    /* background: var(--surface-button); */
     background: transparent;
     border: 2px solid var(--color-border-subtle);
     outline: none;
@@ -76,14 +58,12 @@ button.quiet,
 }
 
 .texture-button:hover {
-    /* background-color: var(--color-surface); */
     border-color: var(--color-ink-muted);
 }
 
 .primary-button {
     background-color: var(--color-accent);
-    /* border: 2px solid transparent; */
-    border: none;
+    border: 2px solid var(--color-accent);
     color: var(--color-canvas);
     border-radius: 8px;
 }
@@ -91,54 +71,36 @@ button.quiet,
 .primary-button:hover {
     background-color: var(--color-accent-texture);
     color: var(--color-canvas);
-    /* box-shadow: 1px 2px 5px #32190ab7; */
 }
 
-button.quiet:hover,
-.quiet:hover {
+.quiet-button:hover {
     color: var(--color-ink-primary);
     background-color: var(--color-accent-soft);
-    border-color: transparent;
+    border: 2px solid var(--color-accent-soft);
+    /* border-color: transparent; */
 }
 
-button.service {
-    color: var(--color-ink-primary);
-    background-color: var(--surface-button);
-    border-color: transparent;
-}
-
-button.quiet:active,
-.quiet:active {
+.quiet-button:active {
     background-color: var(--color-surface-pressed);
 }
 
-/* Default / standard button */
-button.default,
-button.primary,
-.default,
-.primary {
+.default-button,
+.primary-button {
     background-color: var(--color-surface);
     color: var(--color-ink-primary);
-    border-color: transparent;
+    border-color: 2px solid var(--color-surface);
 }
 
-button.default:hover,
-button.primary:hover,
-.default:hover,
-.primary:hover {
+.default-button:hover,
+.primary-button:hover {
     border-color: var(--color-accent);
 }
 
-/* Destructive / danger button */
-button.danger,
-.danger {
+.danger-button {
     color: var(--color-danger);
-    background: transparent;
-    border-color: transparent;
+    border: 2px solid var(--color-danger);
 }
 
-button.danger:hover,
-.danger:hover {
+.danger-button:hover {
     background-color: var(--color-danger-soft);
-    border-color: var(--color-danger);
 }

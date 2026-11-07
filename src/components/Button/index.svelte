@@ -16,7 +16,6 @@
     } = $props();
 </script>
 
-<!-- <button {name} {type} class="{kind} {className}" class:active {disabled} onclick={() => handler?.()}> -->
 <button {name} {type} {title} class={[kind, className, { active }]} {disabled} {...rest} onclick={() => handler?.()}>
     {#if children}
         {@render children()}

@@ -1,10 +1,20 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
+    import Button from '@/components/Button/index.svelte';
     let {
-        title, body, warning = '', confirmLabel, cancelLabel, pendingLabel,
-        error = '', busy = false, tone = 'danger', returnFocus = null,
-        onConfirm, onCancel,
+        title,
+        body,
+        warning = '',
+        confirmLabel,
+        cancelLabel,
+        pendingLabel,
+        error = '',
+        busy = false,
+        tone = 'danger',
+        returnFocus = null,
+        onConfirm,
+        onCancel,
     } = $props();
     const id = $props.id();
 
@@ -25,8 +35,15 @@
     function backdrop(event) {
         if (event.target !== event.currentTarget || busy) return;
         const rect = event.currentTarget.getBoundingClientRect();
-        if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) onCancel?.();
+        if (
+            event.clientX < rect.left ||
+            event.clientX > rect.right ||
+            event.clientY < rect.top ||
+            event.clientY > rect.bottom
+        )
+            onCancel?.();
     }
+    console.log('tone: ', tone);
 </script>
 
 <dialog
@@ -46,8 +63,10 @@
         </div>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
         <div class="modal-actions">
-            <button type="button" data-cancel disabled={busy} onclick={() => onCancel?.()}>{cancelLabel}</button>
-            <button type="button" class:danger={tone === 'danger'} disabled={busy} onclick={() => onConfirm?.()}>{busy ? pendingLabel : confirmLabel}</button>
+            <Button kind={tone === 'danger' ? 'danger-button' : 'default-button'} disabled={busy} handler={onConfirm}
+                >{busy ? pendingLabel : confirmLabel}</Button>
+            <Button type="button" kind="quiet-button" data-cancel disabled={busy} handler={() => onCancel?.()}
+                >{cancelLabel}</Button>
         </div>
     </div>
 </dialog>

@@ -529,32 +529,34 @@
         {/if}
         <div class="editor-footer">
             <div class="footer-navigation">
-                <Button kind="quiet" handler={goBack} aria-label={ENTRY_EDITOR_TEXT.back}
+                <Button kind="quiet-button" handler={goBack} aria-label={ENTRY_EDITOR_TEXT.back}
                     ><IconLeft />{ENTRY_EDITOR_TEXT.back}</Button>
                 {#if canGoBack || canGoForward}
-                    <Button
-                        kind="quiet"
-                        handler={() => onNavBack?.()}
-                        aria-label={ENTRY_EDITOR_TEXT.goBackLabel}
-                        title={ENTRY_EDITOR_TEXT.goBackTitle}
-                        disabled={!canGoBack || navigating}>←</Button>
-                    <Button
-                        kind="quiet"
-                        handler={() => onNavForward?.()}
-                        aria-label={ENTRY_EDITOR_TEXT.goForwardLabel}
-                        title={ENTRY_EDITOR_TEXT.goForwardTitle}
-                        disabled={!canGoForward || navigating}>→</Button>
+                    <div class="navigation-wrapper">
+                        <Button
+                            kind="quiet-button"
+                            handler={() => onNavBack?.()}
+                            aria-label={ENTRY_EDITOR_TEXT.goBackLabel}
+                            title={ENTRY_EDITOR_TEXT.goBackTitle}
+                            disabled={!canGoBack || navigating}>←</Button>
+                        <Button
+                            kind="quiet-button"
+                            handler={() => onNavForward?.()}
+                            aria-label={ENTRY_EDITOR_TEXT.goForwardLabel}
+                            title={ENTRY_EDITOR_TEXT.goForwardTitle}
+                            disabled={!canGoForward || navigating}>→</Button>
+                    </div>
                 {/if}
             </div>
             <span class="status">{saveConflict ? ENTRY_EDITOR_TEXT.conflictStatus : status}</span>
             <div class="footer-actions">
                 {#if deleteArmed}
-                    <Button kind="danger" class="confirm-button" handler={remove}
+                    <Button kind="danger-button" class="confirm-button" handler={remove}
                         >{ENTRY_EDITOR_TEXT.confirmDelete}</Button>
-                    <Button kind="quiet" class="keep-button" handler={() => (deleteArmed = false)}
+                    <Button kind="quiet-button" class="keep-button" handler={() => (deleteArmed = false)}
                         >{ENTRY_EDITOR_TEXT.keepEntry}</Button>
                 {:else}
-                    <Button kind="quiet" class="delete-button" handler={() => (deleteArmed = true)}
+                    <Button kind="quiet-button" class="delete-button" handler={() => (deleteArmed = true)}
                         >{ENTRY_EDITOR_TEXT.deleteEntry}</Button>
                 {/if}
             </div>
@@ -564,7 +566,7 @@
     <p class="note" role="status">
         {loadProblemText(loadProblem)}
     </p>
-    <Button kind="quiet" handler={() => onBack?.()} aria-label={ENTRY_EDITOR_TEXT.back}
+    <Button kind="quiet-button" handler={() => onBack?.()} aria-label={ENTRY_EDITOR_TEXT.back}
         ><IconLeft />{ENTRY_EDITOR_TEXT.back}</Button>
 {:else}
     <p class="note">{ENTRY_EDITOR_TEXT.opening}</p>

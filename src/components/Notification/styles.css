@@ -72,9 +72,6 @@
 
 /* Danger / Error (deleted, failed) */
 .type-danger {
-    /* background-color: var(--color-danger-soft);
-    border: 1px solid rgba(197, 40, 28, 0.22);
-    border-left: 3px solid var(--color-danger); */
     color: var(--color-ink-primary);
 
     background-color: color-mix(in srgb, var(--color-danger-soft) 9%, var(--color-surface));

@@ -58,7 +58,7 @@
     {/if}
 
     {#if onCancel && step < ONBOARDING_STEP.SAVE_RECOVERY_KEY}
-        <Button label={onboardingText.backButton} kind="quiet" handler={onCancel} />
+        <Button label={onboardingText.backButton} kind="quiet-button" handler={onCancel} />
     {/if}
 
     <ErrorComponent text={error} />

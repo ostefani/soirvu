@@ -300,11 +300,7 @@
             const report = await api.syncApply();
             // Same workspace-truth rule as imports: the diary
             // refresh runs even after disposal.
-            if (
-                report.entries_applied > 0 ||
-                report.folders_applied > 0 ||
-                report.folders_conflicted > 0
-            ) {
+            if (report.entries_applied > 0 || report.folders_applied > 0 || report.folders_conflicted > 0) {
                 onImported?.();
             }
             if (!alive) return;
@@ -597,7 +593,7 @@
 <div class="settings-screen">
     <header class="settings-head">
         <div class="head-left">
-            <Button kind="quiet" handler={onBack}><IconLeft />{settingsText.back}</Button>
+            <Button kind="quiet-button" handler={onBack}><IconLeft />{settingsText.back}</Button>
         </div>
         <div class="head-title">
             <span>{settingsText.title}</span>

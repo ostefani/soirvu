@@ -52,7 +52,7 @@
     <div class="center-col">
         <p>An encrypted diary. It lives in a folder you choose; nothing leaves your machine.</p>
         <Button label="Create a new diary" handler={showCreate} />
-        <Button label="Open an existing diary folder…" kind="default" handler={openExisting} />
+        <Button label="Open an existing diary folder…" kind="default-button" handler={openExisting} />
         <NoteComponent text={welcomeNote} />
         <ErrorComponent text={welcomeError} />
     </div>

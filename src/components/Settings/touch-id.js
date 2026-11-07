@@ -38,7 +38,7 @@ export function getTouchIdView(status, text) {
         const reason = status.built_in ? text.touchIdNotSignedProfile : text.touchIdNotBuilt;
         return {
             note: `${text.touchIdEnrolledNotCapableLead} ${reason}${text.touchIdEnrolledNotCapableTail}`,
-            action: { label: text.touchIdRemoveEnrollment, kind: 'quiet', handler: 'touchIdDisable' },
+            action: { label: text.touchIdRemoveEnrollment, kind: 'quiet-button', handler: 'touchIdDisable' },
         };
     }
 
@@ -49,7 +49,7 @@ export function getTouchIdView(status, text) {
     if (status.enrolled) {
         return {
             description: text.touchIdEnrolled,
-            action: { label: text.touchIdTurnOff, kind: 'quiet', handler: 'touchIdDisable' },
+            action: { label: text.touchIdTurnOff, kind: 'quiet-button', handler: 'touchIdDisable' },
         };
     }
 
