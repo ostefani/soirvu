@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { parseTags } from '../../../lib/tags.js';
 
 const stateHook = (value) => value;
 stateHook.raw = (value) => value;
 globalThis.$state = stateHook;
 
-const { createEntrySession, parseTags } = await import('../session.svelte.js');
+const { createEntrySession } = await import('../session.svelte.js');
 
 function deferred() {
     let resolve;
@@ -33,9 +34,6 @@ function fakeViewApi(overrides = {}) {
     return {
         calls,
         finishComposing() {},
-        navCapture() {
-            return { from: 0, to: 0 };
-        },
         getMarkdown() {
             return 'live body';
         },
@@ -108,10 +106,10 @@ test('load publishes the entry and initializes the draft once', async () => {
     const { session } = setup();
     await session.load('e1');
     assert.equal(session.entry.id, 'e1');
-    assert.equal(session.title, 'Hello');
-    assert.equal(session.entryDate, '2026-10-20');
-    assert.equal(session.mood, '3');
-    assert.deepEqual(session.tags, ['a']);
+    assert.equal(session.draft.title, 'Hello');
+    assert.equal(session.draft.entryDate, '2026-10-20');
+    assert.equal(session.draft.mood, '3');
+    assert.deepEqual(session.draft.tags, ['a']);
     session.dispose();
 });
 
@@ -129,10 +127,25 @@ test('disposal retires a late load response', async () => {
     session.dispose();
 });
 
+test('detaching the editor saves its final draft even if the session has been disposed', async () => {
+    const { saves, session } = setup();
+    await session.load('e1');
+    const detach = session.attachEditor(fakeViewApi());
+    session.setBody('Final edit');
+    session.dispose();
+    detach();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(session.dirty, false);
+    assert.equal(saves.length, 1);
+    assert.equal(saves[0].payload.body_md, 'Final edit');
+    assert.equal(session.navCapture(), null);
+});
+
 test('failed deletion keeps the draft usable and reports the error', async () => {
     const { api, saves, opened, session } = setup();
     await session.load('e1');
-    session.setViewApi(fakeViewApi());
+    session.attachEditor(fakeViewApi());
     session.setField('title', 'Edited');
     api.entryDelete = async () => {
         throw 'locked';
@@ -149,7 +162,7 @@ test('failed deletion keeps the draft usable and reports the error', async () =>
 test('deletion aborts when pending saves fail, preserving dirty state', async () => {
     const { api, session } = setup();
     await session.load('e1');
-    session.setViewApi(fakeViewApi());
+    session.attachEditor(fakeViewApi());
     session.setField('title', 'Edited');
     api.entryUpdate = async () => {
         throw 'boom';
@@ -193,7 +206,7 @@ test('navigation waits for an active upload and lands its reference', async () =
     const { api, saves, session } = setup();
     await session.load('e1');
     const view = fakeViewApi();
-    session.setViewApi(view);
+    session.attachEditor(view);
     const chunkGate = deferred();
     api.attachmentChunk = () => chunkGate.promise;
     session.setField('title', 'Edited before upload');
@@ -216,7 +229,7 @@ test('navigation drains queued uploads beyond the first active batch', async () 
     const { api, session } = setup();
     await session.load('e1');
     const inserted = [];
-    session.setViewApi(fakeViewApi({ insertAttachment: (info) => inserted.push(info) }));
+    session.attachEditor(fakeViewApi({ insertAttachment: (info) => inserted.push(info) }));
     session.setField('title', 'Edited');
     let finishes = 0;
     api.attachmentFinish = async (uploadId, base) => {
@@ -240,15 +253,15 @@ test('link follow defers to the workspace gate without preparing itself', async 
         },
     });
     await session.load('e1');
-    session.setViewApi(fakeViewApi());
+    session.attachEditor(fakeViewApi());
     session.setField('title', 'Edited');
-    await session.followEntryLink('e2');
+    await session.links.followEntryLink('e2');
     assert.deepEqual(gate.map((target) => target.id), ['e2']);
     assert.deepEqual(opened, []);
     assert.equal(saves.length, 0);
-    assert.equal(session.navError, '');
-    assert.equal(session.pendingNavId, null);
-    assert.equal(session.navigating, false);
+    assert.equal(session.links.navError, '');
+    assert.equal(session.links.pendingNavId, null);
+    assert.equal(session.links.navigating, false);
     session.dispose();
 });
 
@@ -256,18 +269,18 @@ test('failed workspace navigation preserves the source with a retryable error', 
     let allow = false;
     const { saves, session } = setup({ onOpenEntry: async () => allow });
     await session.load('e1');
-    session.setViewApi(fakeViewApi());
+    session.attachEditor(fakeViewApi());
     session.setField('title', 'Edited');
-    await session.followEntryLink('e2');
-    assert.match(session.navError, /Retry to navigate/);
-    assert.equal(session.pendingNavId, 'e2');
+    await session.links.followEntryLink('e2');
+    assert.match(session.links.navError, /Retry to navigate/);
+    assert.equal(session.links.pendingNavId, 'e2');
     assert.equal(session.entry.id, 'e1');
-    assert.equal(session.navigating, false);
+    assert.equal(session.links.navigating, false);
     assert.equal(saves.length, 0);
     allow = true;
-    await session.retryPendingNav();
-    assert.equal(session.navError, '');
-    assert.equal(session.pendingNavId, null);
+    await session.links.retryPendingNav();
+    assert.equal(session.links.navError, '');
+    assert.equal(session.links.pendingNavId, null);
     session.dispose();
 });
 
@@ -275,11 +288,11 @@ test('link follow stays put while frozen', async () => {
     let calls = 0;
     const { session } = setup({ onOpenEntry: async () => (calls++, true) });
     await session.load('e1');
-    session.setViewApi(fakeViewApi());
+    session.attachEditor(fakeViewApi());
     assert.equal(await session.prepareLock(), true);
-    await session.followEntryLink('e2');
+    await session.links.followEntryLink('e2');
     assert.equal(calls, 0);
-    assert.equal(session.navError, '');
+    assert.equal(session.links.navError, '');
     session.dispose();
 });
 
@@ -308,6 +321,51 @@ test('successful lock preparation freezes the session', async () => {
     session.dispose();
 });
 
+for (const transition of ['lock', 'failed lock', 'editor replacement']) {
+    test(`a pending link-title refresh is discarded after ${transition}`, async () => {
+        const { api, session } = setup();
+        await session.load('e1');
+        const view = fakeViewApi();
+        const detach = session.attachEditor(view);
+        const target = deferred();
+        const replacement = fakeViewApi();
+        api.entryGet = () => target.promise;
+        const targetId = '01900000-0000-7000-8000-000000000001';
+        session.links.linkAction('refresh', { href: `entry:${targetId}`, from: 0 });
+
+        if (transition === 'editor replacement') {
+            detach();
+            session.attachEditor(replacement);
+        } else {
+            if (transition === 'failed lock') {
+                session.setField('title', 'Unsaved edit');
+                api.entryUpdate = async () => { throw 'revision_conflict'; };
+            }
+            assert.equal(await session.prepareLock(), transition === 'lock');
+        }
+        target.resolve({ id: targetId, title: 'New title' });
+        await new Promise((resolve) => setImmediate(resolve));
+
+        assert.deepEqual(view.calls, []);
+        assert.deepEqual(replacement.calls, []);
+        assert.equal(session.links.linkNote, '');
+        session.dispose();
+    });
+}
+
+test('link-title refresh uses the live range in the current editor', async () => {
+    const { api, session } = setup();
+    await session.load('e1');
+    const view = fakeViewApi({ locateLink: () => ({ from: 3, to: 8 }) });
+    session.attachEditor(view);
+    const targetId = '01900000-0000-7000-8000-000000000001';
+    api.entryGet = async () => ({ id: targetId, title: 'New title' });
+    session.links.linkAction('refresh', { href: `entry:${targetId}`, from: 0 });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(view.calls, [['insertEntryLink', { targetId, label: 'New title', from: 3, to: 8 }]]);
+    session.dispose();
+});
 
 test('copying the current note uses its live title, stable id and clipboard registration', async () => {
     const id = '01900000-0000-7000-8000-000000000001';
@@ -325,7 +383,7 @@ test('copying the current note uses its live title, stable id and clipboard regi
     });
     await session.load(id);
     session.setField('title', 'Updated [title]');
-    assert.equal(await session.copyNoteLink(), true);
+    assert.equal(await session.links.copyNoteLink(), true);
     assert.equal(copied[0], `[Updated \\[title\\]](entry:${id})`);
     assert.equal(registered, 1);
     assert.deepEqual(notifications, ['Internal link copied.']);
@@ -349,10 +407,10 @@ test('copying an untitled note uses its date and reports clipboard failures', as
         },
     });
     await session.load(id);
-    assert.equal(await session.copyNoteLink(), true);
+    assert.equal(await session.links.copyNoteLink(), true);
     assert.equal(copied, `[Untitled — 2026-11-01](entry:${id})`);
     fail = true;
-    assert.equal(await session.copyNoteLink(), false);
+    assert.equal(await session.links.copyNoteLink(), false);
     assert.deepEqual(errors, ['Could not copy the link.']);
     session.dispose();
 });
@@ -372,8 +430,8 @@ test('frozen notes cannot copy and disposed sessions ignore late copy feedback',
         notifyError: (message) => notifications.push(message),
     });
     await session.load(id);
-    const copying = session.copyNoteLink();
-    assert.equal(await session.copyNoteLink(), false);
+    const copying = session.links.copyNoteLink();
+    assert.equal(await session.links.copyNoteLink(), false);
     session.dispose();
     gate.resolve();
     assert.equal(await copying, false);
@@ -382,7 +440,7 @@ test('frozen notes cannot copy and disposed sessions ignore late copy feedback',
     const { session: locked } = setup();
     await locked.load('e1');
     await locked.prepareLock();
-    assert.equal(await locked.copyNoteLink(), false);
+    assert.equal(await locked.links.copyNoteLink(), false);
     locked.dispose();
 });
 
@@ -395,11 +453,11 @@ test('the toolbar Link action wraps the original selection even after dialog foc
         query: () => selection,
         readText: (from, to) => from === 7 && to === 12 ? 'words' : '',
     });
-    session.setViewApi(view);
-    session.openLinkPicker();
-    assert.equal(session.linkPicker.label, 'words');
+    session.attachEditor(view);
+    session.links.openLinkPicker();
+    assert.equal(session.links.linkPicker.label, 'words');
     selection = { from: 1, to: 1, empty: true };
-    session.pickLinkTarget({ id: '01900000-0000-7000-8000-000000000001', title: 'Original title' });
+    session.links.pickLinkTarget({ id: '01900000-0000-7000-8000-000000000001', title: 'Original title' });
     assert.deepEqual(view.calls[0], ['insertEntryLink', {
         targetId: '01900000-0000-7000-8000-000000000001', label: 'words', from: 7, to: 12,
     }]);
@@ -414,9 +472,9 @@ test('the Link dialog can rename a reference without changing its destination', 
         query: () => ({ from: 10, to: 10, empty: true, link: { from: 7, to: 15, href: `entry:${id}` } }),
         readText: () => 'Old name',
     });
-    session.setViewApi(view);
-    session.openLinkPicker();
-    session.pickLinkTarget({ id, title: 'Target title', linkLabel: 'My label' });
+    session.attachEditor(view);
+    session.links.openLinkPicker();
+    session.links.pickLinkTarget({ id, title: 'Target title', linkLabel: 'My label' });
     assert.deepEqual(view.calls[0], ['insertEntryLink', { targetId: id, label: 'My label', from: 7, to: 15 }]);
     session.dispose();
 });
@@ -426,14 +484,14 @@ test('bracket links keep their title fallback and accept an optional custom labe
     await session.load('e1');
     const view = fakeViewApi();
     const target = { id: '01900000-0000-7000-8000-000000000001', title: 'Target title' };
-    session.setViewApi(view);
-    session.requestBracketPicker(5);
-    session.pickLinkTarget(target);
+    session.attachEditor(view);
+    session.links.requestBracketPicker(5);
+    session.links.pickLinkTarget(target);
     assert.equal(view.calls[0][1].label, 'Target title');
     assert.equal(view.calls[0][1].from, 5);
     assert.equal(view.calls[0][1].to, 7);
-    session.requestBracketPicker(5);
-    session.pickLinkTarget({ ...target, linkLabel: 'My label' });
+    session.links.requestBracketPicker(5);
+    session.links.pickLinkTarget({ ...target, linkLabel: 'My label' });
     assert.equal(view.calls[1][1].label, 'My label');
     session.dispose();
 });
@@ -446,12 +504,12 @@ test('the toolbar Link dialog removes a link at the original range while keeping
         query: () => ({ from: 10, to: 10, empty: true, link: { from: 7, to: 15, href: 'entry:01900000-0000-7000-8000-000000000001' } }),
         readText: () => 'My label',
     });
-    session.setViewApi(view);
-    session.openLinkPicker();
-    assert.equal(session.linkPicker.canRemove, true);
-    session.removePickerLink();
+    session.attachEditor(view);
+    session.links.openLinkPicker();
+    assert.equal(session.links.linkPicker.canRemove, true);
+    session.links.removePickerLink();
     assert.deepEqual(view.calls[0], ['removeLink', { from: 7, to: 15 }]);
-    assert.equal(session.linkPicker, null);
+    assert.equal(session.links.linkPicker, null);
     session.dispose();
 });
 
@@ -463,15 +521,15 @@ test('Remove link is offered for selected links and omitted for ordinary text', 
         query: () => ({ from: 3, to: 9, empty: false, hasLink }),
         readText: () => 'Words',
     });
-    session.setViewApi(view);
-    session.openLinkPicker();
-    assert.equal(session.linkPicker.canRemove, false);
-    session.removePickerLink();
+    session.attachEditor(view);
+    session.links.openLinkPicker();
+    assert.equal(session.links.linkPicker.canRemove, false);
+    session.links.removePickerLink();
     assert.equal(view.calls.length, 0);
     hasLink = true;
-    session.openLinkPicker();
-    assert.equal(session.linkPicker.canRemove, true);
-    session.removePickerLink();
+    session.links.openLinkPicker();
+    assert.equal(session.links.linkPicker.canRemove, true);
+    session.links.removePickerLink();
     assert.deepEqual(view.calls[0], ['removeLink', { from: 3, to: 9 }]);
     session.dispose();
 });

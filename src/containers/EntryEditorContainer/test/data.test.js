@@ -1,26 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { ENTRY_EDITOR_TEXT } from '../../../components/EntryEditor/data.js';
+import { LINK_POPOVER_ACTIONS, MOOD_OPTIONS } from '../../../components/EntryEditor/constants.js';
+import { attachmentLabel, loadProblemText, moodChipLabel, tagsChipLabel } from '../../../components/EntryEditor/labels.js';
 import {
-    ENTRY_EDITOR_TEXT,
-    LINK_POPOVER_ACTIONS,
-    MOOD_OPTIONS,
-    SAVE_LABELS,
     TOOLBAR_CODE_BLOCK,
     TOOLBAR_FORMAT_COMMANDS,
     TOOLBAR_LIST_COMMANDS,
     TOOLBAR_TABLE_COMMANDS,
     TOOLBAR_TEXT,
     TOOLBAR_TYPE_COMMANDS,
-    attachError,
-    attachmentLabel,
-    attachmentStatus,
-    linkTargetError,
-    loadProblemText,
-    moodChipLabel,
-    tagsChipLabel,
-    untitledForDate,
-    uploadFailureText,
-} from '../data.js';
+} from '../../../components/EditorToolbar/commands.js';
+import { SAVE_LABELS, SESSION_TEXT } from '../data.js';
+import { attachError, attachmentStatus, linkTargetError, untitledForDate, uploadFailureText } from '../labels.js';
 import { ATTACH_CHUNK_SIZE, AUTOSAVE_DELAY, MAX_CONCURRENT_UPLOADS } from '../constants.js';
 
 test('save labels cover every autosave state', () => {
@@ -52,8 +44,8 @@ test('attachment status prefers the pending count over failures', () => {
 });
 
 test('upload failures name the file and the reason', () => {
-    assert.equal(uploadFailureText('a.png', 'locked'), ENTRY_EDITOR_TEXT.diaryLocked);
-    assert.equal(uploadFailureText('a.png', 'too_many_uploads'), ENTRY_EDITOR_TEXT.tooManyUploads);
+    assert.equal(uploadFailureText('a.png', 'locked'), SESSION_TEXT.diaryLocked);
+    assert.equal(uploadFailureText('a.png', 'too_many_uploads'), SESSION_TEXT.tooManyUploads);
     assert.match(uploadFailureText('a.png', 'too_large'), /a\.png.*too large/);
     assert.match(uploadFailureText('a.png', 'unsupported_type'), /a\.png.*not supported/);
     assert.match(uploadFailureText('a.png', 'revision_conflict'), /a\.png.*reopen it/);

@@ -8,7 +8,7 @@
         TOOLBAR_TABLE_COMMANDS,
         TOOLBAR_TEXT,
         TOOLBAR_TYPE_COMMANDS,
-    } from '@/containers/EntryEditorContainer/data.js';
+    } from './commands.js';
 
     let { selection, disabled = false, onCommand = null, onAttach = null, onLinkEntry = null } = $props();
 

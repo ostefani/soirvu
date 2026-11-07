@@ -38,8 +38,31 @@
         notifyCopied: (message) => notify(EVENT_TYPE.COPIED, message),
     });
 
+    const { draft, links } = session;
+    const history = {
+        get canGoBack() {
+            return canGoBack;
+        },
+        get canGoForward() {
+            return canGoForward;
+        },
+        back: () => onNavBack?.(),
+        forward: () => onNavForward?.(),
+    };
+    const attachments = {
+        info: session.fetchAttachmentMeta,
+        url: session.attachmentUrlFor,
+        open: session.openAttachment,
+    };
+
+    async function leave() {
+        if (!session.frozen && (await session.prepareNavigation())) onBack?.();
+    }
+
     onDestroy(() => session.dispose());
-    onMount(() => session.load(entryId));
+    onMount(() => {
+        session.load(entryId);
+    });
     onMount(() => registerFlushHook(() => session.prepareLock()));
 
     /** Diary-facing gate: settle the open entry before switching. */
@@ -64,74 +87,52 @@
             showBack={open}
             {folders}
             {workspaceTick}
-            onOpenEntry={(id) => session.followEntryLink(id)} />
+            onOpenEntry={(id) => links.followEntryLink(id)} />
     {/if}
 {/snippet}
 
 {#snippet picker()}
-    {#if session.linkPicker}
+    {#if links.linkPicker}
         <div class="picker-overlay">
             <button
                 type="button"
                 class="picker-backdrop"
                 tabindex="-1"
                 aria-label="Close link picker"
-                onclick={() => session.cancelPicker()}></button>
+                onclick={() => links.cancelPicker()}></button>
             <LinkPickerContainer
-                initialQuery={session.linkPicker.initialText}
-                initialLabel={session.linkPicker.label ?? ''}
-                canRemove={session.linkPicker.canRemove ?? false}
-                onRemoveLink={() => session.removePickerLink()}
+                initialQuery={links.linkPicker.initialText}
+                initialLabel={links.linkPicker.label ?? ''}
+                canRemove={links.linkPicker.canRemove ?? false}
+                onRemoveLink={() => links.removePickerLink()}
                 {folders}
-                onPick={(target) => session.pickLinkTarget(target)}
-                onCancel={() => session.cancelPicker()} />
+                onPick={(target) => links.pickLinkTarget(target)}
+                onCancel={() => links.cancelPicker()} />
         </div>
     {/if}
 {/snippet}
 
 <EntryEditor
-    onViewApi={session.setViewApi}
-    entry={session.entry}
+    ready={session.entry !== null}
     loadFailed={session.loadFailed}
     loadProblem={session.loadProblem}
     saveConflict={session.saveConflict}
     frozen={session.frozen}
     status={session.status}
-    title={session.title}
-    entryDate={session.entryDate}
-    mood={session.mood}
-    tags={session.tags}
-    initialBody={session.bodyMd}
-    navError={session.navError}
-    navigating={session.navigating}
-    linkNote={session.linkNote}
     deleteError={session.deleteError}
-    copying={session.copying}
-    onCopyNoteLink={() => session.copyNoteLink()}
-    pickerOpen={session.linkPicker !== null}
-    {folders}
+    {draft}
+    {links}
+    {attachments}
+    {history}
     {navRestore}
-    {canGoBack}
-    {canGoForward}
-    {onBack}
-    {onNavBack}
-    {onNavForward}
     {panels}
     {picker}
-    onField={(name, value) => session.setField(name, value)}
-    onBodyChange={(markdown) => session.setBody(markdown)}
-    attachFiles={(files) => session.attachFiles(files)}
-    settleForNavigation={() => session.prepareNavigation()}
-    closeSaves={() => session.closeSaves()}
-    deleteEntry={() => session.deleteEntry()}
-    fetchAttachmentMeta={(id) => session.fetchAttachmentMeta(id)}
-    attachmentUrlFor={(id) => session.attachmentUrlFor(id)}
-    openAttachment={(id) => session.openAttachment(id)}
-    openExternalLink={(href) => session.openExternalLink(href)}
-    openHref={(href, modified) => session.openHref(href, modified)}
-    onLinkEntry={() => session.openLinkPicker()}
-    onLinkAction={(id, link) => session.linkAction(id, link)}
-    onRequestBracketPicker={(bracketPos) => session.requestBracketPicker(bracketPos)}
-    onRetryNav={() => session.retryPendingNav()} />
+    onBack={leave}
+    onBackFromLoadError={() => onBack?.()}
+    onEditorReady={session.attachEditor}
+    onField={session.setField}
+    onBodyChange={session.setBody}
+    attachFiles={session.attachFiles}
+    deleteEntry={session.deleteEntry} />
 
 <style src="./styles.css"></style>

@@ -1,45 +1,12 @@
-
 import { createRequestOwner } from '../../lib/request-owner.js';
 import { createAutosave } from '../../lib/autosave.svelte.js';
-import { createEntryCommit, mayFinishAfterFlush } from '../../lib/entry-commit.js';
-import { entryLinkMarkdown } from '../../lib/links.js';
-import { classifyHref, parseEntryTarget } from '../../lib/entry-target.js';
-import { ATTACH_CHUNK_SIZE, AUTOSAVE_DELAY, MAX_CONCURRENT_UPLOADS } from './constants.js';
-import {
-    ENTRY_EDITOR_TEXT,
-    SAVE_LABELS,
-    attachError,
-    attachmentStatus,
-    defaultLinkLabel,
-    linkTargetError,
-    uploadFailureText,
-} from './data.js';
-
-export function parseTags(text) {
-    return text
-        .split(',')
-        .map((t) => t.trim())
-        .filter((t) => t !== '');
-}
-
-async function defaultCopyText(text) {
-    try {
-        await navigator.clipboard.writeText(text);
-        return;
-    } catch {
-        const area = document.createElement('textarea');
-        area.value = text;
-        area.style.position = 'fixed';
-        area.style.opacity = '0';
-        document.body.appendChild(area);
-        area.select();
-        try {
-            if (!document.execCommand('copy')) throw new Error('copy refused');
-        } finally {
-            area.remove();
-        }
-    }
-}
+import { createEntryCommit } from '../../lib/entry-commit.js';
+import { copyText as defaultCopyText } from '../../lib/clipboard.js';
+import { AUTOSAVE_DELAY } from './constants.js';
+import { SESSION_TEXT, SAVE_LABELS } from './data.js';
+import { createDraft } from './draft.svelte.js';
+import { createLinks } from './links.svelte.js';
+import { createUploads } from './uploads.svelte.js';
 
 export function createEntrySession({
     api,
@@ -51,39 +18,21 @@ export function createEntrySession({
     notifyCopied = null,
     copyText = defaultCopyText,
 }) {
-    let entry = $state(null);
+    let entry = $state.raw(null);
     let loadFailed = $state(false);
     let loadProblem = $state(null);
     let saveConflict = $state(false);
     let frozen = $state(false);
-    let title = $state('');
-    let entryDate = $state('');
-    let mood = $state('');
-    let tagsText = $state('');
-    let bodyMd = $state('');
-    let pendingAttachments = $state(0);
-    let attachmentFailures = $state.raw([]);
-    let linkPicker = $state(null);
-    let navigating = $state(false);
-    let navError = $state('');
-    let pendingNavId = $state(null);
     let deleteError = $state(null);
-    let linkNote = $state('');
-    let copying = $state(false);
-
-    let viewApi = null;
+    let engine = null;
     let commitSeq = null;
     let started = false;
 
     const loadOwner = createRequestOwner();
-    const copyOwner = createRequestOwner();
-    const attachmentQueue = [];
-    let activeAttachments = 0;
-    let abortUploads = false;
-    const inflightUploads = new Set();
+    const draft = createDraft({ onEdit: () => autosave.touch() });
 
     const autosave = createAutosave({
-        snapshot: () => snapshot(),
+        snapshot: () => (entry ? draft.snapshot(entry.tz) : null),
         send: async (payload) => {
             try {
                 entry = await commitSeq.commit((base) => api.entryUpdate(entry.id, base, payload));
@@ -96,20 +45,40 @@ export function createEntrySession({
         delay,
     });
 
-    function snapshot() {
-        if (!entry) return null;
-        return {
-            entry_date: entryDate,
-            title: title.trim() === '' ? null : title.trim(),
-            body_md: bodyMd,
-            mood: mood === '' ? null : Number(mood),
-            tz: entry.tz,
-            tags: parseTags(tagsText),
-        };
+    const uploads = createUploads({
+        api,
+        autosave,
+        canUpload: () => entry !== null && engine !== null && !frozen,
+        entryId: () => entry.id,
+        commit: (run) => commitSeq.commit(run),
+        onAdded({ id, mime, name, rev }) {
+            if (entry) entry = { ...entry, rev };
+            engine?.insertAttachment({ id, mime, name });
+        },
+        onError(error) {
+            if (error === 'revision_conflict') saveConflict = true;
+        },
+    });
+
+    const links = createLinks({
+        api,
+        getEntry: () => entry,
+        getEditor: () => engine,
+        isFrozen: () => frozen,
+        draft,
+        onOpenEntry,
+        copyText,
+        notifyError,
+        notifyCopied,
+    });
+
+    function setField(name, value) {
+        if (name === 'tags') draft.tags = value;
+        else if (name === 'title' || name === 'entryDate' || name === 'mood') draft[name] = value;
     }
 
-    function statusText() {
-        return attachmentStatus(pendingAttachments, attachmentFailures) || SAVE_LABELS[autosave.state];
+    function setBody(markdown) {
+        draft.body = markdown;
     }
 
     async function load(id) {
@@ -119,11 +88,7 @@ export function createEntrySession({
         try {
             const loaded = await api.entryGet(id);
             if (!loadOwner.current(token)) return;
-            title = loaded.title ?? '';
-            entryDate = loaded.entry_date;
-            mood = loaded.mood == null ? '' : String(loaded.mood);
-            tagsText = loaded.tags.join(', ');
-            bodyMd = loaded.body_md;
+            draft.load(loaded);
             commitSeq = createEntryCommit(loaded.rev);
             entry = loaded;
         } catch (e) {
@@ -137,122 +102,47 @@ export function createEntrySession({
 
     function dispose() {
         loadOwner.dispose();
-        copyOwner.dispose();
+        links.dispose();
         autosave.cancel();
     }
 
-    function setViewApi(next) {
-        viewApi = next;
-    }
-
-    function setField(name, value) {
-        if (name === 'title') title = value;
-        else if (name === 'entryDate') entryDate = value;
-        else if (name === 'mood') mood = value;
-        else if (name === 'tagsText') tagsText = value;
-        else return;
-        autosave.touch();
-    }
-
-    function setBody(markdown) {
-        bodyMd = markdown;
-        autosave.touch();
-    }
-
-    function attachFiles(files) {
-        if (!entry || !viewApi || frozen) return;
-        if (pendingAttachments === 0) attachmentFailures = [];
-        for (const file of files) attachmentQueue.push(file);
-        pendingAttachments += files.length;
-        drainQueue();
-    }
-
-    function drainQueue() {
-        if (abortUploads) return;
-        while (activeAttachments < MAX_CONCURRENT_UPLOADS && attachmentQueue.length) {
-            const file = attachmentQueue.shift();
-            activeAttachments++;
-            const done = uploadFile(file)
-                .then((error) => {
-                    if (error) attachmentFailures = [...attachmentFailures, error];
-                })
-                .finally(() => {
-                    activeAttachments--;
-                    pendingAttachments--;
-                    inflightUploads.delete(done);
-                    drainQueue();
-                });
-            inflightUploads.add(done);
-        }
-    }
-
-    async function uploadFile(file) {
-        let uploadId = null;
-        try {
-            uploadId = await api.attachmentBegin(entry.id, file.name, file.type || null);
-            for (let offset = 0; offset < file.size; offset += ATTACH_CHUNK_SIZE) {
-                if (abortUploads) {
-                    await api.attachmentAbort(uploadId).catch(() => { });
-                    return null;
-                }
-                const slice = await file.slice(offset, offset + ATTACH_CHUNK_SIZE).arrayBuffer();
-                await api.attachmentChunk(uploadId, new Uint8Array(slice));
-            }
-            const saved = await autosave.flush();
-            if (!mayFinishAfterFlush(saved, autosave.state)) {
-                await api.attachmentAbort(uploadId).catch(() => { });
-                uploadId = null;
-                return attachError(file.name, ENTRY_EDITOR_TEXT.staleAttach);
-            }
-            const added = await commitSeq.commit((base) => api.attachmentFinish(uploadId, base));
-            uploadId = null;
-            if (entry) entry = { ...entry, rev: added.rev };
-            viewApi?.insertAttachment?.({ id: added.id, mime: added.mime, name: file.name });
-            return null;
-        } catch (e) {
-            if (uploadId) await api.attachmentAbort(uploadId).catch(() => { });
-            if (e === 'revision_conflict') saveConflict = true;
-            return uploadFailureText(file.name, e);
-        }
-    }
-
-    async function abortAllUploads() {
-        abortUploads = true;
-        const queued = attachmentQueue.length;
-        attachmentQueue.length = 0;
-        pendingAttachments -= queued;
-        await Promise.allSettled([...inflightUploads]);
+    function attachEditor(instance) {
+        engine = instance;
+        return () => {
+            closeSaves();
+            engine = null;
+        };
     }
 
     async function settle() {
-        while (!abortUploads && (attachmentQueue.length > 0 || inflightUploads.size > 0)) {
-            await Promise.allSettled([...inflightUploads]);
-        }
+        await uploads.settle();
         await autosave.flush();
-        return autosave.clean && pendingAttachments === 0;
+        return autosave.clean && uploads.pending === 0;
     }
 
     async function prepareNavigation() {
-        if (!entry || !viewApi || frozen) return true;
-        viewApi.finishComposing();
+        if (!entry || !engine || frozen) return true;
+        engine.finishComposing();
         return settle();
     }
 
     async function prepareLock() {
         frozen = true;
-        await abortAllUploads();
+        links.invalidateRefresh();
+        await uploads.abort();
         await autosave.flush();
-        const ok = autosave.clean && pendingAttachments === 0;
+        const ok = autosave.clean && uploads.pending === 0;
         if (!ok) {
             frozen = false;
-            abortUploads = false;
-            notifyError?.(ENTRY_EDITOR_TEXT.latestEditsLost);
+            uploads.resume();
+            notifyError?.(SESSION_TEXT.latestEditsLost);
         }
         return ok;
     }
 
     function navCapture() {
-        return viewApi?.navCapture?.() ?? null;
+        const selection = engine?.query();
+        return selection ? { from: selection.from, to: selection.to } : null;
     }
 
     async function flushSaves() {
@@ -262,7 +152,7 @@ export function createEntrySession({
 
     function closeSaves() {
         autosave.close().then((ok) => {
-            if (!ok) notifyError?.(ENTRY_EDITOR_TEXT.latestEditsLost);
+            if (!ok) notifyError?.(SESSION_TEXT.latestEditsLost);
         });
     }
 
@@ -270,203 +160,18 @@ export function createEntrySession({
         if (frozen || !entry) return false;
         deleteError = null;
         if (!(await settle())) {
-            deleteError = ENTRY_EDITOR_TEXT.deleteSaveFailed;
+            deleteError = SESSION_TEXT.deleteSaveFailed;
             return false;
         }
         autosave.discard();
         try {
             await api.entryDelete(entry.id);
         } catch {
-            deleteError = ENTRY_EDITOR_TEXT.deleteFailed;
+            deleteError = SESSION_TEXT.deleteFailed;
             return false;
         }
         onDeleted?.();
         return true;
-    }
-
-    function openLinkPicker() {
-        if (frozen || !viewApi) return;
-        const selection = viewApi.query();
-        if (!selection) return;
-        const from = selection.link?.from ?? selection.from;
-        const to = selection.link?.to ?? selection.to;
-        linkPicker = { bracketPos: null, initialText: '', from, to, label: viewApi.readText(from, to), canRemove: !!(selection.link || selection.hasLink) };
-    }
-
-    function requestBracketPicker(bracketPos) {
-        if (frozen) return;
-        linkPicker = { bracketPos, initialText: '' };
-    }
-
-    function cancelPicker() {
-        linkPicker = null;
-        viewApi?.focus();
-    }
-
-    function removePickerLink() {
-        if (frozen || !viewApi || !linkPicker?.canRemove) return;
-        const { from, to } = linkPicker;
-        viewApi.exec('removeLink', { from, to });
-        cancelPicker();
-    }
-
-    function pickLinkTarget(target) {
-        const picker = linkPicker;
-        if (!viewApi || !picker || frozen) return;
-        linkPicker = null;
-        let from;
-        let to;
-        let label;
-        if (picker.bracketPos != null) {
-            from = picker.bracketPos;
-            to = picker.bracketPos + 2;
-            label = target.linkLabel?.trim() || defaultLinkLabel(target);
-        } else {
-            const sel = picker.from != null ? picker : viewApi.query();
-            if (!sel) {
-                viewApi.focus();
-                return;
-            }
-            from = sel.from;
-            to = sel.to;
-            label = target.linkLabel?.trim() || (from === to ? defaultLinkLabel(target) : viewApi.readText(from, to));
-        }
-        if (!label.trim()) {
-            viewApi.focus();
-            return;
-        }
-        viewApi.exec('insertEntryLink', { targetId: target.id, label, from, to });
-        viewApi.focus();
-    }
-
-    async function followEntryLink(id) {
-        if (navigating || frozen || !entry) return;
-        navigating = true;
-        navError = '';
-        try {
-            const sel = viewApi?.query();
-            const ok = await onOpenEntry?.({ id, selFrom: sel?.from ?? 0, selTo: sel?.to ?? 0 });
-            if (ok === false) {
-                pendingNavId = id;
-                navError = ENTRY_EDITOR_TEXT.navigateAfterSave;
-                return;
-            }
-            pendingNavId = null;
-        } finally {
-            navigating = false;
-        }
-    }
-
-    async function retryPendingNav() {
-        if (pendingNavId == null) return;
-        const id = pendingNavId;
-        pendingNavId = null;
-        await followEntryLink(id);
-    }
-
-    function openHref(href, modified) {
-        if (!modified || frozen) return;
-        const kind = classifyHref(href);
-        if (kind === 'entry') {
-            const id = parseEntryTarget(href);
-            if (id) followEntryLink(id);
-        } else if (kind === 'external') {
-            openExternalLink(href);
-        }
-    }
-
-    function liveLinkRange(link) {
-        const live = viewApi?.locateLink(link.href, link.from) ?? null;
-        if (!live) linkNote = ENTRY_EDITOR_TEXT.linkMoved;
-        return live;
-    }
-
-    function linkAction(id, link) {
-        if (id === 'open') {
-            const targetId = parseEntryTarget(link.href);
-            if (targetId) followEntryLink(targetId);
-        } else if (id === 'copy') copyInternalLink(link);
-        else if (id === 'refresh') refreshLinkLabel(link);
-        else if (id === 'remove') removeLinkMark(link);
-    }
-
-    function removeLinkMark(link) {
-        const live = liveLinkRange(link);
-        if (live) viewApi.exec('removeLink', live);
-    }
-
-    function removeLinkRange(range) {
-        viewApi?.exec('removeLink', range);
-    }
-
-    async function copyLinkText(text) {
-        if (frozen || copying) return false;
-        const token = copyOwner.begin();
-        copying = true;
-        try {
-            await copyText(text);
-            const registered = await noteLinkCopied();
-            if (!copyOwner.current(token) || frozen) return false;
-            if (registered) notifyCopied?.(ENTRY_EDITOR_TEXT.linkCopied);
-            else notifyError?.(ENTRY_EDITOR_TEXT.linkCopyFailed);
-            return registered;
-        } catch {
-            if (copyOwner.current(token) && !frozen) notifyError?.(ENTRY_EDITOR_TEXT.linkCopyFailed);
-            return false;
-        } finally {
-            if (copyOwner.current(token)) copying = false;
-        }
-    }
-
-    async function copyNoteLink() {
-        if (!entry || frozen) return false;
-        const label = defaultLinkLabel({ title: title.trim(), entry_date: entryDate });
-        return copyLinkText(entryLinkMarkdown(entry.id, label));
-    }
-
-    async function copyInternalLink(link) {
-        if (frozen) return false;
-        const live = liveLinkRange(link);
-        if (!live) return false;
-        const label = viewApi.readText(live.from, live.to);
-        return copyLinkText(entryLinkMarkdown(parseEntryTarget(link.href), label));
-    }
-
-    async function refreshLinkLabel(link) {
-        const id = parseEntryTarget(link.href);
-        if (!id || !viewApi) return;
-        try {
-            const target = await fetchLinkTarget(id);
-            const live = liveLinkRange(link);
-            if (!live) return;
-            viewApi.exec('insertEntryLink', {
-                targetId: id,
-                label: defaultLinkLabel(target),
-                from: live.from,
-                to: live.to,
-            });
-            linkNote = '';
-        } catch (e) {
-            linkNote =
-                e === 'entry_not_found' ? ENTRY_EDITOR_TEXT.targetDeleted : linkTargetError(e);
-        }
-    }
-
-    function readBody() {
-        return viewApi?.getMarkdown() ?? entry?.body_md ?? '';
-    }
-
-    function fetchLinkTarget(id) {
-        return api.entryGet(id);
-    }
-
-    async function noteLinkCopied() {
-        try {
-            await api.clipboardNoteCopy();
-            return true;
-        } catch {
-            return false;
-        }
     }
 
     function fetchAttachmentMeta(id) {
@@ -481,11 +186,9 @@ export function createEntrySession({
         api.attachmentOpen(id).catch(() => { });
     }
 
-    function openExternalLink(href) {
-        api.openLink(href).catch(() => { });
-    }
-
     return {
+        draft,
+        links,
         get entry() {
             return entry;
         },
@@ -501,75 +204,28 @@ export function createEntrySession({
         get frozen() {
             return frozen;
         },
-        get title() {
-            return title;
-        },
-        get entryDate() {
-            return entryDate;
-        },
-        get mood() {
-            return mood;
-        },
-        get tags() {
-            return parseTags(tagsText);
-        },
-        get bodyMd() {
-            return bodyMd;
-        },
         get status() {
-            return statusText();
+            return uploads.status || SAVE_LABELS[autosave.state];
         },
         get dirty() {
             return !autosave.clean;
         },
-        get linkPicker() {
-            return linkPicker;
-        },
-        get navigating() {
-            return navigating;
-        },
-        get navError() {
-            return navError;
-        },
-        get pendingNavId() {
-            return pendingNavId;
-        },
         get deleteError() {
             return deleteError;
         },
-        get linkNote() {
-            return linkNote;
-        },
-        get copying() {
-            return copying;
-        },
-        copyNoteLink,
         load,
         dispose,
-        setViewApi,
+        attachEditor,
         setField,
         setBody,
-        attachFiles,
+        attachFiles: uploads.attach,
         prepareNavigation,
         prepareLock,
         navCapture,
         flushSaves,
-        closeSaves,
         deleteEntry,
-        openLinkPicker,
-        requestBracketPicker,
-        cancelPicker,
-        removePickerLink,
-        pickLinkTarget,
-        followEntryLink,
-        retryPendingNav,
-        openHref,
-        linkAction,
-        readBody,
-        removeLinkRange,
         fetchAttachmentMeta,
         attachmentUrlFor,
         openAttachment,
-        openExternalLink,
     };
 }
