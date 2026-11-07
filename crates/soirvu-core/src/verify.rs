@@ -131,7 +131,7 @@ mod tests {
         let (mut vault, _recovery) =
             Vault::create(&tmp.path().join("v"), "pass phrase", fast()).unwrap();
         let entry = vault
-            .create_entry(&EntryDraft {
+            .create_entry(None, &EntryDraft {
                 entry_date: "2026-10-13".into(),
                 title: Some("День".into()),
                 body_md: "про книгу".into(),
@@ -148,7 +148,7 @@ mod tests {
     fn a_healthy_vault_verifies_clean() {
         let (_tmp, mut vault, _att_id) = vault_with_attachment();
         let gone = vault
-            .create_entry(&EntryDraft {
+            .create_entry(None, &EntryDraft {
                 entry_date: "2026-10-12".into(),
                 body_md: "gone".into(),
                 ..Default::default()

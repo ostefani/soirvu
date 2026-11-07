@@ -25,6 +25,7 @@ import {
 } from "prosemirror-markdown";
 
 import { schema } from "./schema.js";
+import { isEntryHref } from "../lib/entry-target.js";
 
 const RAW_INFO = "soirvu-raw";
 
@@ -200,9 +201,12 @@ function extractRawBlocks(source) {
 // Link policy (§6.5): which hrefs may become link marks at all.
 // markdown-it already refuses javascript:/vbscript: during tokenizing
 // (those links stay literal text); this list also stops data: and
-// anything else outside the diary's own world.
+// anything else outside the diary's own world. `entry:` is the
+// vault-local namespace (Step 8): only a canonical UUID after the
+// prefix becomes a mark, so the editor can never display a link
+// the backlink verifier would reject.
 function allowedHref(href) {
-    return /^(https?:\/\/|mailto:|attachment:)/i.test(href || "");
+    return /^(https?:\/\/|mailto:|attachment:)/i.test(href || "") || isEntryHref(href);
 }
 
 // ---------------------------------------------------------------------------

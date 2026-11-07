@@ -7,6 +7,7 @@ expression: json
   "entry_date": "2026-01-02",
   "title": "Morning pages",
   "body_md": "# Morning\n\nText with **bold**.",
+  "body_hash": "68309e07d69cefbccd3d433bf64ad2e1cf250ed1e88e66c47a9cecff5b476857",
   "mood": 4,
   "tz": "Europe/Berlin",
   "tags": [
@@ -15,5 +16,6 @@ expression: json
   ],
   "created_at": 1767225600000,
   "updated_at": 1767229200000,
-  "rev": 3
+  "rev": 3,
+  "folder_id": "folder-1"
 }

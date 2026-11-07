@@ -1,9 +1,10 @@
 ---
-source: src/commands/contract.rs
+source: src-tauri/src/commands/contract.rs
 expression: json
 ---
 {
   "id": "0190a1b2-7c3d-7abc-8def-0123456789ab",
   "mime": "image/png",
-  "size": 12345
+  "size": 12345,
+  "rev": 7
 }

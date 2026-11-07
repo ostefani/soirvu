@@ -36,6 +36,9 @@ export function createModel() {
         secret: '',
         error: '',
         busy: false,
+        // Vault-list operations (relocate/forget/open-another) share
+        // one pending flag: they never run usefully in parallel.
+        opBusy: false,
         forgetArmed: null,
         forkDest: null,
         forkSecret: '',
@@ -69,6 +72,7 @@ export const FORK_SECRET_FIELD_CONFIGURATION = {
 // Error code → user message mapping
 // ---------------------------------------------------------------------------
 export const VAULT_ERROR_MESSAGES = {
+    not_a_vault: 'That folder does not hold a diary. Pick the folder with the diary files.',
     wrong_passphrase: 'Wrong passphrase or recovery key.',
     invalid_recovery_key: 'That does not look like a recovery key.',
     storage: 'The vault folder is not available right now.',

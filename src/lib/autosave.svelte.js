@@ -27,10 +27,15 @@ export function createAutosave({ snapshot, send, delay = 900 }) {
         state = 'saved';
     }
 
+    /** Settles in-flight saves; resolves whether the draft is
+        clean. Awaiting the old void promise could not tell a failed
+        save from a sent one — send failures resolve the run
+        internally, so callers must read the outcome, not the
+        settlement. */
     function flush() {
         clearTimeout(timer);
         running ??= run().finally(() => (running = null));
-        return running;
+        return running.then(() => saved === revision);
     }
 
     /** Call on every edit. */

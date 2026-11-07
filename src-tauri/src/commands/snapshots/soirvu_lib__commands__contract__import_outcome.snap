@@ -6,5 +6,7 @@ expression: json
   "entries": 12,
   "attachments": 3,
   "skippedEntries": 1,
-  "skippedAttachments": 2
+  "skippedAttachments": 2,
+  "folders": 2,
+  "skippedFolders": 0
 }

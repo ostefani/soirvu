@@ -16,6 +16,8 @@
     let { onDone, onCancel = null } = $props();
 
     let model = $state(createModel());
+    // Completions must not repopulate a screen that is already gone.
+    let alive = true;
 
     const fields = PASSPHRASE_FIELD_CONFIGURATIONS.map((field) => ({
         ...field,
@@ -30,11 +32,12 @@
         model.error = '';
         try {
             const picked = await api.vaultPickFolder('create');
-            if (!picked) return;
+            if (!alive || !picked) return;
             model.folderName = picked.name;
             model.warning = picked.warning ? (onboardingText.warnings[picked.warning] ?? '') : '';
             model.step = ONBOARDING_STEP.SET_PASSPHRASE;
         } catch (error) {
+            if (!alive) return;
             model.error = describeError(error);
         }
     }
@@ -53,11 +56,13 @@
         model.busy = true;
         try {
             const created = await api.vaultCreate(model.passphrase);
+            if (!alive) return;
             model.recoveryKey = created.recovery_key;
             model.passphrase = '';
             model.confirm = '';
             model.step = ONBOARDING_STEP.SAVE_RECOVERY_KEY;
         } catch (error) {
+            if (!alive) return;
             model.error = describeError(error);
         } finally {
             model.busy = false;
@@ -66,6 +71,7 @@
 
     // Don't leave secrets sitting in memory once the screen is gone.
     onDestroy(() => {
+        alive = false;
         model.recoveryKey = '';
         model.passphrase = '';
         model.confirm = '';

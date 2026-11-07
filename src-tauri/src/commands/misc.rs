@@ -230,6 +230,8 @@ pub struct ImportOutcome {
     pub attachments: usize,
     pub skipped_entries: usize,
     pub skipped_attachments: usize,
+    pub folders: usize,
+    pub skipped_folders: usize,
 }
 
 impl From<soirvu_core::import::ImportReport> for ImportOutcome {
@@ -239,6 +241,8 @@ impl From<soirvu_core::import::ImportReport> for ImportOutcome {
             attachments: report.attachments,
             skipped_entries: report.skipped_entries,
             skipped_attachments: report.skipped_attachments,
+            folders: report.folders,
+            skipped_folders: report.skipped_folders,
         }
     }
 }

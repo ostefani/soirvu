@@ -61,5 +61,7 @@ diary.db-shm
 vault.header.json
 export-output/
 
+AGENTS.md
+
 Entitlements.touchid.plist
 touchid.provisionprofile

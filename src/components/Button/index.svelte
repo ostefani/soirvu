@@ -10,12 +10,13 @@
         disabled = false,
         type = 'button',
         handler = null,
+        title = '',
         children = null,
+        ...rest
     } = $props();
 </script>
 
-<!-- <button {name} {type} class="{kind} {className}" class:active {disabled} onclick={() => handler?.()}> -->
-<button {name} {type} class={[kind, className, { active }]} {disabled} onclick={() => handler?.()}>
+<button {name} {type} {title} class={[kind, className, { active }]} {disabled} {...rest} onclick={() => handler?.()}>
     {#if children}
         {@render children()}
     {:else}

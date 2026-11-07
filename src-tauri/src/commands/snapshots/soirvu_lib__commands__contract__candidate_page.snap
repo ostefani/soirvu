@@ -1,0 +1,21 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+{
+  "candidates": [
+    {
+      "id": "entry-1",
+      "entry_date": "2026-01-02",
+      "title": "Training day",
+      "folder_id": "folder-1"
+    },
+    {
+      "id": "entry-2",
+      "entry_date": "2026-01-01",
+      "title": null,
+      "folder_id": null
+    }
+  ],
+  "next_cursor": "f|2026-01-01|1767225600000|entry-2"
+}

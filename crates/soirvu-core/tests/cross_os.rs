@@ -29,7 +29,7 @@ fn cross_os_fixture() {
         let (mut vault, _recovery) =
             Vault::create(&dir, PASSPHRASE, KdfParams { m_kib: 64 * 1024, t: 3, p: 1 }).unwrap();
         vault
-            .create_entry(&EntryDraft {
+            .create_entry(None, &EntryDraft {
                 entry_date: "2026-10-16".into(),
                 title: Some("Cross-OS fixture".into()),
                 body_md: "Created on one OS, opened on another.".into(),

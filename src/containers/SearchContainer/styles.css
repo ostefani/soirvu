@@ -1,0 +1,134 @@
+/* The root keeps a fixed footprint in the header; the input-container is laid
+   over it and grows leftwards into the free space, so focusing never
+   shifts the header or its buttons. */
+.search {
+    --inner-label-height: 2.835rem;
+    --collapsed-width: 12rem;
+    --expanded-width: 22rem;
+    --ease: 0.2s ease;
+    /* Map to the theme's raised-surface colour. Keep it opaque: the
+       open panel overlaps the header's separator strip. */
+    --surface: var(--search-surface, rgb(246 243 239));
+
+    position: relative;
+    z-index: 2;
+    width: var(--collapsed-width);
+    height: var(--inner-label-height);
+}
+
+.input-container {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 100%;
+    overflow: hidden;
+    border: 2px solid var(--color-border-subtle);
+    background-color: var(--color-surface-pressed);
+    border-radius: 8px;
+    transition:
+        width var(--ease),
+        border-color var(--ease),
+        box-shadow var(--ease);
+}
+
+.search:focus-within .input-container {
+    width: min(var(--expanded-width), calc(100vw - 2rem));
+    border: 2px solid var(--color-focus);
+    background-color: var(--color-focus-bg);
+    outline: none;
+}
+
+.inner-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    height: calc(var(--inner-label-height) - 2px);
+    padding: 0 0.75rem;
+    cursor: text;
+}
+
+.icon {
+    flex: none;
+    width: 1rem;
+    height: 1rem;
+    fill: none;
+    stroke: var(--color-ink-muted);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    transition: stroke var(--ease);
+}
+
+.search:focus-within .icon {
+    stroke: var(--color-ink-primary);
+}
+
+.inner-label input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+    appearance: none;
+    font: inherit;
+    font-size: 0.95rem;
+    color: var(--color-ink-primary);
+}
+
+
+.inner-label input:focus,
+.inner-label input:focus-visible {
+    border: 0;
+    box-shadow: none;
+    outline: none;
+}
+
+.inner-label input::placeholder {
+    color: var(--color-ink-muted);
+}
+
+/* Scope option: height animates 0 -> auto through the grid track, and
+   visibility keeps the hidden checkbox out of the tab order. */
+.search-options {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows var(--ease);
+}
+
+.search:focus-within .search-options {
+    grid-template-rows: 1fr;
+}
+
+.options-clip {
+    min-height: 0;
+    overflow: hidden;
+    visibility: hidden;
+    transition: visibility 0s 0.2s;
+}
+
+.search:focus-within .options-clip {
+    visibility: visible;
+    transition-delay: 0s;
+}
+
+.option {
+    padding: 0.5rem 0.75rem;
+    border-top: 1px solid var(--color-border-subtle);
+    font-size: 0.85rem;
+    color: var(--color-ink-muted);
+    white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+    .input-container,
+    .icon,
+    .search-options,
+    .options-clip {
+        transition: none;
+    }
+}

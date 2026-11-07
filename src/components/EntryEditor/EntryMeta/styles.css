@@ -1,0 +1,252 @@
+.meta-row {
+    position: relative;
+    z-index: 40;
+    display: flex;
+    gap: 1.4rem;
+    align-items: center;
+    flex-wrap: wrap;
+    background: var(--color-surface);
+}
+
+.meta-chips {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+/* Metadata chips: quiet capsules until hovered or opened. */
+.meta-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.18rem 0.65rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    line-height: 1.45;
+    color: var(--color-ink-muted);
+    background: transparent;
+    /* border: 1px solid var(--color-border-subtle);
+    border-radius: 999px; */
+    border: none;
+    box-shadow: none;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+}
+
+.meta-chip:hover {
+    /* border-color: var(--color-accent); */
+    color: var(--color-ink-primary);
+    background-color: var(--color-accent-soft);
+}
+
+.meta-chip[aria-expanded="true"] {
+    border-color: var(--color-accent);
+    color: var(--color-ink-primary);
+    background: var(--color-accent-soft);
+}
+
+/* Empty metadata is an invitation, not clutter. */
+.meta-chip.empty {
+    /* border-style: dashed; */
+    opacity: 0.8;
+}
+
+.chip-icon {
+    font-size: 0.85em;
+}
+
+.chev {
+    font-size: 0.6rem;
+    opacity: 0.6;
+    transition: transform 0.15s ease;
+}
+
+.meta-chip[aria-expanded="true"] .chev {
+    transform: rotate(180deg);
+}
+
+.chip-wrap {
+    position: relative;
+    display: inline-flex;
+}
+
+/* Popovers: the chip's editing surface. One open at a time;
+   Escape and outside-click close (handled in the component). */
+.popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 60;
+    min-width: 250px;
+    max-width: 320px;
+    padding: 0.75rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 10px;
+    box-shadow: 0 6px 20px var(--elevation-shadow), 0 1px 3px var(--elevation-shadow);
+}
+
+/* The rightmost chip opens leftwards so it cannot overflow. */
+.chip-wrap:last-child .popover {
+    left: auto;
+    right: 0;
+}
+
+.popover h4 {
+    margin: 0 0 0.5rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-ink-muted);
+}
+
+/* Date popover */
+.popover input[type="date"] {
+    width: 100%;
+    box-sizing: border-box;
+    background: transparent;
+    border-color: var(--color-border-subtle);
+    box-shadow: none;
+    padding: 0.3em 0.6em;
+    font-size: 0.85rem;
+    color: var(--color-ink-primary);
+}
+
+/* Mood popover: the 1–5 scale as round buttons. */
+.mood-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+}
+
+.mood-grid button {
+    min-width: 34px;
+    height: 34px;
+    padding: 0;
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border-radius: 8px;
+    color: var(--color-ink-muted);
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.mood-grid button:hover {
+    background: var(--color-accent-soft);
+    border-color: transparent;
+    color: var(--color-ink-primary);
+}
+
+.mood-grid button.selected {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+    color: #ffffff;
+}
+
+.mood-clear {
+    margin-top: 0.5rem;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    border-radius: 6px;
+}
+
+.mood-clear:hover {
+    background: var(--color-surface-pressed);
+    border-color: transparent;
+    color: var(--color-ink-primary);
+}
+
+/* Tags popover: reuses the entry list's capsule language. */
+.popover .tag-flow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-bottom: 0.6rem;
+}
+
+.tag-pill {
+    display: inline-flex;
+    align-items: center;
+    background-color: var(--surface-inset);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 999px;
+    transition: border-color 0.15s ease;
+    overflow: hidden;
+}
+
+.tag-pill:hover {
+    border-color: var(--color-accent);
+}
+
+.tag-name {
+    padding: 0.18rem 0.3rem 0.18rem 0.6rem;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--color-ink-primary);
+    white-space: nowrap;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tag-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    padding: 0 0.45rem 0 0.1rem;
+    font-size: 0.95rem;
+    line-height: 1;
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    border-radius: 0;
+    opacity: 0.45;
+    transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.tag-pill:hover .tag-remove {
+    opacity: 1;
+}
+
+.tag-remove:hover {
+    color: var(--color-danger);
+    border-color: transparent;
+    background-color: transparent;
+}
+
+.tag-entry {
+    width: 100%;
+    box-sizing: border-box;
+    background: transparent;
+    border-color: var(--color-border-subtle);
+    box-shadow: none;
+    padding: 0.3em 0.6em;
+    font-size: 0.85rem;
+    color: var(--color-ink-primary);
+}
+
+/* Document-style title: big, bold, borderless — the first
+   line of the page, not a form field. */
+.popover.backlinks-popover {
+    left: auto;
+    right: 0;
+    width: min(360px, calc(100vw - 3rem));
+    min-width: 0;
+    max-width: none;
+    box-sizing: border-box;
+}
+
+.popover[hidden] {
+    display: none;
+}

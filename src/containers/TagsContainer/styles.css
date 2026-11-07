@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: MIT
+   Copyright (c) 2026 Olha Stefanishyna */
+.tags-container {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}

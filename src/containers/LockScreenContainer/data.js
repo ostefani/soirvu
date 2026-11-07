@@ -6,6 +6,8 @@
  * All user-facing strings are defined here without abbreviations.
  * Dynamic messages use formatting helper functions.
  */
+import { unknownErrorText } from '@/lib/errors.js';
+
 export const lockScreenText = {
     // Vault status badges and labels
     vaultFolderNotFound: '— folder not found',
@@ -42,7 +44,7 @@ export const lockScreenText = {
     backoffMessage: (seconds) =>
         `Too many wrong attempts. Wait ${seconds} seconds and try again.`,
 
-    // Fallback error message
+    // Fallback error message: the single shared unknown-code rule.
     /** @param {string} code */
-    unknownError: (code) => `Something went wrong (${code}).`,
+    unknownError: (code) => unknownErrorText(code),
 };

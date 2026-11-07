@@ -1,0 +1,90 @@
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 Olha Stefanishyna -->
+<script>
+    import { untrack } from 'svelte';
+    import * as api from '@/api.js';
+    import { LINK_PICKER_TEXT } from './data.js';
+    import { readEntryLink } from '@/lib/links.js';
+    import LinkPicker from '@/components/LinkPicker/index.svelte';
+
+    let { initialQuery = '', initialLabel = '', folders = [], canRemove = false, onRemoveLink = null, onPick = null, onCancel = null } = $props();
+
+    let query = $state(untrack(() => initialQuery));
+    let linkError = $state('');
+    let candidates = $state([]);
+    let nextCursor = $state(null);
+    let loading = $state(false);
+    let error = $state('');
+
+    let timer = null;
+    let runId = 0;
+    let queryEpoch = $state(0);
+
+    async function search(reset) {
+        // Read outside the effect's tracking: searches run on the
+        // debounced epoch, not on every keystroke.
+        const q = untrack(() => query);
+        const cursor = untrack(() => (reset ? null : nextCursor));
+        const mine = ++runId;
+        loading = true;
+        error = '';
+        try {
+            const page = await api.entryLinkCandidates(q, {
+                cursor,
+                limit: 20,
+            });
+            if (mine !== runId) return;
+            candidates = reset ? page.candidates : [...candidates, ...page.candidates];
+            nextCursor = page.next_cursor;
+        } catch {
+            if (mine !== runId) return;
+            error = 'Could not search entries.';
+        } finally {
+            if (mine === runId) loading = false;
+        }
+    }
+
+    function onQueryChange(value) {
+        query = value;
+        clearTimeout(timer);
+        timer = setTimeout(() => queryEpoch++, 200);
+    }
+
+    function applyPastedLink(value, label) {
+        const link = readEntryLink(value);
+        if (!link) {
+            linkError = LINK_PICKER_TEXT.invalidLink;
+            return;
+        }
+        linkError = '';
+        onPick?.({ id: link.id, title: link.label || LINK_PICKER_TEXT.untitledLink, linkLabel: label });
+    }
+
+    // Empty query lists recent entries; every committed keystroke
+    // re-runs the vault-wide two-tier search from the first page.
+    $effect(() => {
+        void queryEpoch;
+        search(true);
+        return () => {
+            runId++;
+            clearTimeout(timer);
+        };
+    });
+</script>
+
+<LinkPicker
+    {query}
+    {initialLabel}
+    {canRemove}
+    {onRemoveLink}
+    {linkError}
+    onPasteLink={applyPastedLink}
+    {candidates}
+    {nextCursor}
+    {loading}
+    {error}
+    {folders}
+    {onQueryChange}
+    onMore={() => search(false)}
+    {onPick}
+    {onCancel} />

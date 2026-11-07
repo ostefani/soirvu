@@ -7,10 +7,12 @@ expression: json
   "entry_date": "2026-01-01",
   "title": null,
   "body_md": "",
+  "body_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "mood": null,
   "tz": null,
   "tags": [],
   "created_at": 1767139200000,
   "updated_at": 1767139200000,
-  "rev": 1
+  "rev": 1,
+  "folder_id": null
 }

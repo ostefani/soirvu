@@ -5,7 +5,6 @@ expression: "serde_json::to_string_pretty(&sent).expect(\"value serializes\")"
 {
   "body_md": "# Morning",
   "entry_date": "2026-01-02",
-  "id": "entry-1",
   "mood": 4,
   "tags": [
     "golden",

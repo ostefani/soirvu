@@ -706,7 +706,7 @@ mod tests {
         let (mut vault, _recovery) =
             Vault::create(&tmp.path().join("v"), "pass phrase", fast()).unwrap();
         let entry = vault
-            .create_entry(&EntryDraft {
+            .create_entry(None, &EntryDraft {
                 entry_date: "2026-10-13".into(),
                 title: Some("День".into()),
                 body_md: "текст".into(),

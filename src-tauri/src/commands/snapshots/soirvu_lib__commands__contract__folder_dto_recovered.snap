@@ -1,0 +1,14 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+{
+  "id": "folder-2",
+  "parent_id": "folder-gone",
+  "name": "Orphan",
+  "created_at": 1767225600000,
+  "updated_at": 1767229200000,
+  "rev": 2,
+  "entry_count": 1,
+  "recovered": true
+}

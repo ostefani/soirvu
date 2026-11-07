@@ -8,6 +8,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { scopeToWire } from "./lib/scope.js";
 
 /**
  * @typedef {object} VaultInfo
@@ -36,6 +37,7 @@ import { listen } from "@tauri-apps/api/event";
  * @property {number} created_at Unix milliseconds
  * @property {number} updated_at Unix milliseconds
  * @property {number} rev
+ * @property {string | null} folder_id Null is the vault root.
  */
 
 /**
@@ -46,14 +48,19 @@ import { listen } from "@tauri-apps/api/event";
  * @property {string} excerpt
  * @property {string[]} tags
  * @property {number} updated_at
+ * @property {string | null} folder_id Null is the vault root.
  */
 
 /**
- * @typedef {object} EntryDraft
- * @property {string | null} id Null creates; a value updates.
+ * The entry fields both write commands take — no id, no folder
+ * (creation files into a folder argument, updates never touch
+ * membership). Rust refuses unknown fields, so a stale client
+ * cannot smuggle an id or a folder through.
+ * @typedef {object} DraftBody
  * @property {string} entry_date
  * @property {string | null} title
  * @property {string} body_md
+ * @property {number | null} mood 1–5
  * @property {string | null} tz
  * @property {string[]} tags
  */
@@ -64,6 +71,64 @@ import { listen } from "@tauri-apps/api/event";
  * @property {string} entry_date
  * @property {string | null} title
  * @property {string} snippet Plain text; \u0002…\u0003 mark the matches.
+ * @property {string | null} folder_id Null is the vault root.
+ */
+
+/**
+ * Which entries a scoped read may see. Defaults to All when
+ * omitted — existing calls keep working unchanged.
+ * The UI owns selections in JS casing; the wrappers convert to
+ * the wire shape (notably the snake_case subtree flag) because
+ * Rust deserializes nested structs strictly — Tauri's camelCase
+ * conversion applies only to top-level command arguments.
+ * @typedef {({ kind: "all" } | { kind: "root" } | { kind: "folder", id: string, includeDescendants?: boolean })} Scope
+ */
+
+/**
+ * @typedef {object} Folder
+ * @property {string} id
+ * @property {string | null} parent_id Null is the vault root.
+ * @property {string} name
+ * @property {number} created_at Unix milliseconds
+ * @property {number} updated_at Unix milliseconds
+ * @property {number} rev
+ * @property {number} entry_count Entries filed directly in it.
+ * @property {boolean} recovered True when the stored parent is
+ *   gone: the UI shows the folder at the root instead.
+ */
+
+/**
+ * @typedef {object} LinkCandidate
+ * @property {string} id
+ * @property {string} entry_date
+ * @property {string | null} title
+ * @property {string | null} folder_id
+ */
+
+/**
+ * @typedef {object} CandidatePage
+ * @property {LinkCandidate[]} candidates
+ * @property {string | null} next_cursor Opaque; pass back for more.
+ */
+
+/**
+ * @typedef {object} BacklinkSource
+ * @property {string} id
+ * @property {string} entry_date
+ * @property {string | null} title
+ * @property {string | null} folder_id
+ * @property {string | null} body Full body when it fits the inline
+ *   budget, null for oversized bodies — never truncated.
+ * @property {number} body_size Body length in bytes; the fetch
+ *   budget and large-entry indicator read this, not the body.
+ * @property {string} body_hash Hex SHA-256 over the body bytes;
+ *   the verify cache keys on content, never on the revision.
+ */
+
+/**
+ * @typedef {object} BacklinkPage
+ * @property {BacklinkSource[]} candidates
+ * @property {string | null} next_cursor Opaque; pass back for more.
  */
 
 /**
@@ -277,7 +342,7 @@ export function vaultRotateMasterKey(currentPassphrase) {
 // Entries, search, tags (all reject with "locked" unless Unlocked)
 
 /**
- * @param {{ cursor?: string | null, tag?: string | null, limit?: number }} [args]
+ * @param {{ cursor?: string | null, tag?: string | null, date?: string | null, limit?: number, scope?: Scope | null }} [args]
  * @returns {Promise<{ entries: EntrySummary[], next_cursor: string | null }>}
  */
 export function entryList(args = {}) {
@@ -286,6 +351,7 @@ export function entryList(args = {}) {
         tag: args.tag ?? null,
         date: args.date ?? null,
         limit: args.limit ?? null,
+        scope: scopeToWire(args.scope),
     });
 }
 
@@ -293,19 +359,21 @@ export function entryList(args = {}) {
  * Live-entry counts per day in [from, to), for the calendar.
  * @param {string} from - First day, YYYY-MM-DD (included).
  * @param {string} to - Last day, YYYY-MM-DD (excluded).
+ * @param {Scope | null} [scope]
  * @returns {Promise<Array<{date: string, entries: number}>>}
  */
-export function calendarDays(from, to) {
-    return invoke('calendar_days', { from, to });
+export function calendarDays(from, to, scope = null) {
+    return invoke('calendar_days', { from, to, scope: scopeToWire(scope) });
 }
 
 /**
  * Entries from this month-and-day in earlier years.
  * @param {string} date Today, YYYY-MM-DD.
+ * @param {Scope | null} [scope]
  * @returns {Promise<EntrySummary[]>}
  */
-export function onThisDay(date) {
-    return invoke('on_this_day', { date });
+export function onThisDay(date, scope = null) {
+    return invoke('on_this_day', { date, scope: scopeToWire(scope) });
 }
 
 /**
@@ -317,11 +385,28 @@ export function entryGet(id) {
 }
 
 /**
- * @param {EntryDraft} draft
+ * Files a new entry into a folder (null is the vault root). The
+ * assignment is permanent: no update path can change it.
+ * @param {string | null} folderId
+ * @param {DraftBody} draft
  * @returns {Promise<Entry>}
  */
-export function entrySave(draft) {
-    return invoke("entry_save", { draft });
+export function entryCreate(folderId, draft) {
+    return invoke("entry_create", { folderId, draft });
+}
+
+/**
+ * Replaces an entry's date, title, text, mood and tags. A stale
+ * expectedRev fails with "revision_conflict" instead of
+ * overwriting: the caller opened an older revision. Folder
+ * membership is never touched.
+ * @param {string} id
+ * @param {number} expectedRev The rev the caller opened.
+ * @param {DraftBody} draft
+ * @returns {Promise<Entry>}
+ */
+export function entryUpdate(id, expectedRev, draft) {
+    return invoke("entry_update", { id, expectedRev, draft });
 }
 
 /** @param {string} id */
@@ -332,15 +417,112 @@ export function entryDelete(id) {
 /**
  * @param {string} query Words under 3 characters are dropped; if none
  *   remain, rejects with "query_too_short" (§4).
+ * @param {{ limit?: number, scope?: Scope | null }} [args]
  * @returns {Promise<SearchHit[]>}
  */
-export function search(query) {
-    return invoke("search", { query });
+export function search(query, args = {}) {
+    return invoke("search", {
+        query,
+        limit: args.limit ?? null,
+        scope: scopeToWire(args.scope),
+    });
 }
 
-/** @returns {Promise<{ name: string, entries: number }[]>} */
-export function tagList() {
-    return invoke("tag_list");
+/**
+ * Vault-wide title suggestions for the link picker: prefix
+ * matches first, then FTS title matches, deduplicated. Empty
+ * queries return recent entries; 1–2 character queries are
+ * prefix-only.
+ * @param {string} query
+ * @param {{ cursor?: string | null, limit?: number }} [args]
+ * @returns {Promise<CandidatePage>}
+ */
+export function entryLinkCandidates(query, args = {}) {
+    return invoke("entry_link_candidates", {
+        query,
+        cursor: args.cursor ?? null,
+        limit: args.limit ?? null,
+    });
+}
+
+/**
+ * Body-only UUID candidates for one link target: small bodies
+ * inline, metadata (size, revision) plus a null body for oversized
+ * ones, folder ids for the verifier. The target itself is
+ * excluded; deleted sources never appear.
+ * @param {string} id The link target.
+ * @param {{ cursor?: string | null, limit?: number }} [args]
+ * @returns {Promise<BacklinkPage>}
+ */
+export function backlinkCandidates(id, args = {}) {
+    return invoke("backlink_candidates", {
+        id,
+        cursor: args.cursor ?? null,
+        limit: args.limit ?? null,
+    });
+}
+
+/**
+ * @param {Scope | null} [scope]
+ * @returns {Promise<{ name: string, entries: number }[]>}
+ */
+export function tagList(scope = null) {
+    return invoke("tag_list", { scope: scopeToWire(scope) });
+}
+
+/**
+ * One live folder per row, for the tree. `recovered` rows show at
+ * the root; `entry_count` is direct entries only.
+ * @returns {Promise<Folder[]>}
+ */
+export function folderList() {
+    return invoke("folder_list");
+}
+
+/**
+ * Creates a folder under parentId (null is the vault root).
+ * Rejects with "folder_exists" on a duplicate sibling name.
+ * @param {string | null} parentId
+ * @param {string} name
+ * @returns {Promise<Folder>}
+ */
+export function folderCreate(parentId, name) {
+    return invoke("folder_create", { parentId, name });
+}
+
+/**
+ * Renames and/or moves a folder; pass the current values for the
+ * fields that stay. A stale expectedRev fails with
+ * "revision_conflict" and writes nothing.
+ * @param {string} id
+ * @param {number} expectedRev
+ * @param {string | null} parentId
+ * @param {string} name
+ * @returns {Promise<Folder>}
+ */
+export function folderUpdate(id, expectedRev, parentId, name) {
+    return invoke("folder_update", { id, expectedRev, parentId, name });
+}
+
+/**
+ * Deletes an empty folder at the caller's revision. Folders with
+ * live subfolders or entries fail with "folder_not_empty".
+ * @param {string} id
+ * @param {number} expectedRev
+ * @returns {Promise<void>}
+ */
+export function folderDelete(id, expectedRev) {
+    return invoke("folder_delete", { id, expectedRev });
+}
+
+/**
+ * Revives a tombstoned folder with its stored placement.
+ * @param {string} id
+ * @param {number} expectedRev
+ * @returns {Promise<Folder>}
+ */
+export function folderRestore(id, expectedRev) {
+    return invoke("folder_restore", { id, expectedRev });
 }
 
 /**
@@ -385,6 +567,8 @@ export function settingsGet() {
  * @property {string} id
  * @property {string} mime Sniffed in Rust, never from the file name.
  * @property {number} size
+ * @property {number} rev The entry's post-commit revision — the
+ *   editor adopts it so the next save builds on the fresh base.
  */
 
 /**
@@ -450,11 +634,15 @@ export function attachmentChunk(uploadId, bytes) {
 
 /**
  * Sniffs, caps, strips (per settings) and commits an upload.
+ * Refused with "revision_conflict" when the entry moved under the
+ * caller: committing then would strand the attachment on unseen
+ * content, so the editor adopts nothing and surfaces the conflict.
  * @param {string} uploadId
+ * @param {number} expectedRev The entry rev the editor opened.
  * @returns {Promise<AttachmentAdded>}
  */
-export function attachmentFinish(uploadId) {
-    return invoke("attachment_finish", { uploadId });
+export function attachmentFinish(uploadId, expectedRev) {
+    return invoke("attachment_finish", { uploadId, expectedRev });
 }
 
 /** @param {string} uploadId */
@@ -474,10 +662,11 @@ export function attachmentInfo(id) {
  * Rust-side picker + streaming import for very large files (§6.1).
  * Resolves to null when the user cancels the picker.
  * @param {string} entryId
+ * @param {number} expectedRev The entry rev the caller opened.
  * @returns {Promise<AttachmentAdded | null>}
  */
-export function attachmentImport(entryId) {
-    return invoke("attachment_import", { entryId });
+export function attachmentImport(entryId, expectedRev) {
+    return invoke("attachment_import", { entryId, expectedRev });
 }
 
 /**
@@ -683,4 +872,14 @@ export function onVaultStatus(cb) {
  */
 export function onLockRequested(cb) {
     return listen("lock-requested", (event) => cb(event.payload));
+}
+
+/**
+ * Fires when a master-key rotation begins, so the settings view
+ * can show progress instead of a hung button.
+ * @param {(payload: unknown) => void} cb
+ * @returns {Promise<() => void>} The unlisten function.
+ */
+export function onRotationStarted(cb) {
+    return listen("rotation-started", (event) => cb(event.payload));
 }

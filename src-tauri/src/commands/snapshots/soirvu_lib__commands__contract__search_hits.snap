@@ -7,12 +7,14 @@ expression: json
     "id": "entry-1",
     "entry_date": "2026-01-02",
     "title": "Test",
-    "snippet": "…\u0002test\u0003…"
+    "snippet": "…\u0002test\u0003…",
+    "folder_id": "folder-1"
   },
   {
     "id": "entry-2",
     "entry_date": "2026-01-01",
     "title": null,
-    "snippet": "plain"
+    "snippet": "plain",
+    "folder_id": null
   }
 ]

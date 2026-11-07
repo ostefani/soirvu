@@ -1,0 +1,30 @@
+/* The viewport overlay sits above metadata menus and the sticky
+   toolbar. Its dialog scrolls within short windows. */
+.picker-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    box-sizing: border-box;
+    overflow-y: auto;
+    background-color: #00000040;
+}
+
+.picker-backdrop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    border: 0;
+    padding: 0;
+    background: transparent;
+}
+
+.picker-overlay > :global(.link-picker) {
+    position: relative;
+    width: min(28rem, 100%);
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+}

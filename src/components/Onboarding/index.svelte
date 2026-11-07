@@ -50,12 +50,15 @@
         <div class="recovery-container">
             <p class="recovery-key">{recoveryKey}</p>
         </div>
-        <Checkbox checked={saved} label={onboardingText.confirmSavedCheckbox} onchange={onSavedChange} />
+        <Checkbox
+            checked={saved}
+            label={onboardingText.confirmSavedCheckbox}
+            onchange={(e) => onSavedChange(e.currentTarget.checked)} />
         <Button label={onboardingText.openDiaryButton} handler={onDone} disabled={!saved} />
     {/if}
 
     {#if onCancel && step < ONBOARDING_STEP.SAVE_RECOVERY_KEY}
-        <Button label={onboardingText.backButton} kind="quiet" handler={onCancel} />
+        <Button label={onboardingText.backButton} kind="quiet-button" handler={onCancel} />
     {/if}
 
     <ErrorComponent text={error} />

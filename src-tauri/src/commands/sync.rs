@@ -84,6 +84,8 @@ impl From<SyncBundleInfo> for SyncBundleDto {
 pub struct SyncReportDto {
     pub bundles_seen: usize,
     pub bundles_applied: usize,
+    pub folders_applied: usize,
+    pub folders_conflicted: usize,
     pub entries_applied: usize,
     pub entries_conflicted: usize,
     pub attachments_applied: usize,
@@ -97,6 +99,8 @@ impl From<SyncReport> for SyncReportDto {
         SyncReportDto {
             bundles_seen: report.bundles_seen,
             bundles_applied: report.bundles_applied,
+            folders_applied: report.folders_applied,
+            folders_conflicted: report.folders_conflicted,
             entries_applied: report.entries_applied,
             entries_conflicted: report.entries_conflicted,
             attachments_applied: report.attachments_applied,

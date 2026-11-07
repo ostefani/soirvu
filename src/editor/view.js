@@ -26,6 +26,7 @@ import { Fragment, Slice } from "prosemirror-model";
 import { NodeSelection, TextSelection, selectionNear } from "./state.js";
 import { deleteSelection as deleteSelectionCmd, insertTextIn } from "./commands.js";
 import { inlineSlice } from "./transform.js";
+import { caretScrollDelta } from "./scroll.js";
 import { tokenize } from "./highlight.js";
 
 // ---------------------------------------------------------------------------
@@ -553,6 +554,23 @@ export class EditorView {
         return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
     }
 
+    scrollSelectionIntoView() {
+        if (this.composing || this.state.selection.type !== 'text' || !this.dom.contains(document.activeElement)) return;
+        const position = this.state.selection.head;
+        let container = this.dom;
+        while (container && container !== document.documentElement) {
+            const style = getComputedStyle(container);
+            if (/auto|scroll/.test(style.overflowY) && container.scrollHeight > container.clientHeight) {
+                const bounds = container.getBoundingClientRect();
+                const top = bounds.top + container.clientTop;
+                const viewport = { top, bottom: top + container.clientHeight };
+                const delta = caretScrollDelta(this.coordsAtPos(position), viewport);
+                if (delta) container.scrollTop += delta;
+            }
+            container = container.parentElement;
+        }
+    }
+
     syncSelection() {
         const domSel = document.getSelection();
         if (!domSel) return;
@@ -869,8 +887,13 @@ export class EditorView {
         }
         const link = e.target.closest ? e.target.closest("a[href]") : null;
         if (link && this.dom.contains(link)) {
-            e.preventDefault();
-            if (this.handleClickOn) this.handleClickOn(link.getAttribute("href"));
+            // Plain clicks only move the caret. Following a link —
+            // in-vault or external — takes an explicit modifier
+            // click, so reading never navigates by accident.
+            if (e.metaKey || e.ctrlKey) {
+                e.preventDefault();
+                if (this.handleClickOn) this.handleClickOn(link.getAttribute("href"), true);
+            }
             return;
         }
     }

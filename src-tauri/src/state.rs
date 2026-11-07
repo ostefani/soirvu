@@ -1286,7 +1286,7 @@ mod tests {
                 attempted_tx.send(()).unwrap();
                 state_ref
                     .with_vault(|vault| {
-                        vault.create_entry(&soirvu_core::entries::EntryDraft {
+                        vault.create_entry(None, &soirvu_core::entries::EntryDraft {
                             entry_date: "2026-10-19".into(),
                             title: Some("after snapshot".into()),
                             body_md: String::new(),

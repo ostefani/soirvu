@@ -109,11 +109,42 @@ ALTER TABLE entry ADD COLUMN base_rev INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE entry ADD COLUMN base_device TEXT NOT NULL DEFAULT '';
 ";
 
-const MIGRATIONS: &[&str] = &[
+/// Logical folders, entry membership, and the title search key (step 2
+/// of the folders-and-links plan). Root is represented by NULL, not a
+/// folder row. Membership and parent references intentionally have no
+/// hard foreign keys: sync can deliver children before parents.
+const MIGRATION_5_FOLDERS: &str = "
+CREATE TABLE folder (
+  id         TEXT PRIMARY KEY,
+  parent_id  TEXT,
+  name       TEXT NOT NULL,
+  name_key   TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  rev        INTEGER NOT NULL,
+  device_id  TEXT NOT NULL REFERENCES device(id),
+  lseq       INTEGER NOT NULL,
+  base_rev   INTEGER NOT NULL DEFAULT 0,
+  base_device TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX folder_parent_idx ON folder(parent_id) WHERE deleted_at IS NULL;
+CREATE INDEX folder_lseq_idx ON folder(lseq);
+ALTER TABLE entry ADD COLUMN folder_id TEXT;
+CREATE INDEX entry_folder_date_idx
+  ON entry(folder_id, entry_date DESC, created_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+ALTER TABLE entry ADD COLUMN title_key TEXT;
+CREATE INDEX entry_title_key_idx ON entry(title_key) WHERE deleted_at IS NULL;
+INSERT INTO meta (key, value) VALUES ('sync_epoch', '1'), ('bootstrap_pending', '1');
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[
     MIGRATION_1_META,
     MIGRATION_2_ENTRIES,
     MIGRATION_3_ATTACHMENTS,
     MIGRATION_4_SYNC,
+    MIGRATION_5_FOLDERS,
 ];
 
 /// The schema version this build of the app understands.
@@ -252,7 +283,12 @@ impl Database {
     }
 }
 
-fn create_with(path: &Path, key: &Key, vault_id: &str, migrations: &[&str]) -> Result<Database> {
+pub(crate) fn create_with(
+    path: &Path,
+    key: &Key,
+    vault_id: &str,
+    migrations: &[&str],
+) -> Result<Database> {
     if path.exists() {
         return Err(Error::Io(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -268,6 +304,12 @@ fn create_with(path: &Path, key: &Key, vault_id: &str, migrations: &[&str]) -> R
     configure(&conn)?;
 
     migrate(&mut conn, migrations, 0)?;
+    // A fresh vault has no history to bootstrap: the migration's pending
+    // flag applies to upgrades only. The epoch stays: this is a v2 vault.
+    conn.execute(
+        "DELETE FROM meta WHERE key = 'bootstrap_pending'",
+        [],
+    )?;
     conn.execute(
         "INSERT INTO meta (key, value) VALUES ('vault_id', ?1), ('created_by_app_version', ?2)",
         params![vault_id, env!("CARGO_PKG_VERSION")],
@@ -275,7 +317,12 @@ fn create_with(path: &Path, key: &Key, vault_id: &str, migrations: &[&str]) -> R
     Ok(Database { conn })
 }
 
-fn open_with(path: &Path, key: &Key, backup_dir: &Path, migrations: &[&str]) -> Result<Database> {
+pub(crate) fn open_with(
+    path: &Path,
+    key: &Key,
+    backup_dir: &Path,
+    migrations: &[&str],
+) -> Result<Database> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     silence_sqlite_log();
     let mut conn = Connection::open_with_flags(path, flags)?;
@@ -301,8 +348,35 @@ fn open_with(path: &Path, key: &Key, backup_dir: &Path, migrations: &[&str]) -> 
     if version < latest {
         backup_before_migration(&conn, path, backup_dir, version, latest)?;
         migrate(&mut conn, migrations, version)?;
+        // The folders migration only creates columns; titles that
+        // predate it get their search keys here. Idempotent: only
+        // rows the backfill has not reached are touched, so a crash
+        // between migrate and backfill simply reruns it.
+        if version < 5 {
+            backfill_title_keys(&mut conn)?;
+        }
     }
     Ok(Database { conn })
+}
+
+/// Fills `title_key` for rows written before the folders migration,
+/// using the same normalizer as live writes (see `entries`).
+fn backfill_title_keys(conn: &mut Connection) -> Result<()> {
+    let rows: Vec<(i64, Option<String>)> = {
+        let mut stmt = conn.prepare(
+            "SELECT rid, title FROM entry
+              WHERE title_key IS NULL AND title IS NOT NULL",
+        )?;
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    let tx = conn.transaction()?;
+    for (rid, title) in &rows {
+        let key = crate::entries::normalize_key(title.as_deref().unwrap_or(""));
+        tx.execute("UPDATE entry SET title_key = ?1 WHERE rid = ?2", params![key, rid])?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 /// Runs the migrations after `from`, each in its own transaction.

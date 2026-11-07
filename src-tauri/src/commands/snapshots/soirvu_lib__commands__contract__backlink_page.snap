@@ -1,0 +1,18 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+{
+  "candidates": [
+    {
+      "id": "entry-3",
+      "entry_date": "2026-01-03",
+      "title": "Summary",
+      "folder_id": null,
+      "body": "see [notes](entry:entry-1) for details",
+      "body_size": 38,
+      "body_hash": "d9150e63f33a8b72c75cc8996a505195ce6cfee5a4c07832bd4126d130ba0201"
+    }
+  ],
+  "next_cursor": null
+}

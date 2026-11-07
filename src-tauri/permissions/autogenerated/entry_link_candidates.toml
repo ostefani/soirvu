@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-entry-link-candidates"
+description = "Enables the entry_link_candidates command without any pre-configured scope."
+commands.allow = ["entry_link_candidates"]
+
+[[permission]]
+identifier = "deny-entry-link-candidates"
+description = "Denies the entry_link_candidates command without any pre-configured scope."
+commands.deny = ["entry_link_candidates"]

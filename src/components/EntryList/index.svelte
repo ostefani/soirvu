@@ -1,69 +1,127 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
+    import { onDestroy } from 'svelte';
     import * as api from '@/api.js';
+    import Checkbox from '@/components/Checkbox/index.svelte';
+    import { resolveErrorText } from '@/lib/errors.js';
+    import { ENTRY_LIST_ERRORS } from './errors.js';
+    import { breadcrumb } from '@/lib/folders.js';
+    import { nextCursorAfterPage } from '@/lib/list.js';
+    import { createRequestOwner } from '@/lib/request-owner.js';
 
     let {
         selectedId,
+        focusedEntry = null,
         onSelect,
         date = null,
         onClearDate,
         // Search state lives in the screen; the list only renders it.
         results = null, // null = not searching
         searchNote = '',
-        onClearSearch,
         version = 0,
+        // Folder scope: null is the whole vault. Tag and date
+        // filters intersect it; the server applies the rest.
+        scope = null,
+        folders = [],
+        tagFilter = null,
+        onToggleDescendants = null,
+        onShowAllChange = null,
     } = $props();
 
     let entries = $state([]);
     let nextCursor = $state(null);
-    let tags = $state([]);
-    let tagFilter = $state(null);
     let error = $state('');
+    // One list request in flight at most (reset or page): a
+    // "More…" click during a reset would start a newer token with
+    // the old cursor under the new scope, discarding the first
+    // page and appending old rows to new ones.
+    let listBusy = $state(false);
 
-    // Same short texts as the other screens: codes, never prose
-    // from below.
+    const listOwner = createRequestOwner();
+
+    onDestroy(() => {
+        listOwner.dispose();
+    });
+
+    // Screen copy comes from the local table; unknown codes use the
+    // single shared rule instead of leaking the raw IPC code.
     function describeError(e) {
-        switch (String(e)) {
-            case 'locked':
-                return 'The vault is locked.';
-            case 'invalid_input':
-                return 'That was not accepted (invalid_input).';
-            case 'storage':
-                return 'A storage problem (storage).';
-            default:
-                return `Something went wrong (${String(e)}).`;
-        }
+        return resolveErrorText(ENTRY_LIST_ERRORS, e).text;
     }
 
     async function load(reset) {
+        // Resets preempt an in-flight page; pagination waits for
+        // any outstanding request instead of racing it.
+        if (!reset && listBusy) return;
+        const token = listOwner.begin();
+        listBusy = true;
+        // Capture the filter generation and cursor before awaiting:
+        // a late page appends only to the list it was read for.
+        const cursor = reset ? null : nextCursor;
+        const tag = tagFilter;
+        const day = date;
+        const wireScope = scope ?? null;
         try {
             const page = await api.entryList({
-                cursor: reset ? null : nextCursor,
+                cursor,
                 limit: 50,
-                tag: tagFilter,
-                date,
+                tag,
+                date: day,
+                scope: wireScope,
             });
+            if (!listOwner.current(token)) return;
             entries = reset ? page.entries : [...entries, ...page.entries];
-            console.log('entries: ', entries);
-            nextCursor = page.next_cursor;
+            nextCursor = nextCursorAfterPage({
+                reset,
+                failed: false,
+                pageCursor: page.next_cursor,
+                current: nextCursor,
+            });
             error = '';
         } catch (e) {
+            if (!listOwner.current(token)) return;
+            // A failed first page invalidates the cursor: it still
+            // names the previous filter's position, so pagination
+            // must wait for a successful reset instead of appending
+            // old rows under the new scope (and clearing this error).
+            nextCursor = nextCursorAfterPage({
+                reset,
+                failed: true,
+                pageCursor: null,
+                current: nextCursor,
+            });
             error = describeError(e);
+        } finally {
+            // A superseded request leaves the flag to whoever is
+            // current; only the still-current request clears it, so
+            // a late reset cannot re-enable pagination mid-reload.
+            if (listOwner.current(token)) listBusy = false;
         }
     }
 
-    async function loadTags() {
-        tags = await api.tagList();
-    }
+    const byId = $derived(new Map(folders.map((f) => [f.id, f])));
 
-    async function refresh() {
-        await Promise.all([load(true), loadTags()]);
+    const scopeLabel = $derived(
+        scope?.kind === 'folder'
+            ? (byId.get(scope.id)?.name ?? '…')
+            : scope?.kind === 'root'
+              ? 'Root entries'
+              : 'All entries',
+    );
+
+    function crumb(folderId) {
+        if (folderId == null) return '';
+        return breadcrumb(byId, folderId).join(' / ');
     }
 
     $effect(() => {
         void version;
-        refresh();
+        void scope?.kind;
+        void scope?.id;
+        void scope?.includeDescendants;
+        void tagFilter;
+        load(true);
     });
 
     function segments(snippet) {
@@ -82,37 +140,36 @@
         if (buf) out.push({ text: buf, marked });
         return out;
     }
-
-    function pickTag(name) {
-        tagFilter = tagFilter === name ? null : name;
-        // A fresh filter needs the plain list, not stale search
-        // results — the screen owns that state and resets it.
-        onClearSearch?.();
-        load(true);
-    }
-
-    // The section folds away for people who do not use tags.
-    // The × on a tag (shown on hover) removes it from every
-    // entry at once; removing a tag from one entry is done in
-    // that entry's own tag field. Two-step, like entry deletion.
-    let tagsOpen = $state(false);
-    let confirmRemove = $state(null); // tag name awaiting confirmation
-    let tagNote = $state('');
-
-    async function removeTag(name) {
-        try {
-            await api.tagDelete(name);
-            if (tagFilter === name) tagFilter = null;
-            confirmRemove = null;
-            tagNote = '';
-            await refresh();
-        } catch (e) {
-            tagNote = describeError(e);
-        }
-    }
 </script>
 
+{#snippet entryRow(entry)}
+    <button
+        {@attach (node) => {
+            if (selectedId === entry.id) node.scrollIntoView({ block: 'nearest' });
+        }}
+        class="entry-row" class:active={selectedId === entry.id} aria-current={selectedId === entry.id ? 'page' : undefined} onclick={() => onSelect(entry.id)}>
+        <span class="entry-date">{entry.entry_date}</span>
+        <span class="entry-title">{entry.title ?? entry.excerpt ?? 'Untitled'}</span>
+        {#if entry.folder_id}<span class="crumb">{crumb(entry.folder_id)}</span>{/if}
+    </button>
+{/snippet}
+
 <div class="entry-list">
+    <div class="list-head">
+        <!-- <h2 class="list-title">Entries · {scopeLabel}</h2> -->
+        <h2 class="list-title">Entries</h2>
+        {#if scope?.kind === 'folder'}
+            <Checkbox
+                checked={scope.includeDescendants}
+                onchange={() => onToggleDescendants?.()}
+                label="Include subfolders" />
+        {:else}
+            <Checkbox
+                label="Show All"
+                checked={scope == null || scope.kind === 'all'}
+                onchange={(event) => onShowAllChange?.(event.currentTarget.checked)} />
+        {/if}
+    </div>
     {#if error}<p class="form-error">{error}</p>{/if}
 
     {#if date}
@@ -122,49 +179,10 @@
         </p>
     {/if}
 
-    {#if tags.length}
-        <div class="tags-block">
-            <button class="tags-toggle" onclick={() => (tagsOpen = !tagsOpen)} aria-expanded={tagsOpen}>
-                <span class="tags-toggle-chevron">{tagsOpen ? '▾' : '▸'}</span>
-                <span class="tags-toggle-label">Tags</span>
-                <span class="tags-toggle-count">{tags.length}</span>
-            </button>
-            {#if tagsOpen}
-                <div class="tag-flow">
-                    {#each tags as t (t.name)}
-                        {#if confirmRemove === t.name}
-                            <div class="tag-confirm">
-                                <span class="confirm-message">Remove “{t.name}” from all {t.entries} entries?</span>
-                                <div class="confirm-actions">
-                                    <button class="confirm-action remove" onclick={() => removeTag(t.name)}
-                                        >Remove</button>
-                                    <button class="confirm-action cancel" onclick={() => (confirmRemove = null)}
-                                        >Cancel</button>
-                                </div>
-                            </div>
-                        {:else}
-                            <div class="tag-pill" class:active={tagFilter === t.name}>
-                                <button
-                                    class="tag-button"
-                                    class:active={tagFilter === t.name}
-                                    title={tagFilter === t.name ? `Clear filter: ${t.name}` : `Filter by: ${t.name}`}
-                                    onclick={() => pickTag(t.name)}>
-                                    <span class="tag-name">{t.name}</span>
-                                    <span class="tag-count">{t.entries}</span>
-                                </button>
-                                <button
-                                    class="tag-remove"
-                                    title="Remove this tag from all entries"
-                                    aria-label="Remove tag {t.name}"
-                                    onclick={() => (confirmRemove = t.name)}>
-                                    ×
-                                </button>
-                            </div>
-                        {/if}
-                    {/each}
-                </div>
-                {#if tagNote}<p class="note">{tagNote}</p>{/if}
-            {/if}
+    {#if focusedEntry?.id === selectedId && !listBusy && results === null && !entries.some((entry) => entry.id === selectedId)}
+        <div class="open-entry">
+            <span class="open-entry-label">Open entry</span>
+            {@render entryRow(focusedEntry)}
         </div>
     {/if}
 
@@ -173,8 +191,9 @@
     {#if results !== null}
         <div class="results">
             {#each results as r (r.id)}
-                <button class="result" onclick={() => onSelect(r.id)}>
+                <button class="result" class:active={selectedId === r.id} onclick={() => onSelect(r.id)}>
                     <span class="result-head">{r.entry_date} — {r.title ?? 'Untitled'}</span>
+                    {#if r.folder_id}<span class="crumb">{crumb(r.folder_id)}</span>{/if}
                     <span class="snippet">
                         {#each segments(r.snippet) as seg}
                             {#if seg.marked}<mark>{seg.text}</mark>{:else}{seg.text}{/if}
@@ -186,14 +205,11 @@
     {:else}
         <div class="entries">
             {#each entries as entry (entry.id)}
-                <button class="entry-row" class:active={selectedId === entry.id} onclick={() => onSelect(entry.id)}>
-                    <span class="entry-date">{entry.entry_date}</span>
-                    <span class="entry-title">{entry.title ?? entry.excerpt ?? 'Untitled'}</span>
-                </button>
+                {@render entryRow(entry)}
             {/each}
             {#if entries.length === 0}<p class="note">No entries yet.</p>{/if}
             {#if nextCursor}
-                <button class="quiet" onclick={() => load(false)}>More…</button>
+                <button class="quiet" disabled={listBusy} onclick={() => load(false)}>More…</button>
             {/if}
         </div>
     {/if}

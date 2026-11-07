@@ -658,6 +658,38 @@ export function toggleMark(markType) {
     };
 }
 
+/** Removes one mark type over a range, one textblock segment at a
+ *  time (mirrors the removal path toggleMark already uses). Used
+ *  for "Remove link", which keeps the label text and drops only
+ *  the mark. `from`/`to` default to the text selection. */
+export function removeMarkInRange(markType) {
+    return (state, dispatch, range = {}) => {
+        const sel = state.selection;
+        if (sel.type !== "text") return false;
+        const from = range.from ?? sel.from;
+        const to = range.to ?? sel.to;
+        const doc = state.doc;
+        return finish(state, dispatch, (tr) => {
+            const segments = [];
+            doc.nodesBetween(from, to, (node, pos) => {
+                if (node.isTextblock) {
+                    const start = Math.max(from, pos + 1);
+                    const end = Math.min(to, pos + node.nodeSize - 1);
+                    if (start < end) segments.push({ blockStart: pos, contentStart: pos + 1, from: start, to: end });
+                    return false;
+                }
+                return true;
+            });
+            for (let i = segments.length - 1; i >= 0; i--) {
+                const s = segments[i];
+                markRangeInBlock(tr, s.blockStart, s.contentStart, s.from, s.to, markType, false);
+            }
+            tr.setSelection(new TextSelection(sel.anchor, sel.head));
+            tr.setStoredMarks(null);
+        });
+    };
+}
+
 /** Sets the textblock type for every textblock touching the selection. */
 export function setBlockType(nodeType, attrs = {}) {
     return (state, dispatch) => {

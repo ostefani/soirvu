@@ -1,0 +1,47 @@
+/* SPDX-License-Identifier: MIT
+   Copyright (c) 2026 Olha Stefanishyna */
+.confirmation-modal {
+    width: min(32rem, calc(100vw - 2rem));
+    max-height: calc(100vh - 2rem);
+    box-sizing: border-box;
+    padding: 0;
+    overflow-y: auto;
+    color: var(--color-ink-primary);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px var(--elevation-shadow);
+}
+
+.confirmation-modal::backdrop {
+    background: var(--elevation-shadow);
+}
+
+.modal-content {
+    padding: 1.25rem;
+}
+
+h2 {
+    margin: 0 0 0.75rem;
+    font-size: 1.15rem;
+}
+
+p {
+    overflow-wrap: anywhere;
+    line-height: 1.5;
+}
+
+.warning {
+    color: var(--color-ink-muted);
+}
+
+.error {
+    color: var(--color-danger);
+}
+
+.modal-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    margin-top: 1.25rem;
+}

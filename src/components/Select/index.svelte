@@ -1,7 +1,9 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
-    let { field, value = $bindable(''), disabled = false, onchange = null } = $props();
+    // Controlled value: callers pass the current option and read the
+    // next one from onchange. No two-way binding is advertised.
+    let { field, value = '', disabled = false, onchange = null } = $props();
 </script>
 
 {#snippet control()}

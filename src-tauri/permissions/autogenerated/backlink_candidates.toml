@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-backlink-candidates"
+description = "Enables the backlink_candidates command without any pre-configured scope."
+commands.allow = ["backlink_candidates"]
+
+[[permission]]
+identifier = "deny-backlink-candidates"
+description = "Denies the backlink_candidates command without any pre-configured scope."
+commands.deny = ["backlink_candidates"]

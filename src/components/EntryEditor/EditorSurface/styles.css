@@ -1,0 +1,252 @@
+.editor-mount {
+    flex: 1 1 0;
+    height: 0;
+    min-height: 8rem;
+    box-sizing: border-box;
+    overflow-y: auto;
+    border: 1px solid transparent;
+    padding: 1.0rem 1.5rem;
+
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-bottom-left-radius: 12px;
+    border-bottom-right-radius: 12px;
+    box-shadow: 0 1px 3px var(--elevation-shadow);
+}
+
+:global(.editor-mount.ProseMirror) {
+    outline: none;
+    white-space: break-spaces;
+    overflow-y: auto;
+}
+
+.editor-mount :global(p) {
+    margin: 0.4em 0;
+    line-height: 1.65;
+}
+
+.editor-mount :global(h1) {
+    font-size: 1.5em;
+    font-weight: 700;
+    margin: 0.9em 0 0.25em;
+    letter-spacing: -0.015em;
+}
+
+.editor-mount :global(h2) {
+    font-size: 1.28em;
+    font-weight: 700;
+    margin: 0.9em 0 0.2em;
+    letter-spacing: -0.01em;
+}
+
+.editor-mount :global(h3) {
+    font-size: 1.1em;
+    font-weight: 600;
+    margin: 0.8em 0 0.2em;
+}
+
+.editor-mount :global(ul),
+.editor-mount :global(ol) {
+    margin: 0.4em 0;
+    padding-left: 1.45em;
+}
+
+.editor-mount :global(li) {
+    margin: 0.15em 0;
+}
+
+.editor-mount :global(blockquote) {
+    margin: 0.7em 0;
+    padding: 0.1em 0 0.1em 0.9em;
+    border-left: 3px solid var(--color-accent);
+    color: var(--color-ink-muted);
+}
+
+.editor-mount :global(a) {
+    color: var(--color-accent);
+}
+
+.editor-mount :global(hr) {
+    border: none;
+    border-top: 1px solid var(--color-border-subtle);
+    margin: 1.4em 0;
+}
+
+/* Task items: the box lives in the gutter left of the
+   item (its content is a block <p>, so an inline box would
+   sit on its own line) — and where the view listens for
+   toggle clicks. */
+.editor-mount :global(li[data-checked]) {
+    list-style: none;
+    position: relative;
+}
+
+.editor-mount :global(li[data-checked]::before) {
+    position: absolute;
+    left: -1.45em;
+    top: 0.08em;
+    font-size: 1.05em;
+    line-height: 1;
+}
+
+.editor-mount :global(li[data-checked="false"]::before) {
+    content: "☐";
+}
+
+.editor-mount :global(li[data-checked="true"]::before) {
+    content: "☑";
+}
+
+.editor-mount :global(li[data-checked="true"]) {
+    color: var(--color-ink-muted);
+}
+
+/* Inline code and code blocks sit on the inset surface
+   token — no hardcoded rgba()s, no dark-mode overrides;
+   the tokens switch with the theme. */
+.editor-mount :global(code) {
+    background: var(--surface-inset);
+    border-radius: 4px;
+    padding: 0.1em 0.3em;
+    font-size: 0.88em;
+}
+
+.editor-mount :global(pre) {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 0.88em;
+    background: var(--surface-inset);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    overflow-x: auto;
+    line-height: 1.5;
+}
+
+.editor-mount :global(pre code) {
+    background: transparent;
+    padding: 0;
+    font-size: 1em;
+}
+
+/* Syntax highlighting: the view paints these spans inside
+   code blocks; the colors come from the --code-* tokens
+   defined in app.css. */
+.editor-mount :global(.tok-kw) {
+    color: var(--code-kw);
+}
+
+.editor-mount :global(.tok-str) {
+    color: var(--code-str);
+}
+
+.editor-mount :global(.tok-com) {
+    color: var(--code-com);
+    font-style: italic;
+}
+
+.editor-mount :global(.tok-num) {
+    color: var(--code-num);
+}
+
+.editor-mount :global(.tok-fn) {
+    color: var(--code-fn);
+}
+
+/* Tables: hairline grid, header row on the inset tone. */
+.editor-mount :global(table) {
+    border-collapse: collapse;
+    margin: 0.75em 0;
+}
+
+.editor-mount :global(th),
+.editor-mount :global(td) {
+    border: 1px solid var(--color-border-subtle);
+    padding: 0.35em 0.7em;
+    min-width: 3em;
+    text-align: left;
+    vertical-align: top;
+}
+
+.editor-mount :global(th) {
+    background: var(--surface-inset);
+    font-weight: 600;
+}
+
+.editor-mount :global(td p),
+.editor-mount :global(th p) {
+    margin: 0;
+}
+
+:global(.editor-mount div.attachment) {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin: 0.4rem 0;
+}
+
+:global(.editor-mount div.attachment video) {
+    max-width: 100%;
+    max-height: 22rem;
+    border-radius: 8px;
+}
+
+:global(.editor-mount div.attachment audio) {
+    flex: 1;
+    min-width: 12rem;
+}
+
+:global(.editor-mount img) {
+    max-width: 100%;
+}
+
+:global(.editor-mount img[data-blocked-image]) {
+    display: inline-block;
+    width: 1.2em;
+    height: 1.2em;
+    background: var(--surface-inset);
+    border-radius: 3px;
+}
+
+/* An attachment image this engine cannot decode (HEIC
+   off macOS): a labelled placeholder, not a broken glyph.
+   The alt text (the file name) shows inside the box. */
+:global(.editor-mount img[data-unrenderable]) {
+    display: block;
+    min-width: 12rem;
+    min-height: 4rem;
+    padding: 0.5em;
+    border: 1px dashed var(--color-border-strong);
+    background: var(--surface-inset);
+    color: var(--color-ink-muted);
+    font-size: 0.85em;
+    border-radius: 8px;
+}
+
+/* Drag handles: the handle and drop line are fixed-position
+   elements the view puts on document.body, outside the
+   editor tree. */
+:global(.block-drag-handle) {
+    position: fixed;
+    width: 18px;
+    height: 22px;
+    line-height: 22px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--color-ink-muted);
+    cursor: grab;
+    user-select: none;
+    z-index: 40;
+}
+
+:global(.block-drag-handle:active) {
+    cursor: grabbing;
+}
+
+:global(.block-drop-line) {
+    position: fixed;
+    height: 2px;
+    background: var(--color-accent);
+    z-index: 40;
+    pointer-events: none;
+}

@@ -1,0 +1,95 @@
+/* SPDX-License-Identifier: MIT
+   Copyright (c) 2026 Olha Stefanishyna */
+.link-panels {
+    max-height: min(360px, 55vh);
+    overflow-y: auto;
+    min-width: 0;
+}
+
+.rows {
+    list-style: none;
+    margin: 0.25rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0.25rem;
+    border-radius: 6px;
+}
+
+.row:hover {
+    background-color: var(--color-accent-soft);
+}
+
+.go {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    row-gap: 0.05rem;
+    padding: 0.25rem 0.35rem;
+    text-align: left;
+    color: var(--color-ink-primary);
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.row-label {
+    font-weight: 600;
+    font-size: 0.87rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.row-meta {
+    font-size: 0.76rem;
+    color: var(--color-ink-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.mini {
+    flex-shrink: 0;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.82rem;
+    color: var(--color-ink-primary);
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.mini:hover:not(:disabled) {
+    background-color: var(--color-accent-soft);
+}
+
+.note {
+    margin: 0.35rem 0.5rem;
+    font-size: 0.82rem;
+    color: var(--color-ink-muted);
+}
+
+.scan-foot {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    padding: 0 0.5rem;
+}
+
+.scan-foot .note {
+    margin: 0.35rem 0;
+}

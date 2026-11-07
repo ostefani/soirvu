@@ -3,6 +3,7 @@
 /**
  * OnboardingContainer — UI text data and messages.
  */
+import { unknownErrorText } from '@/lib/errors.js';
 
 export const onboardingText = {
     // Step 1: Choose Folder
@@ -32,6 +33,8 @@ export const onboardingText = {
 
     // System error translations
     errors: {
+        not_a_vault:
+            'That folder does not hold a diary. Create the new diary in an empty folder, or open the folder with the diary files.',
         folder_not_empty:
             'That folder is not empty. A vault needs an empty folder — pick one, or create a new subfolder for it.',
         empty_passphrase: 'The passphrase must not be empty.',
@@ -48,5 +51,5 @@ export const onboardingText = {
     },
 
     /** @param {string} code */
-    unknownError: (code) => `Something went wrong (${code}).`,
+    unknownError: (code) => unknownErrorText(code),
 };

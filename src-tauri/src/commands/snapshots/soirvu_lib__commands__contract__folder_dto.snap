@@ -1,0 +1,14 @@
+---
+source: src/commands/contract.rs
+expression: json
+---
+{
+  "id": "folder-1",
+  "parent_id": "folder-0",
+  "name": "Health",
+  "created_at": 1767225600000,
+  "updated_at": 1767229200000,
+  "rev": 4,
+  "entry_count": 3,
+  "recovered": false
+}

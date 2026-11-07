@@ -10,17 +10,29 @@
 
     import { APPLICATION_SCREEN, MAIN_VIEW, VAULT_STATUS, KEYBOARD_SHORTCUT, EVENT_TYPE } from '@/constants.js';
     import { notify } from '@/components/Notification/store.svelte.js';
-    import { runFlushHooks } from '@/lib/lock-hooks.js';
     import { applicationText } from '@/data.js';
+    import { startVaultLifecycle } from '@/vault-lifecycle.js';
 
     let screen = $state(APPLICATION_SCREEN.BOOT);
     let mainView = $state(MAIN_VIEW.WELCOME);
     let vaults = $state([]);
     let currentVault = $state(null);
+    // Workspace epoch for the diary: settings bumps it after any
+    // import or sync that changed entries, folders or tags. The
+    // diary treats a bump as "reload tree, list, calendar, day
+    // counts, tags and the visible search" — one place, no polling.
     let importTick = $state(0);
 
+    // Self-guarding: status events, the boot load and the lock
+    // shortcut all fire this without awaiting it, so a backend
+    // failure must surface here instead of rejecting unobserved.
     async function refresh() {
-        vaults = await api.vaultList();
+        try {
+            vaults = await api.vaultList();
+        } catch {
+            notify(EVENT_TYPE.ERROR, applicationText.refreshFailed);
+            return;
+        }
         const openVault = vaults.find((vault) => vault.state === VAULT_STATUS.UNLOCKED);
         if (openVault) {
             currentVault = openVault;
@@ -33,7 +45,11 @@
     }
 
     async function lock() {
-        await api.vaultLock();
+        try {
+            await api.vaultLock();
+        } catch {
+            notify(EVENT_TYPE.ERROR, applicationText.lockFailed);
+        }
         await refresh();
     }
 
@@ -70,44 +86,7 @@
         event.preventDefault();
     }
 
-    onMount(() => {
-        let unlisten;
-        let unlistenLock;
-        let destroyed = false;
-
-        api.onVaultStatus(({ status }) => {
-            if (status !== VAULT_STATUS.UNLOCKED) refresh();
-        }).then((stop) => {
-            if (destroyed) stop?.();
-            else unlisten = stop;
-        });
-
-        api.onLockRequested(async ({ generation }) => {
-            let ok = false;
-            try {
-                ok = await runFlushHooks();
-            } finally {
-                api.vaultLockReady(generation, ok).catch(() => {});
-            }
-        }).then((stop) => {
-            if (destroyed) stop?.();
-            else unlistenLock = stop;
-        });
-
-        api.lockNoticeTake()
-            .then((dropped) => {
-                if (dropped) notify(EVENT_TYPE.ERROR, 'The diary locked before your latest edits could be saved.');
-            })
-            .catch(() => {});
-
-        refresh();
-
-        return () => {
-            destroyed = true;
-            unlisten?.();
-            unlistenLock?.();
-        };
-    });
+    onMount(() => startVaultLifecycle({ refresh }));
 </script>
 
 <svelte:window onkeydown={handleKeydown} onpointerdown={noteActivity} onwheel={noteActivity} ontouchstart={noteActivity} onmousemove={noteActivity} ondragover={swallowDrop} ondrop={swallowDrop} />
