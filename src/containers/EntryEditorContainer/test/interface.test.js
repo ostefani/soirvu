@@ -11,16 +11,16 @@ const viewSource = readFileSync(
     'utf8',
 );
 
-test('every engine method the session calls is exported by the view', () => {
+test('every engine method the session calls is registered by the view', () => {
     const used = new Set(
         [...sessionSource.matchAll(/viewApi\?\.(\w+)|viewApi\.(\w+)/g)].map((m) => m[1] ?? m[2]),
     );
-    const exported = new Set([...viewSource.matchAll(/export function (\w+)/g)].map((m) => m[1]));
+    const registered = new Set(viewSource.match(/onViewApi\?\.\(\{([\s\S]*?)\}\)/)?.[1].match(/\w+/g));
     assert.ok(used.size > 0);
     for (const name of [...used].sort()) {
         assert.ok(
-            exported.has(name),
-            `viewApi.${name} is called by the session but not exported by EntryEditor`,
+            registered.has(name),
+            `viewApi.${name} is called by the session but not registered by EntryEditor`,
         );
     }
 });

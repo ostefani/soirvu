@@ -33,12 +33,6 @@
     gap: 8px;
 }
 
-.dest {
-    font-size: 0.78rem;
-    color: var(--color-ink-muted);
-    white-space: nowrap;
-}
-
 /* Resets the heading's uppercase styling for the inline qualifier. */
 .vault-wide {
     font-weight: 400;

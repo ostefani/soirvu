@@ -8,7 +8,7 @@
     import { resolveErrorText } from '@/lib/errors.js';
     import { ENTRY_LIST_ERRORS } from '@/components/EntryList/errors.js';
 
-    let { scope = null, version = 0, selected = null, onFilterChange, onChanged } = $props();
+    let { version = 0, selected = null, onFilterChange, onChanged } = $props();
     let tags = $state([]);
     let note = $state('');
     let removing = $state(null);
@@ -22,9 +22,8 @@
 
     async function load() {
         const token = reads.begin();
-        const wireScope = scope ?? null;
         try {
-            const next = await api.tagList(wireScope);
+            const next = await api.tagList();
             if (!reads.current(token)) return;
             tags = next;
             note = '';
@@ -35,9 +34,6 @@
 
     $effect(() => {
         void version;
-        void scope?.kind;
-        void scope?.id;
-        void scope?.includeDescendants;
         load();
     });
 

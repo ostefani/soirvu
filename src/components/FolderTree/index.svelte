@@ -14,6 +14,7 @@
     let {
         folders = [],
         selection = { kind: 'root' },
+        openFolderId = undefined,
         revealVersion = 0,
         onSelect,
         onChanged,
@@ -44,6 +45,15 @@
             if (selection.kind === 'folder') {
                 expandedIds = new Set([...expandedIds, ...folderPathIds(folders, selection.id)]);
             }
+        });
+    });
+
+    $effect(() => {
+        const id = openFolderId;
+        if (id == null) return;
+        untrack(() => {
+            setRootExpanded(true);
+            expandedIds = new Set([...expandedIds, ...folderPathIds(folders, id).slice(0, -1)]);
         });
     });
 
@@ -145,6 +155,10 @@
         closeMenu();
     }
 
+    function focusFormField(field) {
+        field.focus();
+    }
+
     function onKeyEscape(e) {
         if (e.key === 'Escape') closeForms();
     }
@@ -239,7 +253,7 @@
     {@const f = node.folder}
     {@const expanded = !collapsed.has(f.id)}
     <li>
-        <div class="folder-row" class:active={isSelected(f.id)} style="--depth: {depth}">
+        <div class="folder-row" class:active={isSelected(f.id)} class:contains-open-entry={openFolderId === f.id} style="--depth: {depth}">
             {#if node.children.length > 0}
                 <button
                     class="disclosure"
@@ -255,7 +269,7 @@
                 {@attach (node) => {
                     if (isSelected(f.id)) node.scrollIntoView({ block: 'nearest' });
                 }}
-                class="folder-name" aria-current={isSelected(f.id) ? 'location' : undefined} onclick={() => selectFolder(f.id)}>
+                class="folder-name" title={f.name} aria-current={isSelected(f.id) ? 'location' : undefined} onclick={() => selectFolder(f.id)}>
                 {f.name}
                 {#if showRecovered}<span class="recovered-tag">recovered</span>{/if}
             </button>
@@ -276,40 +290,65 @@
             </button>
         </div>
         {#if editing?.mode === 'create' && editing.parentId === f.id}
-            <div class="inline-form indented" onkeydown={onKeyEscape}>
+            <form
+                class="inline-form indented"
+                aria-label={`New subfolder of ${f.name}`}
+                onsubmit={(event) => {
+                    event.preventDefault();
+                    createFolder();
+                }}>
                 <input
                     type="text"
                     placeholder="Folder name"
                     aria-label={`New subfolder of ${f.name}`}
-                    autofocus
-                    bind:value={nameValue}
-                    onkeydown={(e) => e.key === 'Enter' && createFolder()} />
+                    {@attach focusFormField}
+                    onkeydown={onKeyEscape}
+                    value={nameValue}
+                    oninput={(event) => (nameValue = event.currentTarget.value)} />
                 <div class="form-actions">
-                    <button class="mini primary" onclick={createFolder}>Create</button>
-                    <button class="mini" onclick={closeForms}>Cancel</button>
+                    <button class="mini primary" type="submit" onkeydown={onKeyEscape}>Create</button>
+                    <button class="mini" type="button" onkeydown={onKeyEscape} onclick={closeForms}>Cancel</button>
                 </div>
-            </div>
+            </form>
         {/if}
         {#if editing?.mode === 'rename' && editing.id === f.id}
-            <div class="inline-form indented" onkeydown={onKeyEscape}>
+            <form
+                class="inline-form indented"
+                aria-label={`Rename ${f.name}`}
+                onsubmit={(event) => {
+                    event.preventDefault();
+                    renameFolder();
+                }}>
                 <input
                     type="text"
                     aria-label={`Rename ${f.name}`}
-                    autofocus
-                    bind:value={nameValue}
-                    onkeydown={(e) => e.key === 'Enter' && renameFolder()} />
+                    {@attach focusFormField}
+                    onkeydown={onKeyEscape}
+                    value={nameValue}
+                    oninput={(event) => (nameValue = event.currentTarget.value)} />
                 <div class="form-actions">
-                    <button class="mini primary" onclick={renameFolder}>Rename</button>
-                    <button class="mini" onclick={closeForms}>Cancel</button>
+                    <button class="mini primary" type="submit" onkeydown={onKeyEscape}>Rename</button>
+                    <button class="mini" type="button" onkeydown={onKeyEscape} onclick={closeForms}>Cancel</button>
                 </div>
-            </div>
+            </form>
         {/if}
         {#if editing?.mode === 'move' && editing.id === f.id}
             {@const excluded = descendantIds(folders, f.id)}
-            <div class="inline-form indented" onkeydown={onKeyEscape}>
+            <form
+                class="inline-form indented"
+                aria-label={`Move ${f.name}`}
+                onsubmit={(event) => {
+                    event.preventDefault();
+                    moveFolder();
+                }}>
                 <label class="move-label">
                     Move {f.name} to
-                    <select aria-label={`Move ${f.name} to`} autofocus bind:value={moveTarget}>
+                    <select
+                        aria-label={`Move ${f.name} to`}
+                        {@attach focusFormField}
+                        onkeydown={onKeyEscape}
+                        value={moveTarget}
+                        onchange={(event) => (moveTarget = event.currentTarget.value)}>
                         <option value="root">Vault root</option>
                         {#each folders as dest (dest.id)}
                             {#if !excluded.has(dest.id)}
@@ -319,16 +358,16 @@
                     </select>
                 </label>
                 <div class="form-actions">
-                    <button class="mini primary" onclick={moveFolder}>Move</button>
-                    <button class="mini" onclick={closeForms}>Cancel</button>
+                    <button class="mini primary" type="submit" onkeydown={onKeyEscape}>Move</button>
+                    <button class="mini" type="button" onkeydown={onKeyEscape} onclick={closeForms}>Cancel</button>
                 </div>
-            </div>
+            </form>
         {/if}
     </li>
 {/snippet}
 
 <div class="folder-tree">
-    <div class="folder-row root-row" class:active={selection.kind !== 'folder'}>
+    <div class="folder-row root-row" class:active={selection.kind !== 'folder'} class:contains-open-entry={openFolderId === null}>
         <button
             class="disclosure"
             aria-expanded={rootExpanded}
@@ -355,19 +394,26 @@
         ontransitionend={finishRootAnimation}>
         <div class="root-children-clip">
             {#if editing?.mode === 'create' && editing.parentId == null}
-                <div class="inline-form" onkeydown={onKeyEscape}>
+                <form
+                    class="inline-form"
+                    aria-label="New folder"
+                    onsubmit={(event) => {
+                        event.preventDefault();
+                        createFolder();
+                    }}>
                     <input
                         type="text"
                         placeholder="Folder name"
                         aria-label="New folder name"
-                        autofocus
-                        bind:value={nameValue}
-                        onkeydown={(e) => e.key === 'Enter' && createFolder()} />
+                        {@attach focusFormField}
+                        onkeydown={onKeyEscape}
+                        value={nameValue}
+                        oninput={(event) => (nameValue = event.currentTarget.value)} />
                     <div class="form-actions">
-                        <button class="mini primary" onclick={createFolder}>Create</button>
-                        <button class="mini" onclick={closeForms}>Cancel</button>
+                        <button class="mini primary" type="submit" onkeydown={onKeyEscape}>Create</button>
+                        <button class="mini" type="button" onkeydown={onKeyEscape} onclick={closeForms}>Cancel</button>
                     </div>
-                </div>
+                </form>
             {/if}
 
             {#if treeNote}<p class="note" role="status">{treeNote}</p>{/if}

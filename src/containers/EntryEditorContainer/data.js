@@ -19,7 +19,7 @@ export const MOOD_OPTIONS = [
 export const ENTRY_EDITOR_TEXT = {
     titlePlaceholder: 'Title',
     opening: 'Opening…',
-    back: 'Back',
+    home: 'Home',
     goBackTitle: 'Go back',
     goForwardTitle: 'Go forward',
     goBackLabel: 'Go back to the previous entry',

@@ -1,24 +1,22 @@
 <!-- SPDX-License-Identifier: MIT
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
-    import { onMount } from 'svelte';
     import PaneDivider from '@/components/PaneDivider/index.svelte';
     import { MAIN_MIN, DIVIDERS_WIDTH, PANE_MIN, createModel, paneWidths } from './constants.js';
     import { PANE_LABELS } from './data.js';
 
     let { folders, entries, children, entryLabel = 'Entries' } = $props();
     let model = $state(createModel());
-    let workspace;
     let animating = $state(false);
     const widths = $derived(paneWidths(model));
 
-    onMount(() => {
+    function observeWorkspace(workspace) {
         const observer = new ResizeObserver(([entry]) => {
             model.width = entry.contentRect.width;
         });
         observer.observe(workspace);
         return () => observer.disconnect();
-    });
+    }
 
     function maximum(pane) {
         const other = pane === 'folders' ? 'entries' : 'folders';
@@ -26,7 +24,7 @@
     }
 
     function finishAnimation(event) {
-        if (event.target === workspace && event.propertyName === 'grid-template-columns') animating = false;
+        if (event.target === event.currentTarget && event.propertyName === 'grid-template-columns') animating = false;
     }
 
     function togglePane(pane) {
@@ -44,7 +42,7 @@
     class="workspace"
     class:animating
     ontransitionend={finishAnimation}
-    bind:this={workspace}
+    {@attach observeWorkspace}
     style:--folders-width={`${widths.folders}px`}
     style:--entries-width={`${widths.entries}px`}>
     {#each ['folders', 'entries'] as pane}

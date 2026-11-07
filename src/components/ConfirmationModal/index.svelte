@@ -43,7 +43,6 @@
         )
             onCancel?.();
     }
-    console.log('tone: ', tone);
 </script>
 
 <dialog

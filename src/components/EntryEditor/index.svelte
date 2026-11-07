@@ -50,6 +50,7 @@
         // Rendered in place: the container's link panels and picker.
         panels = null,
         picker = null,
+        onViewApi = null,
         // Session-owned draft: field edits and body changes.
         onField = () => {},
         onBodyChange = () => {},
@@ -90,36 +91,36 @@
     });
 
     /** Hands an uploaded attachment to the engine for display. */
-    export function insertAttachment(info) {
+    function insertAttachment(info) {
         editor?.insertAttachment(info);
     }
 
     /** Lets the container settle IME before gating a switch. */
-    export function finishComposing() {
+    function finishComposing() {
         editor?.finishComposing();
     }
 
-    export function getMarkdown() {
+    function getMarkdown() {
         return editor ? editor.getMarkdown() : null;
     }
 
-    export function query() {
+    function query() {
         return editor ? editor.query() : null;
     }
 
-    export function exec(name, arg) {
+    function exec(name, arg) {
         return editor?.exec(name, arg);
     }
 
-    export function focus() {
+    function focus() {
         editor?.focus();
     }
 
-    export function readText(from, to) {
+    function readText(from, to) {
         return editor ? editor.readText(from, to) : '';
     }
 
-    export function locateLink(href, hintPos) {
+    function locateLink(href, hintPos) {
         return editor ? editor.locateLink(href, hintPos) : null;
     }
 
@@ -127,6 +128,16 @@
     let openPop = $state(null);
     let backlinksButton = $state.raw(null);
     let backlinksStyle = $state('');
+
+    function trackBacklinksButton(node) {
+        backlinksButton = node;
+        return () => { backlinksButton = null; };
+    }
+
+    function trackLinkPopover(node) {
+        linkPopoverEl = node;
+        return () => { linkPopoverEl = null; };
+    }
 
     $effect(() => {
         if (openPop !== 'backlinks' || !paneEl || !backlinksButton) return;
@@ -296,11 +307,26 @@
     }
 
     /** The current selection, for history restores. */
-    export function navCapture() {
+    function navCapture() {
         if (!editor) return null;
         const sel = editor.query();
         return { from: sel.from, to: sel.to };
     }
+
+    onMount(() => {
+        onViewApi?.({
+            insertAttachment,
+            finishComposing,
+            getMarkdown,
+            query,
+            exec,
+            focus,
+            readText,
+            locateLink,
+            navCapture,
+        });
+        return () => onViewApi?.(null);
+    });
 
     function popoverAction(id, link) {
         onLinkAction(id, link);
@@ -374,8 +400,8 @@
         <!-- One compact meta row: back + chips. Date, mood and
              tags each open a popover instead of stacking rows. -->
         <div class="meta-row" inert={pickerOpen}>
-            <!-- <Button kind="quiet" handler={goBack} aria-label={ENTRY_EDITOR_TEXT.back}
-                ><IconLeft />{ENTRY_EDITOR_TEXT.back}</Button> -->
+            <!-- <Button kind="quiet" handler={goBack} aria-label={ENTRY_EDITOR_TEXT.home}
+                ><IconLeft />{ENTRY_EDITOR_TEXT.home}</Button> -->
             <div class="meta-chips">
                 <div class="chip-wrap">
                     <button
@@ -465,7 +491,7 @@
                 <div class="chip-wrap">
                     <button
                         class="meta-chip"
-                        bind:this={backlinksButton}
+                        {@attach trackBacklinksButton}
                         aria-expanded={openPop === 'backlinks'}
                         aria-controls="entry-backlinks"
                         disabled={frozen}
@@ -501,7 +527,7 @@
             {@const targetId = parseEntryTarget(linkInfo.href)}
             <div
                 class="link-popover"
-                bind:this={linkPopoverEl}
+                {@attach trackLinkPopover}
                 style={popoverStyle(linkInfo)}
                 role="dialog"
                 aria-label={ENTRY_EDITOR_TEXT.linkActionsLabel}>
@@ -547,24 +573,22 @@
         {/if}
         <div class="editor-footer">
             <div class="footer-navigation">
-                <Button kind="quiet-button" handler={goBack} aria-label={ENTRY_EDITOR_TEXT.back}
-                    ><IconLeft />{ENTRY_EDITOR_TEXT.back}</Button>
-                {#if canGoBack || canGoForward}
-                    <div class="navigation-wrapper">
-                        <Button
-                            kind="quiet-button"
-                            handler={() => onNavBack?.()}
-                            aria-label={ENTRY_EDITOR_TEXT.goBackLabel}
-                            title={ENTRY_EDITOR_TEXT.goBackTitle}
-                            disabled={!canGoBack || navigating}>←</Button>
-                        <Button
-                            kind="quiet-button"
-                            handler={() => onNavForward?.()}
-                            aria-label={ENTRY_EDITOR_TEXT.goForwardLabel}
-                            title={ENTRY_EDITOR_TEXT.goForwardTitle}
-                            disabled={!canGoForward || navigating}>→</Button>
-                    </div>
-                {/if}
+                <Button kind="quiet-button" handler={goBack} aria-label={ENTRY_EDITOR_TEXT.home}
+                    ><IconLeft />{ENTRY_EDITOR_TEXT.home}</Button>
+                <div class="navigation-wrapper">
+                    <Button
+                        kind="quiet-button"
+                        handler={() => onNavBack?.()}
+                        aria-label={ENTRY_EDITOR_TEXT.goBackLabel}
+                        title={ENTRY_EDITOR_TEXT.goBackTitle}
+                        disabled={!canGoBack || navigating}>←</Button>
+                    <Button
+                        kind="quiet-button"
+                        handler={() => onNavForward?.()}
+                        aria-label={ENTRY_EDITOR_TEXT.goForwardLabel}
+                        title={ENTRY_EDITOR_TEXT.goForwardTitle}
+                        disabled={!canGoForward || navigating}>→</Button>
+                </div>
             </div>
             <span class="status">{saveConflict ? ENTRY_EDITOR_TEXT.conflictStatus : status}</span>
             <div class="footer-actions" class:armed={deleteArmed} bind:this={deleteActions}>
@@ -587,8 +611,8 @@
     <p class="note" role="status">
         {loadProblemText(loadProblem)}
     </p>
-    <Button kind="quiet-button" handler={() => onBack?.()} aria-label={ENTRY_EDITOR_TEXT.back}
-        ><IconLeft />{ENTRY_EDITOR_TEXT.back}</Button>
+    <Button kind="quiet-button" handler={() => onBack?.()} aria-label={ENTRY_EDITOR_TEXT.home}
+        ><IconLeft />{ENTRY_EDITOR_TEXT.home}</Button>
 {:else}
     <p class="note">{ENTRY_EDITOR_TEXT.opening}</p>
 {/if}

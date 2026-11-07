@@ -38,19 +38,9 @@
         notifyCopied: (message) => notify(EVENT_TYPE.COPIED, message),
     });
 
-    // The view's narrow engine interface (insertAttachment,
-    // finishComposing, navCapture, queries, commands). The engine
-    // instance itself never leaves the view; the session only
-    // calls through it.
-    let viewApi = $state.raw(null);
-
     onDestroy(() => session.dispose());
     onMount(() => session.load(entryId));
     onMount(() => registerFlushHook(() => session.prepareLock()));
-
-    $effect(() => {
-        session.setViewApi(viewApi);
-    });
 
     /** Diary-facing gate: settle the open entry before switching. */
     export function flushForNavigation() {
@@ -60,6 +50,10 @@
     /** The current selection, for history restores. */
     export function navCapture() {
         return session.navCapture();
+    }
+
+    export function openFolderId() {
+        return session.entry ? (session.entry.folder_id ?? null) : undefined;
     }
 </script>
 
@@ -76,11 +70,13 @@
 
 {#snippet picker()}
     {#if session.linkPicker}
-        <div
-            class="picker-overlay"
-            onclick={(e) => {
-                if (e.target === e.currentTarget) session.cancelPicker();
-            }}>
+        <div class="picker-overlay">
+            <button
+                type="button"
+                class="picker-backdrop"
+                tabindex="-1"
+                aria-label="Close link picker"
+                onclick={() => session.cancelPicker()}></button>
             <LinkPickerContainer
                 initialQuery={session.linkPicker.initialText}
                 initialLabel={session.linkPicker.label ?? ''}
@@ -94,7 +90,7 @@
 {/snippet}
 
 <EntryEditor
-    bind:this={viewApi}
+    onViewApi={session.setViewApi}
     entry={session.entry}
     loadFailed={session.loadFailed}
     loadProblem={session.loadProblem}

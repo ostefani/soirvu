@@ -50,9 +50,13 @@
         },
     });
     let navRestore = $state.raw(null);
-    // bind:this targets, read only from handlers.
     let editorRef = $state.raw(null);
     let mainEl;
+
+    function trackMain(node) {
+        mainEl = node;
+        return () => { mainEl = null; };
+    }
 
     // A new vault retires everything read for the previous one.
     // The navigator is also cleared on unmount (lock).
@@ -120,7 +124,7 @@
     function restoreScroll(id, top) {
         requestAnimationFrame(() =>
             requestAnimationFrame(() => {
-                if (selectedId === id) mainEl.scrollTop = top;
+                if (selectedId === id && mainEl) mainEl.scrollTop = top;
             }),
         );
     }
@@ -181,6 +185,8 @@
             // pushing only the entry left made Back disabled after
             // A -> B and skip B after A -> B -> C.
             nav.pushNavigation(left, viewSnapshot(id));
+        } else if (push && nav.current()?.entryId !== id) {
+            nav.push(viewSnapshot(id));
         }
         return true;
     }
@@ -276,7 +282,6 @@
                 searchScoped={folderScope.searchScoped}
                 onQueryChange={search.setQuery}
                 onScopedChange={folderScope.setSearchScoped} />
-            <!-- <span class="dest" title="New entries file here">in {destName}</span> -->
             <Button label="New entry" kind="texture-button" handler={newEntry} disabled={creating} />
             <Button label="Settings" kind="texture-button" handler={onSettings} />
             <Button label="Lock" kind="texture-button" handler={onLock} />
@@ -286,7 +291,6 @@
     <WorkspaceLayoutContainer entryLabel={folderScope.folderName ?? (folderScope.selection.kind === 'root' ? 'ROOT' : 'ROOT · Show All')}>
         {#snippet folders()}
             <TagsContainer
-                scope={folderScope.listScope}
                 version={navVersion}
                 selected={tagFilter}
                 onFilterChange={(name) => {
@@ -298,6 +302,7 @@
             <FolderTree
                 folders={folderScope.folders}
                 selection={folderScope.selection}
+                openFolderId={selectedId ? editorRef?.openFolderId() : undefined}
                 {revealVersion}
                 onSelect={selectFolderScope}
                 onBeforeDelete={() => editorRef?.flushForNavigation?.() ?? true}
@@ -319,7 +324,7 @@
                 onShowAllChange={(checked) => selectFolderScope({ kind: checked ? 'all' : 'root' })}
                 onToggleDescendants={folderScope.toggleDescendants} />
         {/snippet}
-        <main bind:this={mainEl}>
+        <main {@attach trackMain}>
             {#if selectedId}
                 {#key selectedId}
                     <EntryEditorContainer

@@ -48,7 +48,7 @@
     display: flex;
     align-items: center;
     gap: 0.15rem;
-    padding: 0.2rem 0.25rem 0.2rem calc(0.25rem + var(--depth, 0) * 1.1rem);
+    padding: 0.2rem 0.25rem 0.2rem min(45%, calc(0.25rem + var(--depth, 0) * 1.1rem));
     border-radius: 6px;
 }
 
@@ -58,6 +58,11 @@
 
 .folder-row.active {
     background-color: var(--color-accent-soft);
+}
+
+.folder-row.contains-open-entry {
+    background-color: var(--color-surface);
+    box-shadow: inset 3px 0 var(--color-accent), inset 0 0 0 1px var(--color-border-subtle);
 }
 
 .disclosure {
@@ -193,11 +198,6 @@
     font-weight: 600;
 }
 
-.mini.danger {
-    color: var(--feedback-danger);
-    border-color: var(--feedback-danger);
-}
-
 .recovered-head {
     margin: 0.5rem 0.5rem 0;
     font-size: 0.8rem;
@@ -218,6 +218,7 @@
 
 .root-children {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: 1fr;
     opacity: 1;
     visibility: visible;

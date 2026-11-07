@@ -61,16 +61,17 @@ button {
     border-color: var(--color-ink-muted);
 }
 
-.primary-button {
+button.primary-button {
     background-color: var(--color-accent);
     border: 2px solid var(--color-accent);
     color: var(--color-canvas);
     border-radius: 8px;
 }
 
-.primary-button:hover {
+button.primary-button:hover {
     background-color: var(--color-accent-texture);
     color: var(--color-canvas);
+    border: 2px solid var(--color-accent-texture);
 }
 
 .quiet-button:hover {
@@ -91,8 +92,7 @@ button {
     border-color: 2px solid var(--color-surface);
 }
 
-.default-button:hover,
-.primary-button:hover {
+.default-button:hover {
     border-color: var(--color-accent);
 }
 

@@ -26,7 +26,6 @@
     let label = $state(untrack(() => initialLabel));
     let pastedLink = $state('');
     let active = $state(0);
-    let box = $state(null);
 
     const byId = $derived(new Map(folders.map((f) => [f.id, f])));
 
@@ -84,8 +83,8 @@
             return;
         }
         // Focus stays inside the picker until it closes.
-        if (e.key === 'Tab' && box) {
-            const focusables = [...box.querySelectorAll('input, button')].filter((el) => !el.disabled);
+        if (e.key === 'Tab') {
+            const focusables = [...e.currentTarget.querySelectorAll('input, button')].filter((el) => !el.disabled);
             if (!focusables.length) return;
             const first = focusables[0];
             const last = focusables[focusables.length - 1];
@@ -109,7 +108,6 @@
     tabindex="-1"
     aria-modal="true"
     aria-label="Link to entry"
-    bind:this={box}
     onkeydown={onKeydown}>
     <label class="link-field">
         {LINK_PICKER_TEXT.label}
