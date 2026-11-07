@@ -143,19 +143,6 @@ main>section:not(.hero) {
     height: calc(100vh - 60px);
 }
 
-/* .hero::before {
-    content: "";
-    position: absolute;
-    left: 50%;
-    top: -9rem;
-    width: 46rem;
-    height: 26rem;
-    transform: translateX(-50%);
-    border-radius: 50%;
-    background: radial-gradient(closest-side, var(--glow-accent), transparent);
-    pointer-events: none;
-} */
-
 
 .hero::before {
     content: "";
@@ -283,17 +270,17 @@ section>p {
 
 .video-frame {
     position: relative;
-    margin-top: 1.5rem;
+    margin: 1.5rem auto 0;
     border: 1px solid var(--line);
     border-radius: var(--radius);
     overflow: hidden;
     background: var(--bg-raised);
-    aspect-ratio: 16 / 9;
+    aspect-ratio: 15 / 8;
 }
 
 .video-frame video {
     width: 100%;
-    height: 100%;
+    height: auto;
     display: block;
 }
 
@@ -366,7 +353,6 @@ section>p {
     left: 0;
     top: 1.35rem;
     font-family: var(--serif);
-    font-style: italic;
     color: var(--accent);
     font-size: 1.1rem;
 }

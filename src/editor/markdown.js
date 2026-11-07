@@ -28,6 +28,10 @@ import { schema } from "./schema.js";
 import { isEntryHref } from "../lib/entry-target.js";
 
 const RAW_INFO = "soirvu-raw";
+// Distinct encodings let Markdown carry empty blocks and breaks in positions
+// where CommonMark would otherwise discard them.
+const EMPTY_PARAGRAPH = "&#0008203;";
+const INLINE_BREAK = "&#0000010;";
 
 // ---------------------------------------------------------------------------
 // markdown-it setup
@@ -39,6 +43,15 @@ const RAW_INFO = "soirvu-raw";
 // inline HTML becomes literal text. No HTML ever becomes a node,
 // a mark, or DOM — the schema has none. Fidelity and safety both win.
 const md = new MarkdownIt({ html: true });
+
+md.inline.ruler.before("entity", "soirvu_whitespace", (state, silent) => {
+    const { src, pos, posMax } = state;
+    const empty = pos === 0 && src === EMPTY_PARAGRAPH;
+    if (!empty && (pos + INLINE_BREAK.length > posMax || !src.startsWith(INLINE_BREAK, pos))) return false;
+    if (!silent) state.push(empty ? "soirvu_empty" : "hardbreak", "", 0);
+    state.pos += empty ? EMPTY_PARAGRAPH.length : INLINE_BREAK.length;
+    return true;
+});
 
 // Task items: a list item whose text starts with "[ ]" or "[x]"
 // becomes a task. Runs on the token stream after block parsing.
@@ -337,6 +350,7 @@ function cellAlign(tok) {
 // Inline HTML (a stray <b>, an <img onerror>) stays as literal text:
 // the schema has no HTML, and the text is what the writer sees.
 parser.tokenHandlers.html_inline = (state, tok) => state.addText(tok.content);
+parser.tokenHandlers.soirvu_empty = () => {};
 
 // Footnote references have no editor meaning in v1; keep the label
 // as literal text. (Definitions are raw blocks, kept whole.)
@@ -367,11 +381,61 @@ function listIsTight(tokens, i) {
     return false;
 }
 
+function encodeSpaces(text) {
+    return text.replace(/ /g, "&#32;").replace(/\t/g, "&#9;");
+}
+
+function renderInline(state, node, fromBlockStart) {
+    const writeText = state.text;
+    state.text = function (text, escape) {
+        // The upstream renderer writes whitespace expelled from marks through
+        // this path. Encode it so a line edge cannot swallow it.
+        if (escape === undefined && /^[ \t]+$/.test(text)) this.write(encodeSpaces(text));
+        else writeText.call(this, text, escape);
+    };
+    try {
+        state.renderInline(node, fromBlockStart);
+    } finally {
+        state.text = writeText;
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 const serializer = new MarkdownSerializer(
     {
         ...defaultMarkdownSerializer.nodes,
+        paragraph(state, node) {
+            if (node.childCount === 0) state.write(EMPTY_PARAGRAPH);
+            else renderInline(state, node);
+            state.closeBlock(node);
+        },
+        heading(state, node) {
+            state.write("#".repeat(node.attrs.level) + " ");
+            renderInline(state, node, false);
+            state.closeBlock(node);
+        },
+        text(state, node, parent, index) {
+            if (state.inAutolink) {
+                state.text(node.text, false);
+                return;
+            }
+            const before = index === 0 || parent.child(index - 1).type === schema.nodes.hard_break;
+            const after = index === parent.childCount - 1 || parent.child(index + 1).type === schema.nodes.hard_break;
+            const text = node.text;
+            const leading = before ? text.match(/^[ \t]+/)?.[0].length ?? 0 : 0;
+            const end = after ? Math.max(leading, text.search(/[ \t]*$/)) : text.length;
+            const middle = state.esc(text.slice(leading, end), state.atBlockStart && leading === 0)
+                .replace(/&(?=(?:#\d+|#x[\da-f]+|[a-z][\da-z]*);)/gi, "\\&");
+            state.write(encodeSpaces(text.slice(0, leading)) + middle + encodeSpaces(text.slice(end)));
+        },
+        hard_break(state, node, parent, index) {
+            if (state.inTableCell || parent.type === schema.nodes.heading || index === parent.childCount - 1) {
+                state.write(INLINE_BREAK);
+            } else {
+                state.write("\\\n");
+            }
+        },
         table(state, node) {
             // Flush the previous block's pending close first:
             // the cell rendering below measures state.out, and a
@@ -392,11 +456,13 @@ const serializer = new MarkdownSerializer(
                     // restore it before the row itself is written.
                     const outer = state.delim;
                     state.delim = "";
+                    state.inTableCell = true;
                     const start = state.out.length;
                     try {
-                        if (cell.firstChild) state.renderInline(cell.firstChild);
+                        if (cell.firstChild) renderInline(state, cell.firstChild);
                     } finally {
                         state.delim = outer;
+                        state.inTableCell = false;
                     }
                     const seg = state.out.slice(start);
                     state.out = state.out.slice(0, start);
@@ -426,6 +492,11 @@ const serializer = new MarkdownSerializer(
         table_row() { },
         table_cell() { },
         raw_block(state, node) {
+            if (/^(?:[ \t]*\n)|\n[ \t]*$/.test(node.textContent)) {
+                const fenced = schema.nodes.code_block.create({ params: RAW_INFO }, node.content);
+                defaultMarkdownSerializer.nodes.code_block(state, fenced);
+                return;
+            }
             state.write(node.textContent);
             state.closeBlock(node);
         },
@@ -444,7 +515,8 @@ const serializer = new MarkdownSerializer(
             node.forEach((child, _offset, index) => {
                 if (index === 0) {
                     state.write(marker);
-                    state.renderInline(child);
+                    if (child.childCount === 0) state.write(EMPTY_PARAGRAPH);
+                    else renderInline(state, child);
                     state.closeBlock(child);
                 } else {
                     state.render(child, node, index);
@@ -460,8 +532,25 @@ const serializer = new MarkdownSerializer(
             mixable: true,
             expelEnclosingWhitespace: true,
         },
+        code: {
+            escape: false,
+            open(state, mark, parent, index) {
+                const text = parent.child(index).text;
+                const delimiter = defaultMarkdownSerializer.marks.code.open(state, mark, parent, index);
+                return needsCodePadding(text) ? delimiter + " " : delimiter;
+            },
+            close(state, mark, parent, index) {
+                const text = parent.child(index - 1).text;
+                const delimiter = defaultMarkdownSerializer.marks.code.close(state, mark, parent, index);
+                return needsCodePadding(text) ? " " + delimiter : delimiter;
+            },
+        },
     },
 );
+
+function needsCodePadding(text) {
+    return text && /^ .* $/.test(text) && /[^ ]/.test(text) && !text.includes("`");
+}
 
 // ---------------------------------------------------------------------------
 
@@ -474,7 +563,7 @@ export function parseMarkdown(source) {
         // not supported"; rather than refuse to open, keep the whole
         // note as one raw block — every byte preserved, edited as text.
         if (!/^Token type /.test(err.message)) throw err;
-        const text = source.replace(/\n+$/, "");
+        const text = source;
         const raw = schema.node(
             "raw_block",
             null,
@@ -485,5 +574,6 @@ export function parseMarkdown(source) {
 }
 
 export function serializeMarkdown(doc) {
+    if (doc.childCount === 1 && doc.firstChild.type === schema.nodes.paragraph && doc.firstChild.childCount === 0) return "";
     return serializer.serialize(doc, { tightLists: true });
 }

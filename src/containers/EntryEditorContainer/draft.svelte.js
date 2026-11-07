@@ -53,10 +53,9 @@ export function createDraft({ onEdit }) {
         },
 
         snapshot(tz) {
-            const trimmed = title.trim();
             return {
                 entry_date: entryDate,
-                title: trimmed === '' ? null : trimmed,
+                title: title === '' ? null : title,
                 body_md: body,
                 mood: mood === '' ? null : Number(mood),
                 tz,

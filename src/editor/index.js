@@ -85,7 +85,7 @@ export function makePasteHandler() {
             if (tr.selectionSet) lastSelection = tr.selection;
             current = current.apply(tr);
         };
-        text.split(/\n{2,}/).forEach((para, i) => {
+        text.replace(/\r\n?/g, "\n").split("\n\n").forEach((para, i) => {
             if (i > 0) {
                 const tr = current.tr();
                 const sel = current.selection;

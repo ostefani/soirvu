@@ -28,8 +28,8 @@ SoirVu keeps your diary in an encrypted vault on your own machine. It requires n
 
 <table>
   <tr>
-    <td><img src="docs/assets/Screenshot%202026-10-29-dark.jpg" alt="SoirVu dark theme" width="600"></td>
-    <td><img src="docs/assets/Screenshot%202026-10-29-light.jpg" alt="SoirVu light theme" width="600"></td>
+    <td><img src="docs/assets/Screenshot-dark.png" alt="SoirVu dark theme" width="600"></td>
+    <td><img src="docs/assets/Screenshot-light.png" alt="SoirVu light theme" width="600"></td>
   </tr>
 </table>
 
@@ -43,6 +43,7 @@ Open SoirVu, choose a location for your vault and create a passphrase. Save the 
 
 ## Features
 
+- [x] **Subfolders and entry links** — organize entries in nested folders and link related notes within the same vault.
 - [x] **Encrypted vault** — entries live in a SQLCipher database; attachments are stored as separately encrypted files. Keys are derived with Argon2id and wrapped in LUKS-style key slots, so changing your passphrase doesn't re-encrypt your diary.
 - [x] **Recovery key** — a randomly generated key shown once at setup lets you back in if the passphrase is forgotten. Without either, the diary is unrecoverable — by design.
 - [x] **Markdown, always** — entries are stored as Markdown and edited in a WYSIWYG editor built on ProseMirror. Export entries and attachments to a folder, or use `soirvu-cli` to verify or export a vault without the app. Exports are unencrypted.

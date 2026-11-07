@@ -113,6 +113,15 @@ test('load publishes the entry and initializes the draft once', async () => {
     session.dispose();
 });
 
+test('saving preserves whitespace in an authored title', async () => {
+    const { saves, session } = setup();
+    await session.load('e1');
+    session.setField('title', '  My title  ');
+    assert.equal(await session.flushSaves(), true);
+    assert.equal(saves[0].payload.title, '  My title  ');
+    session.dispose();
+});
+
 test('disposal retires a late load response', async () => {
     const gate = deferred();
     const { session } = setup();

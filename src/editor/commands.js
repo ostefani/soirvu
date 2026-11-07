@@ -189,18 +189,16 @@ export function newlineInCode(state, dispatch) {
     const offset = $from.parentOffset;
     const atVeryEnd = sel.empty && offset === text.length;
     if (atVeryEnd && (text === "" || text.endsWith("\n"))) {
-        // Leave the block: drop the trailing newline, split into a paragraph.
+        // Leave the block and keep the newline already entered.
         return finish(state, dispatch, (tr) => {
             const pos = deleteSelectionIn(tr, state);
             const $p = tr.doc.resolve(pos);
             const b = $p.parent;
             const start = $p.start();
             const end = $p.end();
-            const trimmed = b.textContent.replace(/\n$/, "");
-            const codeNode = b.type.create(b.attrs, trimmed ? state.schema.text(trimmed) : null);
             const para = state.schema.nodes.paragraph.create();
-            tr.replaceWith(start - 1, end + 1, [codeNode, para]);
-            tr.setSelection(new TextSelection(start + codeNode.nodeSize));
+            tr.replaceWith(start - 1, end + 1, [b, para]);
+            tr.setSelection(new TextSelection(start + b.nodeSize));
         });
     }
     return finish(state, dispatch, (tr) => {

@@ -25,7 +25,7 @@ export function entryLinkMarkdown(id, label) {
     if (!target || typeof label !== 'string' || !label.trim()) throw new Error('Invalid entry link');
     const mark = schema.marks.link.create({ href: `entry:${target}` });
     const text = schema.text(label.replace(/\s+/g, ' ').trim(), [mark]);
-    return serializeMarkdown(schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, text))).replace(/&/g, '&amp;');
+    return serializeMarkdown(schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, text)));
 }
 
 

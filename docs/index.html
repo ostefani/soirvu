@@ -52,7 +52,7 @@ Copyright (c) 2026 Olha Stefanishyna
 
         <section id="film" aria-labelledby="film-title">
             <h2 id="film-title">Watch it work</h2>
-            <p>A short walkthrough: entries, attachments, search, lock. 70 seconds.</p>
+            <p>A short walkthrough: entries, attachments, search, lock. 25 seconds.</p>
             <div class="video-frame">
                 <button id="video-facade" type="button" aria-label="Play the walkthrough video">
                     <span class="play" aria-hidden="true">▶</span>
@@ -63,6 +63,9 @@ Copyright (c) 2026 Olha Stefanishyna
                     Your browser can’t play this video.
                 </video>
             </div>
+            <p class="facade-note">These demos may show an earlier version of SoirVu.
+                See the <a href="https://github.com/ostefani/soirvu#readme">README on GitHub</a>
+                for current screenshots and features.</p>
         </section>
 
         <section class="features" id="features" aria-labelledby="features-title">
@@ -108,9 +111,10 @@ Copyright (c) 2026 Olha Stefanishyna
 
         <section id="security" aria-labelledby="security-title">
             <h2 id="security-title">How it protects your data</h2>
-            <p>The Rust core owns all keys, all file access, and all cryptography;
-                the interface never holds a decryption key or touches vault internals
-                directly. Encryption protects your diary <strong>at rest</strong>.</p>
+            <p>SoirVu encrypts your entries and attachments on disk. The Rust backend
+                manages the vault’s master key and handles encryption and vault file
+                operations. The interface receives decrypted content to display while
+                the vault is unlocked.</p>
         </section>
 
         <section class="download" id="download" aria-labelledby="download-title">
@@ -125,11 +129,15 @@ Copyright (c) 2026 Olha Stefanishyna
                             installer, unsigned — SmartScreen will warn: More info → Run anyway, or build from
                             source</span></a></li>
             </ul>
-            <p class="source-note">On macOS and Windows, building from source skips the
-                warnings entirely. Every release ships
-                <code>SHA256SUMS</code> with a minisign signature, and
-                <a href="https://github.com/ostefani/soirvu">the source</a> builds
-                from a tag — rebuilding is the trust anchor.
+            <p class="source-note">On macOS, Gatekeeper may block the downloaded app because
+                the release is ad-hoc signed and has not been notarized by Apple. On Windows,
+                Microsoft Defender SmartScreen may flag the unsigned installer.</p>
+            <p class="source-note">Each release includes a <code>SHA256SUMS</code> file and
+                its minisign signature. Use the published public key to verify the signature,
+                then check your installer against the signed checksum. You can also build
+                SoirVu yourself from the release tag. See the
+                <a href="https://github.com/ostefani/soirvu/blob/main/BUILDING.md">build and
+                    verification instructions</a>.
             </p>
         </section>
 
