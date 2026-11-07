@@ -2,7 +2,8 @@
      Copyright (c) 2026 Olha Stefanishyna -->
 <script>
     import AnchoredMenu from '@/components/AnchoredMenu/index.svelte';
-    import { FOLDER_ACTIONS } from './data.js';
+    import ConfirmationModalContainer from '@/containers/ConfirmationModalContainer/index.svelte';
+    import { FOLDER_ACTIONS, FOLDER_DELETE_MODAL, folderDeleteBody } from './data.js';
     import { untrack } from 'svelte';
     import { folderPathIds } from '@/lib/entry-location.js';
     import * as api from '@/api.js';
@@ -16,6 +17,7 @@
         revealVersion = 0,
         onSelect,
         onChanged,
+        onBeforeDelete = null,
     } = $props();
 
     const tree = $derived(buildTree(folders));
@@ -33,6 +35,7 @@
     let nameValue = $state('');
     let moveTarget = $state('root');
     let treeNote = $state('');
+    let pendingDeletion = $state.raw(null);
 
     $effect(() => {
         void revealVersion;
@@ -137,7 +140,8 @@
 
     function openDelete(folder) {
         treeNote = '';
-        editing = { mode: 'delete', id: folder.id };
+        editing = null;
+        pendingDeletion = { id: folder.id, rev: folder.rev, name: folder.name, returnFocus: menuAnchor };
         closeMenu();
     }
 
@@ -214,28 +218,16 @@
     }
 
     async function deleteFolder() {
-        const folder = byId.get(editing.id);
-        if (!folder) {
-            treeNote = describeError('folder_not_found');
-            closeForms();
-            onChanged?.();
-            return;
-        }
-        try {
-            await api.folderDelete(folder.id, folder.rev);
-            closeForms();
-            treeNote = '';
-            onChanged?.();
-        } catch (e) {
-            if (e === 'revision_conflict' || e === 'folder_not_found') onChanged?.();
-            treeNote = describeError(e);
-        }
+        const folder = pendingDeletion;
+        if (!folder) return;
+        if ((await onBeforeDelete?.()) === false) throw 'folder_delete_save_failed';
+        await api.folderDelete(folder.id, folder.rev);
     }
 
-    function childCount(id) {
-        let n = 0;
-        for (const f of folders) if (f.parent_id === id) n++;
-        return n;
+    function deletionConfirmed() {
+        pendingDeletion = null;
+        treeNote = '';
+        onChanged?.({ folderDeleted: true });
     }
 
     function crumb(id) {
@@ -332,27 +324,6 @@
                 </div>
             </div>
         {/if}
-        {#if editing?.mode === 'delete' && editing.id === f.id}
-            {@const kids = childCount(f.id)}
-            <div class="inline-form indented" onkeydown={onKeyEscape}>
-                {#if f.entry_count > 0 || kids > 0}
-                    <p class="note">
-                        “{f.name}” holds
-                        {f.entry_count > 0 ? `${f.entry_count} ${f.entry_count === 1 ? 'entry' : 'entries'}` : ''}{f.entry_count > 0 && kids > 0 ? ' and ' : ''}{kids > 0 ? `${kids} ${kids === 1 ? 'subfolder' : 'subfolders'}` : ''}
-                        and cannot be removed.
-                    </p>
-                    <div class="form-actions">
-                        <button class="mini" onclick={closeForms}>Keep it</button>
-                    </div>
-                {:else}
-                    <p class="note">Remove “{f.name}”? It holds nothing.</p>
-                    <div class="form-actions">
-                        <button class="mini danger" onclick={deleteFolder}>Remove</button>
-                        <button class="mini" onclick={closeForms}>Keep it</button>
-                    </div>
-                {/if}
-            </div>
-        {/if}
     </li>
 {/snippet}
 
@@ -426,6 +397,17 @@
         label={`Actions for ${byId.get(openMenu).name}`}
         onSelect={selectMenuAction}
         onClose={closeMenu} />
+{/if}
+
+{#if pendingDeletion}
+    <ConfirmationModalContainer
+        {...FOLDER_DELETE_MODAL}
+        body={folderDeleteBody(pendingDeletion.name)}
+        returnFocus={pendingDeletion.returnFocus}
+        onConfirm={deleteFolder}
+        onConfirmed={deletionConfirmed}
+        onCancel={() => (pendingDeletion = null)}
+        describeError={describeError} />
 {/if}
 
 <style src="./styles.css"></style>

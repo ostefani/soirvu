@@ -46,6 +46,7 @@ const ERROR_SEVERITY_BY_CODE = {
     backup_unavailable: ERROR_SEVERITY.UNAVAILABLE,
     entry_not_found: ERROR_SEVERITY.UNAVAILABLE,
     folder_not_found: ERROR_SEVERITY.UNAVAILABLE,
+    folder_delete_save_failed: ERROR_SEVERITY.UNAVAILABLE,
 };
 
 /**

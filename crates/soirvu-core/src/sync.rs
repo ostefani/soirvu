@@ -4281,6 +4281,32 @@ mod tests {
     }
 
     #[test]
+    fn deleted_folder_tree_converges_with_entry_and_attachment_tombstones() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let root = a.create_folder(None, "Root").unwrap();
+        let child = a.create_folder(Some(&root.id), "Child").unwrap();
+        let note = a
+            .create_entry(Some(&child.id), &draft("nested content"))
+            .unwrap();
+        let attachment = a
+            .add_attachment(&note.id, "file.txt", "text/plain", b"attached content")
+            .unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        a.delete_folder_tree(&root.id, root.rev).unwrap();
+        exchange(&mut a, &mut b, sync.path());
+        for vault in [&a, &b] {
+            assert!(vault.get_folder(&root.id).is_err());
+            assert!(vault.get_folder(&child.id).is_err());
+            assert!(vault.get_entry(&note.id).is_err());
+            assert!(vault.get_attachment(&attachment.id).is_err());
+        }
+        let quiet = b.sync_apply(sync.path()).unwrap();
+        assert_eq!(quiet.entries_applied, 0);
+        assert_eq!(quiet.folders_applied, 0);
+    }
+
+    #[test]
     fn prune_keeps_tombstone_rows_across_bootstrap() {
         let (_da, _db, mut a, mut b) = two_devices();
         let sync = TempDir::new().unwrap();

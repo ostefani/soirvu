@@ -29,6 +29,7 @@
     let selectedId = $state(null);
     let revealedEntry = $state.raw(null);
     let revealVersion = $state(0);
+    let folderMutationTick = $state(0);
     let listDate = $state(null);
     // Bumped whenever the list, calendar or "on this day" must re-read.
     let navVersion = $state(0);
@@ -235,7 +236,24 @@
         listDate = null;
     }
 
-    async function handleFoldersChanged() {
+    async function handleFoldersChanged(change) {
+        if (change?.folderDeleted) {
+            const id = selectedId;
+            if (id) {
+                try {
+                    await api.entryGet(id);
+                } catch (failure) {
+                    if (selectedId === id && (failure === 'entry_not_found' || failure === 'invalid_input')) {
+                        selectedId = null;
+                        revealedEntry = null;
+                    } else {
+                        error = resolveErrorText(DIARY_ERRORS, failure).text;
+                    }
+                }
+            }
+            folderMutationTick++;
+            search.refresh();
+        }
         await folderScope.load();
         bumpNavigation();
     }
@@ -282,6 +300,7 @@
                 selection={folderScope.selection}
                 {revealVersion}
                 onSelect={selectFolderScope}
+                onBeforeDelete={() => editorRef?.flushForNavigation?.() ?? true}
                 onChanged={handleFoldersChanged} />
         {/snippet}
         {#snippet entries()}
@@ -310,7 +329,7 @@
                         {navRestore}
                         {canGoBack}
                         {canGoForward}
-                        workspaceTick={importTick}
+                        workspaceTick={importTick + folderMutationTick}
                         onOpenEntry={({ id }) => selectEntry(id, { push: true, reveal: true })}
                         onNavBack={() => goHistory(-1)}
                         onNavForward={() => goHistory(1)}

@@ -154,6 +154,40 @@ fn scope_predicate(folder_param: u8, mode_param: u8) -> String {
     )
 }
 
+pub(crate) fn delete_entry_in_transaction(
+    tx: &Transaction<'_>,
+    id: &str,
+    device: &str,
+) -> Result<Vec<String>> {
+    let (rid, current) = load(tx, id)?;
+    let attachment_ids = {
+        let mut stmt = tx.prepare(
+            "SELECT id FROM attachment WHERE entry_id = ?1 AND deleted_at IS NULL ORDER BY id",
+        )?;
+        let rows = stmt.query_map([id], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()?
+    };
+    let now = now_ms().max(current.updated_at + 1);
+    for attachment_id in &attachment_ids {
+        let lseq = next_lseq(tx)?;
+        tx.execute(
+            "UPDATE attachment SET deleted_at = ?1, lseq = ?2
+              WHERE id = ?3 AND deleted_at IS NULL",
+            params![now, lseq, attachment_id],
+        )?;
+    }
+    let lseq = next_lseq(tx)?;
+    tx.execute("DELETE FROM entry_tag WHERE entry_rid = ?1", [rid])?;
+    tx.execute(
+        "UPDATE entry
+            SET deleted_at = ?1, updated_at = ?1, base_rev = CASE WHEN device_id <> ?2 THEN rev ELSE base_rev END, base_device = CASE WHEN device_id <> ?2 THEN device_id ELSE base_device END, rev = rev + 1, device_id = ?2, lseq = ?3,
+                title = NULL, title_key = NULL, body_md = NULL, mood = NULL, folder_id = NULL
+          WHERE rid = ?4",
+        params![now, device, lseq, rid],
+    )?;
+    Ok(attachment_ids)
+}
+
 impl Vault {
     /// Maps a scope to its predicate mode and folder id, rejecting
     /// unknown folders loudly instead of falling back to the vault root.
@@ -487,35 +521,9 @@ impl Vault {
     /// files are removed after the commit, so deleted content does not stay
     /// readable through the attachment API or on disk.
     pub fn delete_entry(&mut self, id: &str) -> Result<()> {
-        let (rid, current) = load(self.db.connection(), id)?;
-        let attachment_ids: Vec<String> = {
-            let mut stmt = self
-                .db
-                .connection()
-                .prepare("SELECT id FROM attachment WHERE entry_id = ?1 AND deleted_at IS NULL")?;
-            let rows = stmt.query_map([id], |row| row.get(0))?;
-            rows.collect::<rusqlite::Result<Vec<String>>>()?
-        };
-        let now = now_ms().max(current.updated_at + 1);
         let device = self.device_id.clone();
         let tx = self.db.conn_mut().transaction()?;
-        for attachment_id in &attachment_ids {
-            let lseq = next_lseq(&tx)?;
-            tx.execute(
-                "UPDATE attachment SET deleted_at = ?1, lseq = ?2
-                  WHERE id = ?3 AND deleted_at IS NULL",
-                params![now, lseq, attachment_id],
-            )?;
-        }
-        let lseq = next_lseq(&tx)?;
-        tx.execute("DELETE FROM entry_tag WHERE entry_rid = ?1", [rid])?;
-        tx.execute(
-            "UPDATE entry
-                SET deleted_at = ?1, updated_at = ?1, base_rev = CASE WHEN device_id <> ?2 THEN rev ELSE base_rev END, base_device = CASE WHEN device_id <> ?2 THEN device_id ELSE base_device END, rev = rev + 1, device_id = ?2, lseq = ?3,
-                    title = NULL, title_key = NULL, body_md = NULL, mood = NULL, folder_id = NULL
-              WHERE rid = ?4",
-            params![now, device, lseq, rid],
-        )?;
+        let attachment_ids = delete_entry_in_transaction(&tx, id, &device)?;
         tx.commit()?;
         for attachment_id in &attachment_ids {
             crate::attachments::remove_blob(self.dir(), attachment_id);

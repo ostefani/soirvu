@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Olha Stefanishyna
 //! Folder commands (§6.1). Folders are created once and filed
 //! permanently: entries never move, renames and moves carry
-//! `expected_rev`, and deletion is refuse-if-nonempty with
-//! explicit restore. Every command runs through the state's
+//! `expected_rev`, and confirmed deletion removes the stored subtree.
+//! Empty-only deletion remains available in core for recovery workflows. Every command runs through the state's
 //! guard: locked → the `locked` code.
 
 use serde::Serialize;
@@ -105,14 +105,13 @@ pub async fn folder_update(
     .await
 }
 
-/// Deletes an empty folder at the caller's revision. Folders with
-/// live subfolders or entries fail with `folder_not_empty`; a
-/// stale revision fails with `revision_conflict`.
+/// Deletes the folder, its stored descendants and their entries atomically.
+/// A stale root revision fails with `revision_conflict`.
 #[tauri::command]
 pub async fn folder_delete(app: AppHandle, id: String, expected_rev: i64) -> Result<(), String> {
     crate::commands::run_blocking_state(app, move |state| {
         ipc(state.with_vault(|vault| {
-            vault.delete_folder(&id, expected_rev)?;
+            vault.delete_folder_tree(&id, expected_rev)?;
             Ok(())
         }))
     })

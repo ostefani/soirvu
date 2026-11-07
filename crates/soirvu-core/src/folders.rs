@@ -447,6 +447,67 @@ impl Vault {
         Ok(folder)
     }
 
+    /// Deletes all currently stored descendants and their entries atomically.
+    /// Concurrent records arriving later retain the existing recovery behavior.
+    pub fn delete_folder_tree(&mut self, id: &str, expected_rev: i64) -> Result<Folder> {
+        let device = self.device_id.clone();
+        let tx = self.db.conn_mut().transaction()?;
+        let row = match read_folder(&tx, id)? {
+            Some(row) if row.deleted_at.is_none() => row.folder,
+            _ => return Err(Error::FolderNotFound),
+        };
+        if row.rev != expected_rev {
+            return Err(Error::RevisionConflict);
+        }
+        let subtree = "WITH RECURSIVE subtree(id) AS (
+            SELECT ?1 UNION SELECT folder.id FROM folder JOIN subtree ON folder.parent_id = subtree.id
+        )";
+        let entry_ids = {
+            let mut stmt = tx.prepare(&format!(
+                "{subtree} SELECT entry.id FROM entry JOIN subtree ON entry.folder_id = subtree.id
+                 WHERE entry.deleted_at IS NULL ORDER BY entry.id"
+            ))?;
+            let rows = stmt.query_map([id], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<String>>>()?
+        };
+        let folder_ids = {
+            let mut stmt = tx.prepare(&format!(
+                "{subtree} SELECT folder.id FROM folder JOIN subtree ON folder.id = subtree.id
+                 WHERE folder.deleted_at IS NULL ORDER BY folder.id"
+            ))?;
+            let rows = stmt.query_map([id], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<String>>>()?
+        };
+        let mut attachment_ids = Vec::new();
+        for entry_id in &entry_ids {
+            attachment_ids.extend(crate::entries::delete_entry_in_transaction(
+                &tx, entry_id, &device,
+            )?);
+        }
+        let now = now_ms();
+        for folder_id in &folder_ids {
+            let lseq = next_lseq(&tx)?;
+            tx.execute(
+                "UPDATE folder
+                    SET deleted_at = max(?1, updated_at + 1), updated_at = max(?1, updated_at + 1),
+                        base_rev = CASE WHEN device_id <> ?2 THEN rev ELSE base_rev END,
+                        base_device = CASE WHEN device_id <> ?2 THEN device_id ELSE base_device END,
+                        rev = rev + 1, device_id = ?2, lseq = ?3
+                  WHERE id = ?4 AND deleted_at IS NULL",
+                params![now, device, lseq, folder_id],
+            )?;
+        }
+        tx.commit()?;
+        for attachment_id in &attachment_ids {
+            crate::attachments::remove_blob(self.dir(), attachment_id);
+        }
+        Ok(Folder {
+            updated_at: now.max(row.updated_at + 1),
+            rev: row.rev + 1,
+            ..row
+        })
+    }
+
     /// Restores a tombstoned folder so its original structure shows up
     /// again: entries kept their assignment the whole time, so only the
     /// named folder is untombstoned. The parent chain must be live —
@@ -798,6 +859,112 @@ mod tests {
             Err(crate::Error::FolderCycle)
         ));
         assert_eq!(vault.get_folder(&a.id).unwrap().rev, 1);
+    }
+
+    #[test]
+    fn delete_tree_removes_nested_contents_and_attachments_without_touching_siblings() {
+        let (_tmp, mut vault) = test_vault();
+        let root = vault.create_folder(None, "Delete me").unwrap();
+        let child = vault.create_folder(Some(&root.id), "Child").unwrap();
+        let deep = vault.create_folder(Some(&child.id), "Deep").unwrap();
+        let kept = vault.create_folder(None, "Keep me").unwrap();
+        let outside = vault
+            .create_entry(Some(&kept.id), &draft("Outside"))
+            .unwrap();
+        let first = vault.create_entry(Some(&root.id), &draft("First")).unwrap();
+        let nested = vault
+            .create_entry(
+                Some(&deep.id),
+                &EntryDraft {
+                    tags: vec!["private".into()],
+                    ..draft("Nested")
+                },
+            )
+            .unwrap();
+        let attachment = vault
+            .add_attachment(&nested.id, "file.txt", "text/plain", b"private attachment")
+            .unwrap();
+        let blob = crate::attachments::blob_path(vault.dir(), &attachment.id);
+        assert!(blob.exists());
+        let tomb = vault.delete_folder_tree(&root.id, root.rev).unwrap();
+        assert_eq!(tomb.rev, root.rev + 1);
+        for id in [&root.id, &child.id, &deep.id] {
+            assert!(vault.get_folder(id).is_err());
+        }
+        for id in [&first.id, &nested.id] {
+            assert!(vault.get_entry(id).is_err());
+            let scrubbed: bool = vault.db.connection().query_row(
+                "SELECT deleted_at IS NOT NULL AND title IS NULL AND title_key IS NULL AND body_md IS NULL AND mood IS NULL AND folder_id IS NULL FROM entry WHERE id = ?1",
+                [id], |row| row.get(0),
+            ).unwrap();
+            assert!(scrubbed);
+        }
+        let tags: i64 = vault
+            .db
+            .connection()
+            .query_row("SELECT count(*) FROM entry_tag", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(tags, 0);
+        assert!(vault.get_attachment(&attachment.id).is_err());
+        assert!(!blob.exists());
+        assert_eq!(vault.get_entry(&outside.id).unwrap().rev, outside.rev);
+        assert_eq!(vault.get_folder(&kept.id).unwrap().rev, kept.rev);
+        assert_eq!(vault.list_folders().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn delete_tree_checks_root_revision_before_any_mutation() {
+        let (_tmp, mut vault) = test_vault();
+        let root = vault.create_folder(None, "Root").unwrap();
+        let note = vault.create_entry(Some(&root.id), &draft("Note")).unwrap();
+        vault.rename_folder(&root.id, root.rev, "Renamed").unwrap();
+        assert!(matches!(
+            vault.delete_folder_tree(&root.id, root.rev),
+            Err(crate::Error::RevisionConflict)
+        ));
+        assert_eq!(vault.get_entry(&note.id).unwrap().rev, note.rev);
+        assert_eq!(vault.get_folder(&root.id).unwrap().name, "Renamed");
+    }
+
+    #[test]
+    fn delete_tree_failure_rolls_back_notes_attachments_and_sequence() {
+        let (_tmp, mut vault) = test_vault();
+        let root = vault.create_folder(None, "Root").unwrap();
+        let child = vault.create_folder(Some(&root.id), "Child").unwrap();
+        let note = vault.create_entry(Some(&child.id), &draft("Note")).unwrap();
+        let attachment = vault
+            .add_attachment(&note.id, "file.txt", "text/plain", b"kept attachment")
+            .unwrap();
+        let revision = vault.get_entry(&note.id).unwrap().rev;
+        let sequence = |vault: &crate::Vault| -> i64 {
+            vault
+                .db
+                .connection()
+                .query_row(
+                    "SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'lseq'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        let before = sequence(&vault);
+        vault
+            .db
+            .connection()
+            .execute_batch(
+                "CREATE TEMP TRIGGER abort_folder_delete BEFORE UPDATE OF deleted_at ON folder
+             WHEN NEW.deleted_at IS NOT NULL BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+            )
+            .unwrap();
+        assert!(vault.delete_folder_tree(&root.id, root.rev).is_err());
+        assert_eq!(sequence(&vault), before);
+        assert_eq!(vault.get_entry(&note.id).unwrap().rev, revision);
+        assert!(vault.get_folder(&child.id).is_ok());
+        assert_eq!(
+            vault.read_attachment(&attachment.id).unwrap(),
+            b"kept attachment"
+        );
+        assert!(crate::attachments::blob_path(vault.dir(), &attachment.id).exists());
     }
 
     /// Deleting a folder needs it empty and at the caller's revision;

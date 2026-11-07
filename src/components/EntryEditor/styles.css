@@ -15,7 +15,7 @@
     box-sizing: border-box;
 }
 
-.editor-pane > :global(*) {
+.editor-pane> :global(*) {
     flex-shrink: 0;
 }
 
@@ -110,16 +110,18 @@
     line-height: 1.45;
     color: var(--color-ink-muted);
     background: transparent;
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 999px;
+    /* border: 1px solid var(--color-border-subtle);
+    border-radius: 999px; */
+    border: none;
     box-shadow: none;
     cursor: pointer;
     transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
 }
 
 .meta-chip:hover {
-    border-color: var(--color-accent);
+    /* border-color: var(--color-accent); */
     color: var(--color-ink-primary);
+    background-color: var(--color-accent-soft);
 }
 
 .meta-chip[aria-expanded="true"] {
@@ -130,7 +132,7 @@
 
 /* Empty metadata is an invitation, not clutter. */
 .meta-chip.empty {
-    border-style: dashed;
+    /* border-style: dashed; */
     opacity: 0.8;
 }
 
@@ -365,7 +367,7 @@
     box-shadow: 0 1px 3px var(--elevation-shadow);
 }
 
-.editor-foot {
+.editor-footer {
     display: flex;
     flex-wrap: wrap;
     align-items: stretch;
@@ -377,6 +379,7 @@
     margin-top: 16px;
     background-color: #0000001a;
     border-radius: 12px;
+    overflow: hidden;
 }
 
 .footer-navigation,
@@ -392,11 +395,13 @@
 }
 
 .status {
-    flex: 1 1 8rem;
+    display: flex;
     min-width: 0;
-    overflow-wrap: anywhere;
     font-size: 0.8em;
     color: var(--color-ink-muted);
+    align-items: center;
+    justify-content: center;
+    padding: 0 16px;
 }
 
 .conflict {

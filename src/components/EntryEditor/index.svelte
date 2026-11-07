@@ -234,8 +234,7 @@
             if (navRestore?.sel) {
                 try {
                     instance.setTextSelection(navRestore.sel.from, navRestore.sel.to);
-                } catch {
-                }
+                } catch {}
             }
             refreshToolbar();
         });
@@ -326,7 +325,9 @@
 
     const linkInfo = $derived(!frozen && !pickerOpen && info?.link ? info.link : null);
     const linkKind = $derived(linkInfo ? classifyHref(linkInfo.href) : null);
-    const showPopover = $derived(linkInfo !== null && !linkPopoverDismissed && (linkKind === 'entry' || linkKind === 'external'));
+    const showPopover = $derived(
+        linkInfo !== null && !linkPopoverDismissed && (linkKind === 'entry' || linkKind === 'external'),
+    );
 
     /* Every departure settles through the same session gate; the
        view stays on the entry when it reports failure. */
@@ -355,8 +356,8 @@
         <!-- One compact meta row: back + chips. Date, mood and
              tags each open a popover instead of stacking rows. -->
         <div class="meta-row" inert={pickerOpen}>
-            <Button kind="quiet" handler={goBack} aria-label={ENTRY_EDITOR_TEXT.back}
-                ><IconLeft />{ENTRY_EDITOR_TEXT.back}</Button>
+            <!-- <Button kind="quiet" handler={goBack} aria-label={ENTRY_EDITOR_TEXT.back}
+                ><IconLeft />{ENTRY_EDITOR_TEXT.back}</Button> -->
             <div class="meta-chips">
                 <div class="chip-wrap">
                     <button
@@ -454,7 +455,11 @@
                         {ENTRY_EDITOR_TEXT.linkedFrom}
                         <span class="chev">▾</span>
                     </button>
-                    <div class="popover backlinks-popover" style={backlinksStyle} id="entry-backlinks" hidden={openPop !== 'backlinks'}>
+                    <div
+                        class="popover backlinks-popover"
+                        style={backlinksStyle}
+                        id="entry-backlinks"
+                        hidden={openPop !== 'backlinks'}>
                         <h4>{ENTRY_EDITOR_TEXT.linkedFrom}</h4>
                         {@render panels?.(openPop === 'backlinks')}
                     </div>
@@ -522,7 +527,7 @@
                 {deleteError}
             </p>
         {/if}
-        <div class="editor-foot">
+        <div class="editor-footer">
             <div class="footer-navigation">
                 <Button kind="quiet" handler={goBack} aria-label={ENTRY_EDITOR_TEXT.back}
                     ><IconLeft />{ENTRY_EDITOR_TEXT.back}</Button>
@@ -544,7 +549,8 @@
             <span class="status">{saveConflict ? ENTRY_EDITOR_TEXT.conflictStatus : status}</span>
             <div class="footer-actions">
                 {#if deleteArmed}
-                    <Button kind="danger" class="confirm-button" handler={remove}>{ENTRY_EDITOR_TEXT.confirmDelete}</Button>
+                    <Button kind="danger" class="confirm-button" handler={remove}
+                        >{ENTRY_EDITOR_TEXT.confirmDelete}</Button>
                     <Button kind="quiet" class="keep-button" handler={() => (deleteArmed = false)}
                         >{ENTRY_EDITOR_TEXT.keepEntry}</Button>
                 {:else}
