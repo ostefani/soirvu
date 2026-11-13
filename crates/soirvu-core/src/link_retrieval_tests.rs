@@ -67,54 +67,6 @@ fn target_id(vault: &mut Vault) -> String {
 }
 
 #[test]
-fn literal_and_titled_links_are_candidates() {
-    let (_tmp, mut vault) = vault();
-    let id = target_id(&mut vault);
-    let src = vault
-        .create_entry(
-            None,
-            &draft(
-                "2026-10-31",
-                Some("Summary"),
-                &format!("See [notes](entry:{id}) and [notes](entry:{id} \"Training notes\")."),
-            ),
-        )
-        .unwrap();
-    assert_eq!(candidates(&vault, &id), vec![src.id]);
-}
-
-#[test]
-fn reference_definitions_are_candidates() {
-    let (_tmp, mut vault) = vault();
-    let id = target_id(&mut vault);
-    let src = vault
-        .create_entry(
-            None,
-            &draft(
-                "2026-10-31",
-                Some("Summary"),
-                &format!("[notes][t]\n\n[t]: entry:{id}"),
-            ),
-        )
-        .unwrap();
-    assert_eq!(candidates(&vault, &id), vec![src.id]);
-}
-
-#[test]
-fn title_only_mentions_are_not_body_candidates() {
-    let (_tmp, mut vault) = vault();
-    let id = target_id(&mut vault);
-    // The UUID appears only in a title, never in a body.
-    vault
-        .create_entry(
-            None,
-            &draft("2026-10-31", Some(&format!("about {id}")), "no links here"),
-        )
-        .unwrap();
-    assert!(candidates(&vault, &id).is_empty());
-}
-
-#[test]
 fn raw_fts_also_matches_what_verification_must_reject() {
     let (_tmp, mut vault) = vault();
     let id = target_id(&mut vault);

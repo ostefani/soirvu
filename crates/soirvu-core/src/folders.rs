@@ -143,7 +143,7 @@ fn ancestors(conn: &rusqlite::Connection, mut parent: Option<String>) -> Result<
 }
 
 impl Vault {
-    /// Whether the parent of a stored folder currently resolves to a live row.
+    /// Whether the given ID belongs to a live folder.
     pub fn has_live_folder(&self, id: &str) -> Result<bool> {
         folder_is_live(self.db.connection(), id)
     }
@@ -1115,10 +1115,10 @@ mod tests {
         crate::storage::create_with(&path, &key, "vault-1", &MIGRATIONS[..4]).unwrap();
         let backup = tmp.path().join("backup");
         std::fs::create_dir(&backup).unwrap();
-        let broken: Vec<&str> = MIGRATIONS[..4]
+        let broken: Vec<_> = MIGRATIONS[..4]
             .iter()
             .copied()
-            .chain(std::iter::once("THIS IS NOT SQL;"))
+            .chain(std::iter::once(crate::storage::Migration::new("THIS IS NOT SQL;")))
             .collect();
         assert!(crate::storage::open_with(&path, &key, &backup, &broken).is_err());
         // Still schema 4: the failed upgrade changed nothing.

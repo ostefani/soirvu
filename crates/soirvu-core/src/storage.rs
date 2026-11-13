@@ -174,13 +174,25 @@ BEGIN
 END;
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[
-    MIGRATION_1_META,
-    MIGRATION_2_ENTRIES,
-    MIGRATION_3_ATTACHMENTS,
-    MIGRATION_4_SYNC,
-    MIGRATION_5_FOLDERS,
-    MIGRATION_6_ROW_INVARIANTS,
+#[derive(Clone, Copy)]
+pub(crate) struct Migration {
+    sql: &'static str,
+    preflight: Option<fn(&Connection) -> Result<()>>,
+}
+
+impl Migration {
+    pub(crate) const fn new(sql: &'static str) -> Self {
+        Self { sql, preflight: None }
+    }
+}
+
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration::new(MIGRATION_1_META),
+    Migration::new(MIGRATION_2_ENTRIES),
+    Migration::new(MIGRATION_3_ATTACHMENTS),
+    Migration::new(MIGRATION_4_SYNC),
+    Migration::new(MIGRATION_5_FOLDERS),
+    Migration { sql: MIGRATION_6_ROW_INVARIANTS, preflight: Some(check_row_invariants) },
 ];
 
 /// The schema version this build of the app understands.
@@ -323,7 +335,7 @@ pub(crate) fn create_with(
     path: &Path,
     key: &Key,
     vault_id: &str,
-    migrations: &[&str],
+    migrations: &[Migration],
 ) -> Result<Database> {
     if path.exists() {
         return Err(Error::Io(io::Error::new(
@@ -358,7 +370,7 @@ pub(crate) fn open_with(
     path: &Path,
     key: &Key,
     backup_dir: &Path,
-    migrations: &[&str],
+    migrations: &[Migration],
 ) -> Result<Database> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     silence_sqlite_log();
@@ -384,9 +396,6 @@ pub(crate) fn open_with(
         return Err(Error::UnsupportedFormat("database has no schema".into()));
     }
     if version < latest {
-        if version == 5 && migrations.get(5) == Some(&MIGRATION_6_ROW_INVARIANTS) {
-            check_row_invariants(&conn)?;
-        }
         backup_before_migration(&conn, path, backup_dir, version, latest)?;
         migrate(&mut conn, migrations, version)?;
         // The folders migration only creates columns; titles that
@@ -440,14 +449,16 @@ fn check_row_invariants(conn: &Connection) -> Result<()> {
 }
 
 /// Runs the migrations after `from`, each in its own transaction.
-fn migrate(conn: &mut Connection, migrations: &[&str], from: i64) -> Result<()> {
-    for (index, sql) in migrations.iter().enumerate().skip(from as usize) {
+fn migrate(conn: &mut Connection, migrations: &[Migration], from: i64) -> Result<()> {
+    for (index, migration) in migrations.iter().enumerate().skip(from as usize) {
         let version = index as i64 + 1;
-        let tx = conn.transaction()?;
-        if *sql == MIGRATION_6_ROW_INVARIANTS {
-            check_row_invariants(&tx)?;
+        // Keep the check and installation in the same write transaction,
+        // so another connection cannot change the rows between them.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if let Some(preflight) = migration.preflight {
+            preflight(&tx)?;
         }
-        tx.execute_batch(sql)?;
+        tx.execute_batch(migration.sql)?;
         tx.pragma_update(None, "user_version", version)?;
         tx.commit()?;
     }
@@ -654,7 +665,7 @@ mod tests {
         let db = open_with(&path, &key(), &backup, &MIGRATIONS[..5]).unwrap();
         assert_eq!(user_version(&db), 5);
         assert_eq!(db.connection().query_row("SELECT rev FROM entry", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
-        assert!(backup_files(&backup).is_empty());
+        assert_eq!(backup_files(&backup).len(), 1);
     }
 
     fn user_version(db: &Database) -> i64 {
@@ -796,9 +807,9 @@ mod tests {
         drop(create_with(&path, &key(), "vid", &MIGRATIONS[..1]).unwrap());
 
         // Version 2 creates a table and then hits a syntax error.
-        let broken: &[&str] = &[
-            MIGRATION_1_META,
-            "CREATE TABLE half_done (x); THIS IS NOT SQL;",
+        let broken = &[
+            Migration::new(MIGRATION_1_META),
+            Migration::new("CREATE TABLE half_done (x); THIS IS NOT SQL;"),
         ];
         let result = open_with(&path, &key(), &backups, broken);
         assert!(matches!(result, Err(Error::Database(_))));

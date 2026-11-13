@@ -138,7 +138,7 @@ pub(crate) const MAX_BLOB_PLAINTEXT_BYTES: u64 = 1024 * 1024 * 1024;
 
 struct BlobExpectation<'a> {
     size: i64,
-    sha256: &'a [u8],
+    sha256: &'a [u8; 32],
 }
 
 impl Vault {
@@ -230,7 +230,9 @@ impl Vault {
     ) -> Result<()> {
         validate_attachment_id(id)?;
         let name = validate_name(name)?;
-        if deleted_at.is_none() != data.is_some() || size < 0 || sha256.len() != 32 {
+        let sha256: &[u8; 32] = sha256.try_into()
+            .map_err(|_| Error::InvalidInput("invalid attachment digest length".into()))?;
+        if deleted_at.is_none() != data.is_some() || size < 0 {
             return Err(Error::InvalidInput("invalid attachment record".into()));
         }
         let mime = if let Some(bytes) = data {
@@ -250,7 +252,7 @@ impl Vault {
                 "INSERT INTO attachment
                    (id, entry_id, name, mime, size, sha256, created_at, deleted_at, lseq)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![id, entry_id, name, mime, size, sha256, created_at, deleted_at, lseq],
+                params![id, entry_id, name, mime, size, &sha256[..], created_at, deleted_at, lseq],
             )?;
             tx.commit()?;
             Ok(())
@@ -530,7 +532,7 @@ fn write_blob_checked(
         let mut sha256 = [0u8; 32];
         sha256.copy_from_slice(&digest);
         if let Some(expected) = expected {
-            if size != expected.size || sha256 != expected.sha256 {
+            if size != expected.size || &sha256 != expected.sha256 {
                 return Err(Error::InvalidInput("attachment size or hash does not match its record".into()));
             }
         }
@@ -567,7 +569,9 @@ fn open_blob(dir: &Path, att: &Attachment) -> Result<(File, [u8; PREFIX_LEN])> {
 }
 
 fn read_blob_header(file: &mut File, att: &Attachment) -> Result<[u8; PREFIX_LEN]> {
-    if att.size < 0 || file.metadata()?.len() != expected_len(att.size) {
+    let expected = encrypted_blob_len(att.size)
+        .ok_or_else(|| corrupt(&att.id, "invalid plaintext size in attachment metadata"))?;
+    if file.metadata()?.len() != expected {
         return Err(corrupt(&att.id, "blob file has the wrong length"));
     }
     let mut header = [0u8; HEADER_LEN as usize];
@@ -626,15 +630,13 @@ fn plain_len_of_chunk(size: u64, counter: u32) -> usize {
     }
 }
 
-fn expected_len(size: i64) -> u64 {
-    let size = size as u64;
-    HEADER_LEN + size + chunk_count(size) as u64 * TAG_LEN as u64
-}
-
-/// The on-disk encrypted blob length for a plaintext size. Sync uses this
-/// only as a read/copy ceiling; the caller still authenticates every chunk.
+/// Encrypted length for a representable plaintext size. Sync uses it as a
+/// copy ceiling before authenticating the staged blob.
 pub(crate) fn encrypted_blob_len(plaintext_size: i64) -> Option<u64> {
-    (plaintext_size >= 0).then(|| expected_len(plaintext_size))
+    let size = u64::try_from(plaintext_size).ok()?;
+    let chunks = size.div_ceil(CHUNK_PLAIN as u64).max(1);
+    let chunks = u64::from(u32::try_from(chunks).ok()?);
+    Some(HEADER_LEN + size + chunks * TAG_LEN as u64)
 }
 
 fn chunk_nonce(prefix: &[u8; PREFIX_LEN], counter: u32, last: bool) -> [u8; NONCE_LEN] {

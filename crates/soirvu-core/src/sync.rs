@@ -1881,6 +1881,8 @@ impl Vault {
                     if entry_exists {
                         let tx = self.db.conn_mut().transaction()?;
                         let lseq = next_lseq(&tx)?;
+                        // The authenticated record preserves the historical
+                        // digest. A tombstone has no blob to verify.
                         insert_attachment_row(&tx, record, lseq, &record.sha256)?;
                         tx.commit()?;
                     }
