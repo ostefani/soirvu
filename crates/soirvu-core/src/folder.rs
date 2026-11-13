@@ -324,7 +324,8 @@ impl Vault {
         &self.device_id
     }
 
-    pub fn database(&self) -> &Database {
+    #[cfg(test)]
+    pub(crate) fn database(&self) -> &Database {
         &self.db
     }
 

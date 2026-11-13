@@ -140,12 +140,47 @@ CREATE INDEX entry_title_key_idx ON entry(title_key) WHERE deleted_at IS NULL;
 INSERT INTO meta (key, value) VALUES ('sync_epoch', '1'), ('bootstrap_pending', '1');
 ";
 
+// Write guards preserve table layouts and the external-content FTS index.
+const MIGRATION_6_ROW_INVARIANTS: &str = "
+CREATE TRIGGER entry_invariants_insert BEFORE INSERT ON entry
+WHEN typeof(NEW.rev) != 'integer' OR NEW.rev < 1 OR typeof(NEW.base_rev) != 'integer' OR NEW.base_rev < 0
+BEGIN
+  SELECT RAISE(ABORT, 'invalid entry row');
+END;
+CREATE TRIGGER entry_invariants_update BEFORE UPDATE OF rev, base_rev ON entry
+WHEN typeof(NEW.rev) != 'integer' OR NEW.rev < 1 OR typeof(NEW.base_rev) != 'integer' OR NEW.base_rev < 0
+BEGIN
+  SELECT RAISE(ABORT, 'invalid entry row');
+END;
+CREATE TRIGGER folder_invariants_insert BEFORE INSERT ON folder
+WHEN typeof(NEW.rev) != 'integer' OR NEW.rev < 1 OR typeof(NEW.base_rev) != 'integer' OR NEW.base_rev < 0
+BEGIN
+  SELECT RAISE(ABORT, 'invalid folder row');
+END;
+CREATE TRIGGER folder_invariants_update BEFORE UPDATE OF rev, base_rev ON folder
+WHEN typeof(NEW.rev) != 'integer' OR NEW.rev < 1 OR typeof(NEW.base_rev) != 'integer' OR NEW.base_rev < 0
+BEGIN
+  SELECT RAISE(ABORT, 'invalid folder row');
+END;
+CREATE TRIGGER attachment_invariants_insert BEFORE INSERT ON attachment
+WHEN typeof(NEW.size) != 'integer' OR NEW.size < 0 OR typeof(NEW.sha256) != 'blob' OR length(NEW.sha256) != 32
+BEGIN
+  SELECT RAISE(ABORT, 'invalid attachment row');
+END;
+CREATE TRIGGER attachment_invariants_update BEFORE UPDATE OF size, sha256 ON attachment
+WHEN typeof(NEW.size) != 'integer' OR NEW.size < 0 OR typeof(NEW.sha256) != 'blob' OR length(NEW.sha256) != 32
+BEGIN
+  SELECT RAISE(ABORT, 'invalid attachment row');
+END;
+";
+
 pub(crate) const MIGRATIONS: &[&str] = &[
     MIGRATION_1_META,
     MIGRATION_2_ENTRIES,
     MIGRATION_3_ATTACHMENTS,
     MIGRATION_4_SYNC,
     MIGRATION_5_FOLDERS,
+    MIGRATION_6_ROW_INVARIANTS,
 ];
 
 /// The schema version this build of the app understands.
@@ -274,7 +309,7 @@ impl Database {
     }
 
     /// The raw connection (read access).
-    pub fn connection(&self) -> &Connection {
+    pub(crate) fn connection(&self) -> &Connection {
         &self.conn
     }
 
@@ -349,6 +384,9 @@ pub(crate) fn open_with(
         return Err(Error::UnsupportedFormat("database has no schema".into()));
     }
     if version < latest {
+        if version == 5 && migrations.get(5) == Some(&MIGRATION_6_ROW_INVARIANTS) {
+            check_row_invariants(&conn)?;
+        }
         backup_before_migration(&conn, path, backup_dir, version, latest)?;
         migrate(&mut conn, migrations, version)?;
         // The folders migration only creates columns; titles that
@@ -382,11 +420,33 @@ fn backfill_title_keys(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+fn check_row_invariants(conn: &Connection) -> Result<()> {
+    let invalid: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM entry
+             WHERE typeof(rev) != 'integer' OR rev < 1 OR typeof(base_rev) != 'integer' OR base_rev < 0)
+          OR EXISTS(SELECT 1 FROM folder
+             WHERE typeof(rev) != 'integer' OR rev < 1 OR typeof(base_rev) != 'integer' OR base_rev < 0)
+          OR EXISTS(SELECT 1 FROM attachment
+             WHERE typeof(size) != 'integer' OR size < 0 OR typeof(sha256) != 'blob' OR length(sha256) != 32)",
+        [],
+        |row| row.get(0),
+    )?;
+    if invalid {
+        return Err(Error::InvalidInput(
+            "vault has invalid revision or attachment metadata; restore a verified backup before upgrading".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Runs the migrations after `from`, each in its own transaction.
 fn migrate(conn: &mut Connection, migrations: &[&str], from: i64) -> Result<()> {
     for (index, sql) in migrations.iter().enumerate().skip(from as usize) {
         let version = index as i64 + 1;
         let tx = conn.transaction()?;
+        if *sql == MIGRATION_6_ROW_INVARIANTS {
+            check_row_invariants(&tx)?;
+        }
         tx.execute_batch(sql)?;
         tx.pragma_update(None, "user_version", version)?;
         tx.commit()?;
@@ -404,13 +464,15 @@ fn backup_before_migration(
 ) -> Result<()> {
     // Move everything still waiting in the -wal file into the main file,
     // so that copying that one file copies everything.
-    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+    let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+    if busy != 0 {
+        return Err(Error::Io(io::Error::other("vault backup checkpoint is busy")));
+    }
     fs::create_dir_all(backup_dir)?;
-    let target = backup_dir.join(format!("soirvu-v{from}-before-v{to}-{}.db", now_ms()));
-    fs::copy(path, &target)?;
-    // Opened writable on purpose: sync_all on a read-only
-    // handle is FlushFileBuffers, which Windows refuses.
-    fs::OpenOptions::new().write(true).open(&target)?.sync_all()?;
+    let backup = crate::fs_boundary::Directory::open(backup_dir)?;
+    let name = format!("soirvu-v{from}-before-v{to}-{}.db", uuid::Uuid::now_v7());
+    let mut source = fs::File::open(path)?;
+    backup.publish(Path::new(&name), |file| Ok(io::copy(&mut source, file)?))?;
     Ok(())
 }
 
@@ -537,6 +599,62 @@ mod tests {
         let db = Database::open(&path, &key(), tmp.path()).unwrap();
         assert!(db.connection().db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE).unwrap());
         assert!(!db.connection().db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA).unwrap());
+    }
+
+    #[test]
+    fn row_guard_upgrade_preserves_valid_rows_and_rejects_new_invalid_metadata() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("vault.db");
+        let backup = tmp.path().join("backup");
+        let db = create_with(&path, &key(), "vault", &MIGRATIONS[..5]).unwrap();
+        db.connection().execute_batch(
+            "INSERT INTO device VALUES ('d', 'device', 0);
+             INSERT INTO entry (id, entry_date, created_at, updated_at, device_id, lseq, body_md)
+               VALUES ('e', '2026-10-01', 0, 0, 'd', 1, 'searchable note');
+             INSERT INTO attachment (id, entry_id, name, mime, size, sha256, created_at, lseq)
+               VALUES ('a', 'e', 'note', 'text/plain', 0, zeroblob(32), 0, 2);",
+        ).unwrap();
+        drop(db);
+        let db = Database::open(&path, &key(), &backup).unwrap();
+        assert_eq!(user_version(&db), SCHEMA_VERSION);
+        let backups = backup_files(&backup);
+        assert_eq!(backups.len(), 1);
+        let restored = open_with(&backups[0], &key(), &backup, &MIGRATIONS[..5]).unwrap();
+        assert_eq!(user_version(&restored), 5);
+        assert_eq!(
+            restored.connection().query_row("SELECT size FROM attachment", [], |row| row.get::<_, i64>(0)).unwrap(),
+            0,
+        );
+        let conn = db.connection();
+        for sql in [
+            "UPDATE entry SET rev = 0",
+            "UPDATE entry SET base_rev = -1",
+            "UPDATE attachment SET size = -1",
+            "UPDATE attachment SET sha256 = zeroblob(31)",
+        ] {
+            assert!(conn.execute(sql, []).is_err(), "{sql}");
+        }
+        assert_eq!(conn.query_row("SELECT count(*) FROM entry_fts WHERE entry_fts MATCH 'searchable'",
+            [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
+    fn row_guard_upgrade_refuses_invalid_legacy_rows_without_rewriting_them() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("vault.db");
+        let backup = tmp.path().join("backup");
+        let db = create_with(&path, &key(), "vault", &MIGRATIONS[..5]).unwrap();
+        db.connection().execute_batch(
+            "INSERT INTO device VALUES ('d', 'device', 0);
+             INSERT INTO entry (id, entry_date, created_at, updated_at, device_id, lseq, rev)
+               VALUES ('e', '2026-10-01', 0, 0, 'd', 1, 0);",
+        ).unwrap();
+        drop(db);
+        assert!(matches!(Database::open(&path, &key(), &backup), Err(Error::InvalidInput(_))));
+        let db = open_with(&path, &key(), &backup, &MIGRATIONS[..5]).unwrap();
+        assert_eq!(user_version(&db), 5);
+        assert_eq!(db.connection().query_row("SELECT rev FROM entry", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert!(backup_files(&backup).is_empty());
     }
 
     fn user_version(db: &Database) -> i64 {

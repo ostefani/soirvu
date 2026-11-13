@@ -63,6 +63,7 @@ use unicode_normalization::UnicodeNormalization;
 use crate::crypto::{NONCE_LEN, random_bytes};
 use crate::entries::next_lseq;
 use crate::error::{Error, Result};
+use crate::attachments::MAX_BLOB_PLAINTEXT_BYTES;
 use crate::folder::{Vault, rename_retry};
 
 /// Bundle format 2 adds folder records and entry membership
@@ -127,7 +128,6 @@ const MAX_SYNC_FILES: usize = 20_000;
 const MAX_ACK_FILES: usize = 512;
 const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_APPLY_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_BLOB_PLAINTEXT_BYTES: u64 = 1024 * 1024 * 1024;
 const ACK_DIR: &str = "acks";
 
 /// What one emit produced (or None when nothing changed).
@@ -1918,39 +1918,51 @@ impl Vault {
                 let vault_root = crate::fs_boundary::Directory::open(self.dir())?;
                 let shard = vault_root.directory(relative.parent().expect("blob has a parent"), true)?;
                 let dest = Path::new(&record.id);
-                match shard.publish(dest, |file| copy_bounded_blob(source, file, record.size)) {
+                let attachment = crate::attachments::Attachment {
+                    id: record.id.clone(),
+                    entry_id: record.entry_id.clone(),
+                    name: record.name.clone(),
+                    mime: record.mime.clone(),
+                    size: record.size,
+                    sha256: record.sha256.clone(),
+                    created_at: record.created_at,
+                };
+                let key = self.attachment_key();
+                let staged = match shard.open_regular(dest) {
+                    // A crash may have published the blob before its row. Reuse it
+                    // only if it still authenticates against this record.
+                    Ok(mut file) => crate::attachments::verify_staged_blob(&mut file, &attachment, &key),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        shard.publish(dest, |file| {
+                            copy_bounded_blob(source, file, record.size)?;
+                            crate::attachments::verify_staged_blob(file, &attachment, &key)
+                        })
+                    }
+                    Err(error) => Err(error.into()),
+                };
+                match staged {
                     Ok(()) => {}
-                    Err(Error::InvalidInput(_)) => {
+                    Err(Error::InvalidInput(_) | Error::CorruptAttachment(_)) => {
                         report.problems.push(format!(
-                            "attachment {}: blob size is invalid or exceeds the limit",
+                            "attachment {}: content does not match its size or hash; rejected",
                             record.id
                         ));
                         return Ok(());
                     }
                     Err(error) => return Err(error),
                 }
-                {
+                let commit = (|| -> Result<()> {
                     let tx = self.db.conn_mut().transaction()?;
                     let lseq = next_lseq(&tx)?;
                     insert_attachment_row(&tx, record, lseq, &record.sha256)?;
                     tx.commit()?;
+                    Ok(())
+                })();
+                if commit.is_err() {
+                    let _ = shard.remove_file(dest);
                 }
-                // Authenticate what arrived: the plaintext
-                // hash must match the record (the same check
-                // JSON import makes, §8).
-                let verified = self.verify_attachment_integrity(&record.id).is_ok();
-                if verified {
-                    report.attachments_applied += 1;
-                } else {
-                    let tx = self.db.conn_mut().transaction()?;
-                    tx.execute("DELETE FROM attachment WHERE id = ?1", [&record.id])?;
-                    tx.commit()?;
-                    crate::attachments::remove_blob(self.dir(), &record.id);
-                    report.problems.push(format!(
-                        "attachment {}: content does not match its hash; rejected",
-                        record.id
-                    ));
-                }
+                commit?;
+                report.attachments_applied += 1;
             }
         }
         Ok(())
@@ -3288,6 +3300,35 @@ mod tests {
         let report = a.sync_prune(sync.path()).unwrap();
         assert_eq!(report.blobs_removed, 1);
         assert!(!blob.exists());
+    }
+
+    #[test]
+    fn sync_authenticates_blobs_before_publication_and_reuses_valid_orphans() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let entry = a.create_entry(None, &draft("with file")).unwrap();
+        let att = a.add_attachment(&entry.id, "note.txt", "text/plain", b"blob bytes").unwrap();
+        a.sync_emit(sync.path()).unwrap();
+
+        let source = sync.path().join("blobs").join(&att.id);
+        let original = fs::read(&source).unwrap();
+        let mut damaged = original.clone();
+        *damaged.last_mut().unwrap() ^= 1;
+        fs::write(&source, damaged).unwrap();
+        let destination = crate::attachments::blob_path(b.dir(), &att.id).unwrap();
+        let report = b.sync_apply(sync.path()).unwrap();
+        assert_eq!(report.problems.len(), 1);
+        assert!(!destination.exists());
+        assert!(b.list_attachments(&entry.id).unwrap().is_empty());
+
+        // Simulate interruption after publishing valid ciphertext and before
+        // committing metadata. Reapplying completes the operation.
+        fs::write(source, &original).unwrap();
+        fs::write(destination, original).unwrap();
+        let report = b.sync_apply(sync.path()).unwrap();
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert_eq!(report.attachments_applied, 1);
+        assert_eq!(b.read_attachment(&att.id).unwrap(), b"blob bytes");
     }
 
     #[test]

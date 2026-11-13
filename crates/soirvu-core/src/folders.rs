@@ -108,7 +108,7 @@ impl From<FolderRow> for Folder {
 /// Whether a folder row exists and is not tombstoned. The Tauri
 /// layer uses this for effective-hierarchy flags; core reads use it
 /// for scope validation.
-pub fn folder_is_live(conn: &rusqlite::Connection, id: &str) -> Result<bool> {
+pub(crate) fn folder_is_live(conn: &rusqlite::Connection, id: &str) -> Result<bool> {
     Ok(conn
         .query_row(
             "SELECT 1 FROM folder WHERE id = ?1 AND deleted_at IS NULL",
@@ -143,6 +143,11 @@ fn ancestors(conn: &rusqlite::Connection, mut parent: Option<String>) -> Result<
 }
 
 impl Vault {
+    /// Whether the parent of a stored folder currently resolves to a live row.
+    pub fn has_live_folder(&self, id: &str) -> Result<bool> {
+        folder_is_live(self.db.connection(), id)
+    }
+
     /// Creates a folder under `parent_id` (`None` is the vault root).
     pub fn create_folder(&mut self, parent_id: Option<&str>, name: &str) -> Result<Folder> {
         if let Some(parent) = parent_id {
@@ -1049,7 +1054,7 @@ mod tests {
     }
 
     /// A schema-4 database has no folders and no title keys. Opening it
-    /// upgrades to 5, roots every existing entry, backfills title keys
+    /// upgrades the schema, roots every existing entry, backfills title keys
     /// with the same normalizer live writes use, and leaves a pre-migration
     /// backup behind.
     #[test]
@@ -1084,7 +1089,7 @@ mod tests {
             .connection()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, crate::storage::SCHEMA_VERSION);
         let (folder_id, title_key): (Option<String>, Option<String>) = db
             .connection()
             .query_row(

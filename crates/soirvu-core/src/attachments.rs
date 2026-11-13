@@ -134,6 +134,13 @@ pub fn sniff_mime(bytes: &[u8]) -> Option<&'static str> {
     None
 }
 
+pub(crate) const MAX_BLOB_PLAINTEXT_BYTES: u64 = 1024 * 1024 * 1024;
+
+struct BlobExpectation<'a> {
+    size: i64,
+    sha256: &'a [u8],
+}
+
 impl Vault {
     /// Stores `data` as a new attachment of a live entry.
     /// A thin wrapper over `add_attachment_from_reader` for data that is
@@ -226,20 +233,16 @@ impl Vault {
         if deleted_at.is_none() != data.is_some() || size < 0 || sha256.len() != 32 {
             return Err(Error::InvalidInput("invalid attachment record".into()));
         }
-        let mime = match data {
-            Some(bytes) if i64::try_from(bytes.len()).ok() == Some(size) => {
-                if &Sha256::digest(bytes)[..] != sha256 {
-                    return Err(Error::InvalidInput("attachment hash mismatch".into()));
-                }
-                sniff_mime(bytes).unwrap_or("application/octet-stream").to_owned()
-            }
-            Some(_) => return Err(Error::InvalidInput("attachment size mismatch".into())),
-            None => validate_mime(mime)?,
-        };
-        if let Some(bytes) = data {
+        let mime = if let Some(bytes) = data {
             let key = blob_key(&self.attachment_key(), id);
-            write_blob(self.dir(), id, &key, &mut io::Cursor::new(bytes))?;
-        }
+            write_blob_checked(
+                self.dir(), id, &key, &mut io::Cursor::new(bytes),
+                Some(BlobExpectation { size, sha256 }),
+            )?;
+            sniff_mime(bytes).unwrap_or("application/octet-stream").to_owned()
+        } else {
+            validate_mime(mime)?
+        };
         let commit = (|| -> Result<()> {
             let tx = self.db.conn_mut().transaction()?;
             let lseq = next_lseq(&tx)?;
@@ -297,23 +300,6 @@ impl Vault {
             return Err(corrupt(&att.id, "content does not match its row"));
         }
         Ok(out)
-    }
-
-    /// Verifies a blob without retaining its plaintext in memory. Sync uses
-    /// this for files that can be large but are already stored on disk.
-    pub(crate) fn verify_attachment_integrity(&self, id: &str) -> Result<()> {
-        let (_, att) = load_attachment(self.db.connection(), id)?;
-        let root = self.attachment_key();
-        let (mut blob, prefix) = open_blob(self.dir(), &att)?;
-        let mut hasher = Sha256::new();
-        for counter in 0..chunk_count(att.size as u64) {
-            let plain = read_chunk(&mut blob, &att, &root, &prefix, counter)?;
-            hasher.update(&plain);
-        }
-        if HEXLOWER.encode(&hasher.finalize()) != att.sha256 {
-            return Err(corrupt(&att.id, "content does not match its row"));
-        }
-        Ok(())
     }
 
     /// The plaintext bytes in `range` (clamped to the attachment), decrypting
@@ -445,18 +431,28 @@ impl Vault {
 /// folder ever holds every blob. The file name is the id and nothing else:
 /// no original name or type leaks (§3).
 pub(crate) fn blob_path(dir: &Path, id: &str) -> Result<PathBuf> {
-    validate_attachment_id(id)?;
-    Ok(dir.join("attachments").join(&id[..2]).join(id))
+    let id = AttachmentId::parse(id)?;
+    Ok(dir.join("attachments").join(id.shard()).join(id.0))
+}
+
+struct AttachmentId<'a>(&'a str);
+
+impl<'a> AttachmentId<'a> {
+    fn parse(id: &'a str) -> Result<Self> {
+        if !crate::storage::is_canonical_uuid(id) {
+            return Err(Error::InvalidInput("attachment ID must be a canonical UUID".into()));
+        }
+        Ok(Self(id))
+    }
+
+    fn shard(&self) -> &str {
+        &self.0[..2]
+    }
 }
 
 /// Checks that an attachment ID is a canonical UUID.
 pub fn validate_attachment_id(id: &str) -> Result<()> {
-    if !crate::storage::is_canonical_uuid(id) {
-        return Err(Error::InvalidInput(
-            "attachment ID must be a canonical UUID".into(),
-        ));
-    }
-    Ok(())
+    AttachmentId::parse(id).map(|_| ())
 }
 
 /// Best-effort blob removal: a failure here is not fatal, because the row is
@@ -474,6 +470,16 @@ pub(crate) fn remove_blob(dir: &Path, id: &str) {
 /// Encrypts everything from `reader` into the blob file for `id`.
 /// Returns the plaintext size and its SHA-256 (raw bytes).
 pub(crate) fn write_blob(dir: &Path, id: &str, key: &Key, reader: &mut impl Read) -> Result<(i64, [u8; 32])> {
+    write_blob_checked(dir, id, key, reader, None)
+}
+
+fn write_blob_checked(
+    dir: &Path,
+    id: &str,
+    key: &Key,
+    reader: &mut impl Read,
+    expected: Option<BlobExpectation<'_>>,
+) -> Result<(i64, [u8; 32])> {
     let relative = blob_path(Path::new(""), id)?;
     let root = crate::fs_boundary::Directory::open(dir)?;
     root.directory(relative.parent().expect("blob has a parent"), true)?;
@@ -496,6 +502,11 @@ pub(crate) fn write_blob(dir: &Path, id: &str, key: &Key, reader: &mut impl Read
             size = size
                 .checked_add(current.len() as i64)
                 .ok_or_else(|| Error::InvalidInput("attachment is too large".into()))?;
+            if size as u64 > MAX_BLOB_PLAINTEXT_BYTES
+                || expected.as_ref().is_some_and(|expected| size > expected.size)
+            {
+                return Err(Error::InvalidInput("attachment exceeds its size limit or record size".into()));
+            }
             let cipher = XChaCha20Poly1305::new_from_slice(&key[..]).expect("blob key is 32 bytes");
             let encrypted = cipher
                 .encrypt(
@@ -518,8 +529,28 @@ pub(crate) fn write_blob(dir: &Path, id: &str, key: &Key, reader: &mut impl Read
         let digest = hasher.finalize();
         let mut sha256 = [0u8; 32];
         sha256.copy_from_slice(&digest);
+        if let Some(expected) = expected {
+            if size != expected.size || sha256 != expected.sha256 {
+                return Err(Error::InvalidInput("attachment size or hash does not match its record".into()));
+            }
+        }
         Ok((size, sha256))
     })
+}
+
+/// Authenticate ciphertext in the staging file before its final name exists.
+pub(crate) fn verify_staged_blob(file: &mut File, att: &Attachment, key: &Key) -> Result<()> {
+    file.seek(SeekFrom::Start(0))?;
+    let prefix = read_blob_header(file, att)?;
+    let mut digest = Sha256::new();
+    for counter in 0..chunk_count(att.size as u64) {
+        let plain = Zeroizing::new(read_chunk(file, att, key, &prefix, counter)?);
+        digest.update(&*plain);
+    }
+    if HEXLOWER.encode(&digest.finalize()) != att.sha256 {
+        return Err(corrupt(&att.id, "content does not match its row"));
+    }
+    Ok(())
 }
 
 /// Opens a blob and checks it against its row before any chunk is read: the
@@ -531,7 +562,12 @@ fn open_blob(dir: &Path, att: &Attachment) -> Result<(File, [u8; PREFIX_LEN])> {
     let mut file = crate::fs_boundary::Directory::open(dir)
         .and_then(|root| root.open_regular(&path))
         .map_err(|_| corrupt(&att.id, "blob file is missing or unsafe"))?;
-    if file.metadata()?.len() != expected_len(att.size) {
+    let prefix = read_blob_header(&mut file, att)?;
+    Ok((file, prefix))
+}
+
+fn read_blob_header(file: &mut File, att: &Attachment) -> Result<[u8; PREFIX_LEN]> {
+    if att.size < 0 || file.metadata()?.len() != expected_len(att.size) {
         return Err(corrupt(&att.id, "blob file has the wrong length"));
     }
     let mut header = [0u8; HEADER_LEN as usize];
@@ -540,7 +576,7 @@ fn open_blob(dir: &Path, att: &Attachment) -> Result<(File, [u8; PREFIX_LEN])> {
         return Err(corrupt(&att.id, "blob header is not ours"));
     }
     let prefix: [u8; PREFIX_LEN] = header[9..].try_into().expect("prefix length");
-    Ok((file, prefix))
+    Ok(prefix)
 }
 
 /// Reads and decrypts the chunk the file is currently positioned at.

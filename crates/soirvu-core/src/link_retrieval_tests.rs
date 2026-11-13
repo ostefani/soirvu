@@ -8,13 +8,11 @@
 //! must filter, and the sub-3-character query limits that force the
 //! `title_key` prefix tier. All assertions pass on the current code.
 
-use soirvu_core::Vault;
-use soirvu_core::crypto::KdfParams;
-use soirvu_core::entries::EntryDraft;
+use crate::Vault;
+use crate::crypto::KdfParams;
+use crate::entries::EntryDraft;
 use tempfile::TempDir;
 
-/// Production-strength KDF: integration tests link the normally-compiled
-/// lib, so the `#[cfg(test)]` millisecond floor does not apply here.
 fn fast() -> KdfParams {
     KdfParams {
         m_kib: 64 * 1024,

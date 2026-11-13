@@ -165,10 +165,11 @@ impl Directory {
         #[cfg(unix)]
         let mut file = dir.open_at(
             &c_name(temp)?,
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
         )?;
         #[cfg(not(unix))]
         let mut file = fs::OpenOptions::new()
+            .read(true)
             .write(true)
             .create_new(true)
             .open(dir.path.join(temp))?;

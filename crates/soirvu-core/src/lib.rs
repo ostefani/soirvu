@@ -9,6 +9,8 @@ pub mod folder;
 pub mod folders;
 mod fs_boundary;
 pub mod import;
+#[cfg(test)]
+mod link_retrieval_tests;
 pub mod storage;
 pub mod sync;
 pub mod vault;
