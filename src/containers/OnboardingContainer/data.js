@@ -33,6 +33,7 @@ export const onboardingText = {
 
     // System error translations
     errors: {
+        busy: 'Another vault operation is in progress. Try again when it finishes.',
         not_a_vault:
             'That folder does not hold a diary. Create the new diary in an empty folder, or open the folder with the diary files.',
         folder_not_empty:

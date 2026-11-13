@@ -393,8 +393,35 @@ impl VaultHeader {
         Ok(serde_json::to_vec(self)?)
     }
 
+    /// Reads a regular header file without trusting its reported length.
+    pub fn read_file(path: &std::path::Path) -> Result<Self> {
+        use std::io::Read;
+        if !std::fs::metadata(path)?.is_file() {
+            return Err(Error::InvalidInput("vault header must be a regular file".into()));
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NONBLOCK);
+        }
+        let file = options.open(path)?;
+        if !file.metadata()?.is_file() {
+            return Err(Error::InvalidInput("vault header must be a regular file".into()));
+        }
+        let mut bytes = Vec::new();
+        file.take(Self::MAX_HEADER_BYTES as u64 + 1).read_to_end(&mut bytes)?;
+        Self::from_json(&bytes)
+    }
+
+    const MAX_HEADER_BYTES: usize = 64 * 1024;
+
     /// Reads and validates a header file.
     pub fn from_json(bytes: &[u8]) -> Result<VaultHeader> {
+        if bytes.len() > Self::MAX_HEADER_BYTES {
+            return Err(Error::InvalidInput("vault header exceeds its size limit".into()));
+        }
         let header: VaultHeader = serde_json::from_slice(bytes)?;
         header.validate()?;
         Ok(header)
@@ -411,6 +438,14 @@ mod tests {
     /// real builds enforce at least 64 MiB and 3 passes.)
     fn fast() -> KdfParams {
         KdfParams { m_kib: 8, t: 1, p: 1 }
+    }
+
+    #[test]
+    fn header_reads_reject_oversized_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("header.json");
+        std::fs::write(&path, vec![b' '; VaultHeader::MAX_HEADER_BYTES + 1]).unwrap();
+        assert!(matches!(VaultHeader::read_file(&path), Err(Error::InvalidInput(_))));
     }
 
     fn new_vault() -> (VaultHeader, RecoveryKey, MasterKey) {

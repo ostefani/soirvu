@@ -22,7 +22,13 @@ use crate::error::{Error, Result};
 use crate::export::civil_from_days;
 use crate::folder::Vault;
 
+const MAX_MARKDOWN_DEPTH: usize = 32;
+const MAX_MARKDOWN_TREE_ITEMS: usize = 20_000;
+const MAX_MARKDOWN_PLAN_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_MARKDOWN_NOTE_BYTES: u64 = crate::entries::MAX_ENTRY_BODY_BYTES as u64 + 64 * 1024;
 const MAX_MARKDOWN_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_IMPORT_RECORDS: usize = 100_000;
+const MAX_MARKDOWN_ASSETS_PER_NOTE: usize = 128;
 const MAX_JSON_IMPORT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ATTACHMENT_IMPORT_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -94,7 +100,8 @@ impl Vault {
     pub fn import_markdown(&mut self, dir: &Path) -> Result<ImportReport> {
         let manifest = load_manifest(dir);
         let mut files = Vec::new();
-        collect_markdown(dir, &mut files);
+        let mut tree_items = MAX_MARKDOWN_TREE_ITEMS;
+        collect_markdown(dir, &mut files, 0, &mut tree_items)?;
         files.sort();
         // Pass 0: manifest folders first, so entries can reference
         // them. Final ids are decided before any row is written:
@@ -175,8 +182,9 @@ impl Vault {
         let mut id_map: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         let mut skipped = 0usize;
+        let mut remaining = MAX_MARKDOWN_PLAN_BYTES;
         for file in &files {
-            let text = match read_bounded(file, MAX_JSON_IMPORT_BYTES)
+            let text = match read_bounded(file, remaining.min(MAX_MARKDOWN_NOTE_BYTES))
                 .and_then(|bytes| String::from_utf8(bytes).map_err(|_| Error::InvalidInput("note must be UTF-8".into())))
             {
                 Ok(text) => text,
@@ -185,6 +193,7 @@ impl Vault {
                     continue;
                 }
             };
+            remaining -= text.len() as u64;
             let (fm, body) = split_front_matter(&text);
             let folder = self.plan_entry_folder(
                 dir,
@@ -205,7 +214,7 @@ impl Vault {
                 _ => {
                     let fresh = Uuid::now_v7().to_string();
                     if let Some(old) = &fm.id {
-                        if !old.is_empty() {
+                        if crate::storage::is_canonical_uuid(old) {
                             id_map.insert(old.clone(), fresh.clone());
                         }
                     }
@@ -235,16 +244,20 @@ impl Vault {
         // their attachments.
         let mut seen_targets: std::collections::HashSet<String> = std::collections::HashSet::new();
         for mut plan in plans {
-            for (old, new) in &id_map {
-                if old != new {
-                    let from = format!("entry:{old}");
-                    let matches = plan.body.matches(&from).count();
-                    if matches > 0 {
-                        plan.body = plan.body.replace(&from, &format!("entry:{new}"));
-                        report.links_remapped += matches;
-                    }
+            let mut rewritten = String::with_capacity(plan.body.len());
+            let mut rest = plan.body.as_str();
+            while let Some(pos) = rest.find("entry:") {
+                let after = pos + "entry:".len();
+                rewritten.push_str(&rest[..after]);
+                rest = &rest[after..];
+                if let Some((old, new)) = rest.get(..36).and_then(|id| id_map.get_key_value(id)) {
+                    rewritten.push_str(new);
+                    report.links_remapped += usize::from(old != new);
+                    rest = &rest[36..];
                 }
             }
+            rewritten.push_str(rest);
+            plan.body = rewritten;
             for target in entry_link_targets(&plan.body) {
                 if !seen_targets.contains(&target)
                     && !id_map.contains_key(&target)
@@ -405,7 +418,9 @@ impl Vault {
         let mut skipped_attachments = 0;
         let mut attachments: Vec<(String, String, Vec<u8>)> = Vec::new();
         let mut remaining = MAX_ATTACHMENT_IMPORT_BYTES;
-        for rel in asset_refs(&body) {
+        let (refs, extra_refs) = asset_refs(&body);
+        skipped_attachments += extra_refs;
+        for rel in refs {
             // No blanket `..` rejection: nested exports legitimately
             // climb to the root `assets/` dir, and `contained_file`
             // already refuses anything that resolves outside it.
@@ -499,6 +514,9 @@ impl Vault {
             serde_json::from_slice(&text)
                 .map_err(|e| Error::InvalidInput(format!("not a SoirVu JSON export: {e}")))?
         };
+        if data.entries.len() + data.folders.len() + data.attachments.len() > MAX_IMPORT_RECORDS {
+            return Err(Error::InvalidInput("JSON import has too many records".into()));
+        }
         if data.format != "soirvu-json-export" || (data.version != 1 && data.version != 2) {
             return Err(Error::InvalidInput(
                 "not a SoirVu JSON export (bad format or version)".into(),
@@ -738,6 +756,9 @@ struct ManifestFolder {
 fn load_manifest(dir: &Path) -> Option<Manifest> {
     let bytes = read_bounded(&dir.join("soirvu-export.json"), MAX_MARKDOWN_MANIFEST_BYTES).ok()?;
     let manifest: Manifest = serde_json::from_slice(&bytes).ok()?;
+    if manifest.folders.len() > MAX_IMPORT_RECORDS {
+        return None;
+    }
     if manifest.format != "soirvu-markdown-export" || manifest.version != 2 {
         return None;
     }
@@ -787,6 +808,7 @@ fn strip_id_suffix(seg: &str) -> String {
 /// caller counts the unresolved rather than parsing Markdown.
 fn entry_link_targets(body: &str) -> Vec<String> {
     let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     let mut rest = body;
     while let Some(pos) = rest.find("entry:") {
         let after = &rest[pos + 6..];
@@ -796,7 +818,7 @@ fn entry_link_targets(body: &str) -> Vec<String> {
         let linked = after.get(..36).filter(|head| Uuid::parse_str(head).is_ok());
         if let Some(head) = linked {
             let id = head.to_string();
-            if !out.contains(&id) {
+            if seen.insert(id.clone()) {
                 out.push(id);
             }
             rest = &after[36..];
@@ -834,11 +856,19 @@ fn contained_file(root: &Path, path: &Path) -> bool {
     canonical_parent.starts_with(canonical_root)
 }
 
-fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(read) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in read.filter_map(|e| e.ok()) {
+fn collect_markdown(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+    depth: usize,
+    remaining: &mut usize,
+) -> Result<()> {
+    if depth > MAX_MARKDOWN_DEPTH {
+        return Err(Error::InvalidInput("Markdown import directory is too deep".into()));
+    }
+    for entry in fs::read_dir(dir)? {
+        *remaining = remaining.checked_sub(1)
+            .ok_or_else(|| Error::InvalidInput("Markdown import has too many directory items".into()))?;
+        let entry = entry?;
         // Never follow symlinks: a linked file outside the root
         // is not part of the import, and a dir loop must not hang
         // the walk.
@@ -853,7 +883,7 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
         }
         let path = entry.path();
         if is_dir {
-            collect_markdown(&path, out);
+            collect_markdown(&path, out, depth + 1, remaining)?;
         } else if is_file
             && path
                 .extension()
@@ -863,6 +893,7 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1078,19 +1109,24 @@ fn first_heading(body: &str) -> Option<String> {
 /// such a path is usable (escapes still count as skipped).
 /// Anything else — `entry:` targets, URLs, sibling notes — is not
 /// an asset and is left alone.
-fn asset_refs(body: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+fn asset_refs(body: &str) -> (Vec<String>, usize) {
+    let mut out = Vec::new();
+    let mut extra = 0;
     let mut rest = body;
     while let Some(pos) = rest.find("](") {
         let after = &rest[pos + 2..];
         let Some(end) = after.find(')') else { break };
         let dest = after[..end].split_whitespace().next().unwrap_or("");
         if is_asset_dest(dest) && !out.iter().any(|d| d == dest) {
-            out.push(dest.to_string());
+            if out.len() < MAX_MARKDOWN_ASSETS_PER_NOTE {
+                out.push(dest.to_string());
+            } else {
+                extra += 1;
+            }
         }
         rest = &after[end..];
     }
-    out
+    (out, extra)
 }
 
 /// An asset destination: `assets/…`, optionally reached through
@@ -1801,6 +1837,16 @@ mod tests {
             fs::read(output.join("assets").join(format!("{}-note.txt", attachment.id))).unwrap(),
             b"note bytes"
         );
+    }
+
+    #[test]
+    fn markdown_inventory_counts_non_note_items_and_bounds_depth() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("ignored.txt"), "").unwrap();
+        assert!(collect_markdown(tmp.path(), &mut Vec::new(), 0, &mut 0).is_err());
+        let child = tmp.path().join("child");
+        fs::create_dir(&child).unwrap();
+        assert!(collect_markdown(tmp.path(), &mut Vec::new(), MAX_MARKDOWN_DEPTH, &mut 10).is_err());
     }
 
     #[test]

@@ -181,9 +181,7 @@ fn create(dir: &Path) -> Result<(), RunError> {
 }
 
 fn header_info(dir: &Path) -> Result<(), RunError> {
-    let bytes = std::fs::read(dir.join(HEADER_FILE))
-        .map_err(|e| RunError::Failed(format!("cannot read the vault header: {e}")))?;
-    let header = VaultHeader::from_json(&bytes).map_err(failed)?;
+    let header = VaultHeader::read_file(&dir.join(HEADER_FILE)).map_err(failed)?;
     println!("format version: {}", header.format_version);
     println!("suite: {}", header.suite);
     println!("vault id: {}", header.vault_id);

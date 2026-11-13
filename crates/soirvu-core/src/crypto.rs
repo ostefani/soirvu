@@ -128,6 +128,19 @@ fn passphrase_bytes(passphrase: &str) -> Zeroizing<Vec<u8>> {
 /// Deliberately slow: this is what makes password guessing expensive.
 pub fn derive_kek(passphrase: &str, salt: &[u8], params: &KdfParams) -> Result<Key> {
     params.check()?;
+    // Preserve header compatibility and recovery-key access, while refusing
+    // to allocate more than the maximum that SoirVu calibrates locally.
+    if params.m_kib > 1024 * 1024
+        || u64::from(params.m_kib) * u64::from(params.t) > 4 * 1024 * 1024
+        || passphrase.len() > 64 * 1024
+    {
+        return Err(Error::BadKdfParams("passphrase or KDF exceeds the local work limit".into()));
+    }
+    #[cfg(not(test))]
+    static DERIVATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[cfg(not(test))]
+    let _permit = DERIVATION.lock()
+        .map_err(|_| Error::BadKdfParams("key derivation is unavailable".into()))?;
     let argon_params = Params::new(params.m_kib, params.t, params.p, Some(KEY_LEN))
         .map_err(|e| Error::BadKdfParams(e.to_string()))?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);

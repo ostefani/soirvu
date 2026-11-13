@@ -56,6 +56,9 @@ Open SoirVu, choose a location for your vault and create a passphrase. Save the 
 - Diary import retains unrecognized attachment formats for export and reports them separately.
 - JSON imports allow up to 512 MiB per file and 256 MiB per decoded attachment. Markdown imports allow up to 256 MiB of linked attachments per note. Imports skip attachments beyond those limits and reject an oversized JSON file before parsing.
 - Inline previews respect the current per-type attachment limits. Files above those limits remain available through external opening for supported formats or through export.
+- Markdown planning accepts at most 20,000 directory items, 32 levels below the root and 64 MiB of note text per import. New entry writes and incoming sync records allow up to 4 MiB of body text, a 4 KiB title and 128 tags.
+- Inline attachment responses are limited to 8 MiB. Larger previews require a webview that requests byte ranges. Supported files can still open externally.
+- Passphrase operations accept vaults with up to 1 GiB of Argon2 memory and a combined memory-times-passes budget of 4 GiB-passes. Vaults with higher parameters can still be read using their recovery key.
 
 ## Security model
 

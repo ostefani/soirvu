@@ -74,15 +74,13 @@ pub(crate) async fn pick_file(app: &AppHandle) -> Option<PathBuf> {
 /// from hanging or exhausting memory. A folder without a readable
 /// header is not a vault.
 fn read_vault_id(path: &std::path::Path) -> Result<String, AppError> {
-    const MAX_HEADER: u64 = 64 * 1024;
-    let not_a_vault = || AppError::Code("not_a_vault".into());
-    let header_path = path.join("vault.header.json");
-    let meta = std::fs::metadata(&header_path).map_err(|_| not_a_vault())?;
-    if !meta.is_file() || meta.len() > MAX_HEADER {
-        return Err(not_a_vault());
-    }
-    let bytes = std::fs::read(&header_path).map_err(|_| not_a_vault())?;
-    let header = VaultHeader::from_json(&bytes)?;
+    let header = VaultHeader::read_file(&path.join("vault.header.json")).map_err(|error| {
+        match error {
+            soirvu_core::Error::Io(_) | soirvu_core::Error::InvalidInput(_) =>
+                AppError::Code("not_a_vault".into()),
+            error => AppError::from(error),
+        }
+    })?;
     Ok(header.vault_id)
 }
 
@@ -351,12 +349,19 @@ pub async fn vault_pick_folder(
     }
 }
 
+// Reject excess interactive KDF jobs before they enter the blocking pool.
+pub(super) static INTERACTIVE_KDF: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
 #[tauri::command]
 pub async fn vault_create(
     app: AppHandle,
     state: State<'_, AppState>,
     mut passphrase: String,
 ) -> Result<Created, String> {
+    let Ok(permit) = INTERACTIVE_KDF.try_acquire() else {
+        passphrase.zeroize();
+        return Err("busy".into());
+    };
     let path = match state.take_pending_create() {
         Ok(path) => path,
         Err(e) => {
@@ -375,6 +380,7 @@ pub async fn vault_create(
     let task_device = device_id.clone();
     let mut task_passphrase = passphrase.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
         let result = (|| {
             let kdf = KdfParams::calibrate(Duration::from_millis(750))?;
             let pair = Vault::create_with_device(&task_path, &task_passphrase, kdf, &task_device)?;
@@ -413,6 +419,10 @@ pub async fn vault_unlock(
         secret.zeroize();
         return Err("invalid_input".into());
     }
+    let Ok(permit) = INTERACTIVE_KDF.try_acquire() else {
+        secret.zeroize();
+        return Err("busy".into());
+    };
     let path = match state.vault_path(&vault_id) {
         Ok(path) => path,
         Err(e) => {
@@ -436,6 +446,7 @@ pub async fn vault_unlock(
     let mut task_secret = secret.clone();
     let task_assignment = assignment.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
         let opened = match (kind.as_str(), task_assignment.as_deref()) {
             ("passphrase", Some(device)) => {
                 Vault::open_with_passphrase_as(&path, &task_secret, device)
@@ -713,8 +724,7 @@ pub async fn touch_id_status(
             Some(id) => state
                 .vault_path(id)
                 .ok()
-                .and_then(|path| std::fs::read(path.join("vault.header.json")).ok())
-                .and_then(|bytes| VaultHeader::from_json(&bytes).ok())
+                .and_then(|path| VaultHeader::read_file(&path.join("vault.header.json")).ok())
                 .map(|header| header.has_device_slot())
                 .unwrap_or(false),
             // Settings asks about the open vault.
@@ -854,7 +864,12 @@ pub struct Forked {
 /// nothing; the pending copy stays pending.
 #[tauri::command]
 pub async fn vault_fork_import(app: AppHandle, mut passphrase: String) -> Result<Forked, String> {
+    let Ok(permit) = INTERACTIVE_KDF.try_acquire() else {
+        passphrase.zeroize();
+        return Err("busy".into());
+    };
     crate::commands::run_blocking_state(app, move |state| {
+        let _permit = permit;
         let result = (|| -> Result<Forked, AppError> {
             let dest = state
                 .pending_fork()
@@ -886,7 +901,13 @@ pub async fn vault_change_passphrase(
     current_passphrase: String,
     new_passphrase: String,
 ) -> Result<(), String> {
+    let Ok(permit) = INTERACTIVE_KDF.try_acquire() else {
+        drop(zeroize::Zeroizing::new(current_passphrase));
+        drop(zeroize::Zeroizing::new(new_passphrase));
+        return Err("busy".into());
+    };
     crate::commands::run_blocking_state(app, move |state| {
+        let _permit = permit;
         let mut current = current_passphrase;
         let mut new = new_passphrase;
         let result = state.with_vault(|vault| {
@@ -907,7 +928,12 @@ pub async fn vault_regenerate_recovery(
     app: AppHandle,
     current_passphrase: String,
 ) -> Result<String, String> {
+    let Ok(permit) = INTERACTIVE_KDF.try_acquire() else {
+        drop(zeroize::Zeroizing::new(current_passphrase));
+        return Err("busy".into());
+    };
     crate::commands::run_blocking_state(app, move |state| {
+        let _permit = permit;
         let mut current = current_passphrase;
         let result = state.with_vault(|vault| {
             let recovery = vault.regenerate_recovery(&current)?;
@@ -979,6 +1005,10 @@ pub async fn vault_rotate_master_key(
     if !confirm_rotate(&app).await {
         return Ok(None);
     }
+    let Ok(permit) = INTERACTIVE_KDF.try_acquire() else {
+        drop(zeroize::Zeroizing::new(current_passphrase));
+        return Err("busy".into());
+    };
     // The decision is made and the work starts now — the UI
     // shows its progress indicator on this event, never
     // before (a spinner behind the confirmation dialog would
@@ -987,6 +1017,7 @@ pub async fn vault_rotate_master_key(
     let _ = app.emit("rotation-started", ());
     let passphrase = zeroize::Zeroizing::new(current_passphrase);
     let recovery_text = crate::commands::run_blocking_state(app, move |state| {
+        let _permit = permit;
         let paths = rotation_paths(state).map_err(|e| e.to_ipc())?;
         if paths.1.exists() {
             let _ = std::fs::remove_dir_all(&paths.1);

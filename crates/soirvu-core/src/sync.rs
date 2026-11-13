@@ -2008,6 +2008,9 @@ fn validate_bundle_records(bundle: &Bundle) -> std::result::Result<(), &'static 
         {
             return Err("entry id or device id is invalid");
         }
+        if !crate::entries::entry_within_limits(entry.title.as_deref(), entry.body_md.as_deref(), entry.tags.len()) {
+            return Err("entry exceeds its size or tag limit");
+        }
         if entry.rev < 1 || entry.base_rev < 0 {
             return Err("entry revision is invalid");
         }

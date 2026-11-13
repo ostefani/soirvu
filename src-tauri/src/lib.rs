@@ -64,7 +64,19 @@ pub fn run() {
                 .get(tauri::http::header::RANGE)
                 .and_then(|v| v.to_str().ok())
                 .map(|v| v.to_string());
+            static ASSET_REQUESTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+            let Ok(permit) = ASSET_REQUESTS.try_acquire() else {
+                responder.respond(
+                    tauri::http::Response::builder()
+                        .status(503)
+                        .header("Cache-Control", "no-store")
+                        .body(Vec::<u8>::new())
+                        .expect("valid overload response"),
+                );
+                return;
+            };
             tauri::async_runtime::spawn(async move {
+                let _permit = permit;
                 let answer = tauri::async_runtime::spawn_blocking(move || {
                     if soirvu_core::attachments::validate_attachment_id(&id).is_err() {
                         crate::commands::attachments::AssetResponse {

@@ -8,7 +8,7 @@
 //!   └── attachments/ab/<id> encrypted attachment blobs, sharded by id prefix
 
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::crypto::{DeviceSecret, KdfParams, Key, MasterKey, RecoveryKey};
@@ -437,8 +437,7 @@ fn remove_our_files(dir: &Path) {
 }
 
 fn read_header(dir: &Path) -> Result<VaultHeader> {
-    let bytes = fs::read(dir.join(HEADER_FILE))?;
-    VaultHeader::from_json(&bytes)
+    VaultHeader::read_file(&dir.join(HEADER_FILE))
 }
 
 /// Finishes a fork that died between the database write and the
@@ -460,13 +459,10 @@ fn set_marker_aside(dir: &Path, marker: &Path) {
 
 fn complete_interrupted_fork(dir: &Path, db: &Database) -> Result<Option<VaultHeader>> {
     let marker = dir.join(FORK_MARKER);
-    let bytes = match fs::read(&marker) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    let header = match VaultHeader::from_json(&bytes) {
+    let header = match VaultHeader::read_file(&marker) {
         Ok(header) => header,
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(Error::Io(error)) => return Err(error.into()),
         Err(_) => {
             set_marker_aside(dir, &marker);
             return Ok(None);
@@ -476,7 +472,7 @@ fn complete_interrupted_fork(dir: &Path, db: &Database) -> Result<Option<VaultHe
         set_marker_aside(dir, &marker);
         return Ok(None);
     }
-    write_atomic(&dir.join(HEADER_FILE), &bytes)?;
+    write_atomic(&dir.join(HEADER_FILE), &header.to_json()?)?;
     let _ = fs::remove_file(&marker);
     Ok(Some(header))
 }

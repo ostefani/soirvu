@@ -160,8 +160,10 @@ async fn run_export(
         return Ok(None);
     };
     let pass = Zeroizing::new(passphrase);
+    let permit = super::vault::INTERACTIVE_KDF.try_acquire().map_err(|_| "busy".to_string())?;
     let joined =
         tauri::async_runtime::spawn_blocking(move || -> crate::error::AppResult<ExportOutcome> {
+            let _permit = permit;
             let vault = Vault::open_with_passphrase(&src, &pass)?;
             if json {
                 let file = dir.join("soirvu-export.json");
