@@ -75,8 +75,18 @@ pub fn run() {
                 );
                 return;
             };
+            let Ok(session) = app.state::<crate::state::AppState>().session() else {
+                responder.respond(tauri::http::Response::builder()
+                    .status(403)
+                    .header("Cache-Control", "no-store")
+                    .body(Vec::<u8>::new())
+                    .expect("valid locked response"));
+                return;
+            };
             tauri::async_runtime::spawn(async move {
                 let _permit = permit;
+                let worker_app = app.clone();
+                let worker_session = session.clone();
                 let answer = tauri::async_runtime::spawn_blocking(move || {
                     if soirvu_core::attachments::validate_attachment_id(&id).is_err() {
                         crate::commands::attachments::AssetResponse {
@@ -85,8 +95,8 @@ pub fn run() {
                             body: Vec::new(),
                         }
                     } else {
-                        let state = app.state::<crate::state::AppState>();
-                        crate::commands::attachments::serve_asset(&state, &id, range.as_deref())
+                        let state = worker_app.state::<crate::state::AppState>();
+                        crate::commands::attachments::serve_asset(&state, &worker_session, &id, range.as_deref())
                     }
                 })
                 .await
@@ -95,15 +105,25 @@ pub fn run() {
                     headers: vec![("Content-Length".into(), "0".into())],
                     body: Vec::new(),
                 });
-                let mut builder = tauri::http::Response::builder().status(answer.status);
-                for (name, value) in &answer.headers {
-                    builder = builder.header(name.as_str(), value.as_str());
-                }
-                responder.respond(
-                    builder
-                        .body(answer.body)
-                        .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
-                );
+                let _ = tauri::async_runtime::spawn_blocking(move || {
+                    app.state::<crate::state::AppState>().deliver_session(&session, |current| {
+                        let mut answer = answer;
+                        if !current {
+                            use zeroize::Zeroize;
+                            answer.body.zeroize();
+                            answer.status = 403;
+                            answer.headers = vec![("Cache-Control".into(), "no-store".into())];
+                        }
+                        let mut builder = tauri::http::Response::builder().status(answer.status);
+                        for (name, value) in &answer.headers {
+                            builder = builder.header(name.as_str(), value.as_str());
+                        }
+                        responder.respond(
+                            builder.body(answer.body)
+                                .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
+                        );
+                    });
+                }).await;
             });
         })
         .setup(|app| {

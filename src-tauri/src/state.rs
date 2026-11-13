@@ -176,10 +176,19 @@ pub struct VaultInfo {
     pub state: String,
 }
 
+/// Rust-only grant for a particular unlocked vault instance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VaultSession {
+    pub(crate) vault_id: String,
+    generation: u64,
+}
+
 struct Inner {
     status: Status,
     vault: Option<Vault>,
     current: Option<String>,
+    generation: u64,
+    unlock_cancelled: bool,
     config: AppConfig,
     last_activity: Instant,
     unlock_failures: u32,
@@ -301,6 +310,8 @@ impl AppState {
                 status: Status::Unavailable,
                 vault: None,
                 current: None,
+                generation: 0,
+                unlock_cancelled: false,
                 config,
                 last_activity: Instant::now(),
                 unlock_failures: 0,
@@ -432,14 +443,16 @@ impl AppState {
 
     /// Stores (or clears) a vault's sync folder, chosen
     /// through the native picker. Only Rust sees the path.
-    pub fn set_sync_dir(&self, vault_id: &str, dir: Option<PathBuf>) -> AppResult<()> {
+    pub(crate) fn set_sync_dir(&self, session: &VaultSession, dir: Option<PathBuf>) -> AppResult<()> {
         let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
+        Self::check_session(&inner, session)?;
+        let vault_id = &session.vault_id;
         let entry = inner
             .config
             .vaults
             .iter_mut()
-            .find(|v| v.id == vault_id)
+            .find(|v| &v.id == vault_id)
             .ok_or_else(|| AppError::Code("vault_not_found".into()))?;
         entry.sync_dir = dir;
         self.save_config(&inner)
@@ -493,22 +506,21 @@ impl AppState {
     /// Persists and applies an identity change as one serialized vault
     /// operation. Persistence precedes the core write so an interrupted
     /// update converges to the assigned identity on the next open.
-    pub fn restamp_current_device(&self, device_id: String) -> AppResult<()> {
+    pub(crate) fn restamp_current_device(
+        &self,
+        session: &VaultSession,
+        device_id: String,
+    ) -> AppResult<()> {
         let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
-        if inner.status != Status::Unlocked {
-            return Err(AppError::Code("locked".into()));
-        }
-        let vault_id = inner
-            .current
-            .clone()
-            .ok_or_else(|| AppError::Code("locked".into()))?;
+        Self::check_session(&inner, session)?;
+        let vault_id = &session.vault_id;
         let previous = inner.config.clone();
         let entry = inner
             .config
             .vaults
             .iter_mut()
-            .find(|entry| entry.id == vault_id)
+            .find(|entry| &entry.id == vault_id)
             .ok_or_else(|| AppError::Code("vault_not_found".into()))?;
         entry.device_id = Some(device_id.clone());
         if let Err(error) = self.save_config(&inner) {
@@ -706,7 +718,11 @@ impl AppState {
     /// Locked ──► Unlocking. Enforces the failure backoff (§6.2):
     /// after each failed unlock the wait doubles, capped at 30 s.
     pub fn begin_unlock(&self, vault_id: &str) -> AppResult<()> {
+        let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
+        if !matches!(inner.status, Status::Locked | Status::Unavailable) {
+            return Err(AppError::Code("busy".into()));
+        }
         if let Some(until) = inner.backoff_until {
             if Instant::now() < until {
                 let secs = (until - Instant::now()).as_secs() + 1;
@@ -714,6 +730,7 @@ impl AppState {
             }
         }
         inner.current = Some(vault_id.to_string());
+        inner.unlock_cancelled = false;
         inner.status = Status::Unlocking;
         Ok(())
     }
@@ -730,14 +747,24 @@ impl AppState {
     /// `Unlocking` at this point, and leaving it there would wedge
     /// every later guard until the next attempt.
     pub fn unlock_ok(&self, vault: Vault) -> AppResult<()> {
+        let _operation = self.lock_vault_operations();
         let opened_id = vault.header().vault_id.clone();
         let mut inner = self.inner.lock().unwrap();
+        if inner.status != Status::Unlocking || inner.unlock_cancelled {
+            if inner.status == Status::Unlocking {
+                inner.status = Status::Locked;
+            }
+            drop(inner);
+            vault.lock();
+            return Err(AppError::Code("locked".into()));
+        }
         if inner.current.as_deref() != Some(opened_id.as_str()) {
             inner.status = Status::Locked;
             drop(inner);
             vault.lock();
             return Err(AppError::from(soirvu_core::Error::VaultMismatch));
         }
+        inner.generation = inner.generation.wrapping_add(1);
         inner.vault = Some(vault);
         inner.status = Status::Unlocked;
         inner.last_activity = Instant::now();
@@ -754,8 +781,12 @@ impl AppState {
     /// were just derived here, there is nothing to re-ask.
     pub fn adopt_created(&self, vault: Vault, vault_id: &str) {
         let _operation = self.lock_vault_operations();
+        let _ = self.clear_opened();
         let mut inner = self.inner.lock().unwrap();
+        inner.uploads.clear();
+        inner.upload_bytes = 0;
         inner.current = Some(vault_id.to_string());
+        inner.generation = inner.generation.wrapping_add(1);
         inner.vault = Some(vault);
         inner.status = Status::Unlocked;
         inner.last_activity = Instant::now();
@@ -768,12 +799,21 @@ impl AppState {
     /// guess, and the §6.2 backoff is for guesses).
     pub fn unlock_aborted(&self) {
         let mut inner = self.inner.lock().unwrap();
+        if inner.status != Status::Unlocking {
+            return;
+        }
         inner.status = Status::Locked;
     }
 
     pub fn unlock_failed(&self) {
         let mut inner = self.inner.lock().unwrap();
+        if inner.status != Status::Unlocking {
+            return;
+        }
         inner.status = Status::Locked;
+        if inner.unlock_cancelled {
+            return;
+        }
         inner.unlock_failures += 1;
         let wait = Duration::from_secs((1u64 << inner.unlock_failures.min(5)).min(30));
         inner.backoff_until = Some(Instant::now() + wait);
@@ -879,32 +919,37 @@ impl AppState {
     }
 
     /// Begin a lock handshake. None if not Unlocked or one is pending.
-    pub fn begin_lock(&self) -> Option<u64> {
-        if self.status() != Status::Unlocked {
-            return None;
-        }
-        self.handshake.begin()
+    pub(crate) fn begin_lock(&self, session: &VaultSession) -> Option<(u64, bool)> {
+        let inner = self.inner.lock().unwrap();
+        Self::check_session(&inner, session).ok()?;
+        self.handshake.begin().map(|generation| (generation, true))
+            .or_else(|| self.handshake.pending().map(|generation| (generation, false)))
     }
 
     /// Lock only if still Unlocked. Returns true if this call locked.
     /// A trigger that joined someone else's wait uses this, so the
     /// window is reloaded once, not once per trigger.
-    pub fn lock_once(&self) -> AppResult<bool> {
+    pub(crate) fn lock_session(&self, session: &VaultSession) -> AppResult<bool> {
         let _serial = self
             .lock_serial
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.status() != Status::Unlocked {
+        let _operation = self.lock_vault_operations();
+        if Self::check_session(&self.inner.lock().unwrap(), session).is_err() {
             return Ok(false);
         }
-        self.lock()?;
+        self.lock_under_gate()?;
         Ok(true)
     }
 
-    /// Unlocked ──► Locking ──► Locked (or Unavailable if the vault
-    /// folder is gone). Zeroizes the keys via the core's lock().
+    /// Zeroize the open vault and remove the session's plaintext copies.
+    #[cfg(test)]
     pub fn lock(&self) -> AppResult<()> {
         let _operation = self.lock_vault_operations();
+        self.lock_under_gate()
+    }
+
+    fn lock_under_gate(&self) -> AppResult<()> {
         let mut inner = self.inner.lock().unwrap();
         // A direct lock supersedes any pending handshake: the keys
         // drop now, so a late ack must not end a later wait.
@@ -912,6 +957,9 @@ impl AppState {
         inner.uploads.clear();
         inner.upload_bytes = 0;
         if inner.vault.is_none() {
+            if inner.status == Status::Unlocking {
+                inner.unlock_cancelled = true;
+            }
             drop(inner);
             return self.clear_opened();
         }
@@ -956,7 +1004,9 @@ impl AppState {
     /// since this stamp, not since unlock.
     pub fn note_activity(&self) {
         let mut inner = self.inner.lock().unwrap();
-        inner.last_activity = Instant::now();
+        if inner.status == Status::Unlocked {
+            inner.last_activity = Instant::now();
+        }
     }
 
     /// THE guard (§6.2). Every vault-touching command runs its work
@@ -966,26 +1016,73 @@ impl AppState {
     /// I/O error. Returns true when it locked. The watcher calls
     /// this every few seconds; with_vault checks too.
     pub fn lock_if_current_missing(&self) -> bool {
-        let gone = {
-            let inner = self.inner.lock().unwrap();
-            if inner.status != Status::Unlocked {
-                return false;
-            }
-            match &inner.current {
-                Some(id) => inner
-                    .config
-                    .vaults
-                    .iter()
-                    .find(|v| &v.id == id)
-                    .map(|v| availability_of(&v.path) != "available")
-                    .unwrap_or(false),
-                None => false,
-            }
+        let Ok(session) = self.session() else {
+            return false;
         };
-        if gone {
-            let _ = self.lock();
+        let gone = self.vault_path(&session.vault_id)
+            .is_ok_and(|path| availability_of(&path) != "available");
+        gone && !matches!(self.lock_session(&session), Ok(false))
+    }
+
+    /// Get the session to lock, or cancel an authentication still in progress.
+    pub(crate) fn session_to_lock(&self) -> Option<VaultSession> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.status {
+            Status::Unlocking => {
+                inner.unlock_cancelled = true;
+                None
+            }
+            Status::Unlocked => Some(VaultSession {
+                vault_id: inner.current.clone().expect("Unlocked implies a vault ID"),
+                generation: inner.generation,
+            }),
+            _ => None,
         }
-        gone
+    }
+
+    pub(crate) fn session(&self) -> AppResult<VaultSession> {
+        let inner = self.inner.lock().unwrap();
+        if inner.status != Status::Unlocked {
+            return Err(AppError::Code("locked".into()));
+        }
+        Ok(VaultSession {
+            vault_id: inner.current.clone().expect("Unlocked implies a vault ID"),
+            generation: inner.generation,
+        })
+    }
+
+    fn check_session(inner: &Inner, session: &VaultSession) -> AppResult<()> {
+        if inner.status != Status::Unlocked
+            || inner.generation != session.generation
+            || inner.current.as_deref() != Some(&session.vault_id)
+        {
+            return Err(AppError::Code("locked".into()));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn with_session<T>(
+        &self,
+        session: &VaultSession,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T> {
+        if self.lock_if_current_missing() {
+            return Err(AppError::Code("vault_unavailable".into()));
+        }
+        let _operation = self.lock_vault_operations();
+        Self::check_session(&self.inner.lock().unwrap(), session)?;
+        self.with_vault_locked(work)
+    }
+
+    /// Hand off plaintext while lock and session replacement are excluded.
+    pub(crate) fn deliver_session(
+        &self,
+        session: &VaultSession,
+        deliver: impl FnOnce(bool),
+    ) {
+        let _operation = self.lock_vault_operations();
+        let current = Self::check_session(&self.inner.lock().unwrap(), session).is_ok();
+        deliver(current);
     }
 
     pub fn with_vault<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
@@ -1000,6 +1097,7 @@ impl AppState {
 
     /// Runs a complete multi-step operation while excluding every other
     /// vault operation and lock transition.
+    #[cfg(test)]
     pub fn with_vault_exclusive<T>(
         &self,
         work: impl FnOnce(&mut Vault) -> AppResult<T>,
@@ -1014,8 +1112,9 @@ impl AppState {
     /// Runs a final authenticated vault migration, locks the in-memory vault,
     /// wipes opened plaintext, and performs the filesystem swap before any
     /// competing vault operation can start.
-    pub fn with_vault_exclusive_then_lock<T>(
+    pub(crate) fn with_vault_exclusive_then_lock<T>(
         &self,
+        session: &VaultSession,
         expected_vault_path: &std::path::Path,
         work: impl FnOnce(&mut Vault) -> AppResult<T>,
         after_lock: impl FnOnce() -> AppResult<()>,
@@ -1026,9 +1125,7 @@ impl AppState {
         let _operation = self.lock_vault_operations();
         let mut vault = {
             let mut inner = self.inner.lock().unwrap();
-            if inner.status != Status::Unlocked {
-                return Err(AppError::Code("locked".into()));
-            }
+            Self::check_session(&inner, session)?;
             let current_matches = inner
                 .current
                 .as_ref()
@@ -1078,7 +1175,6 @@ impl AppState {
             if inner.status != Status::Unlocked {
                 return Err(AppError::Code("locked".into()));
             }
-            inner.last_activity = Instant::now();
             VaultLease {
                 state: self,
                 vault: Some(inner.vault.take().expect("Unlocked implies a vault")),
@@ -1149,6 +1245,53 @@ mod tests {
     }
 
     #[test]
+    fn stale_session_cannot_write_deliver_or_lock_after_reopening_same_vault() {
+        let (dir, state, id) = state_with_vault();
+        let old = state.session().unwrap();
+        state.lock().unwrap();
+        assert!(state.session().is_err());
+        state.begin_unlock(&id).unwrap();
+        let vault = Vault::open_with_passphrase(&dir.path().join("vault"), "pass").unwrap();
+        state.unlock_ok(vault).unwrap();
+
+        let current = state.session().unwrap();
+        assert_ne!(old, current);
+        assert!(state.with_session::<()>(&old, |_| panic!("stale write ran")).is_err());
+        assert!(state.set_sync_dir(&old, Some(dir.path().join("sync"))).is_err());
+        state.deliver_session(&old, |allowed| assert!(!allowed));
+        state.deliver_session(&current, |allowed| assert!(allowed));
+        assert!(!state.lock_session(&old).unwrap());
+        assert!(state.with_session(&current, |_| Ok(())).is_ok());
+    }
+
+    #[test]
+    fn lock_cancels_pending_unlock_adoption() {
+        let (dir, state, id) = state_with_vault();
+        state.lock().unwrap();
+        state.begin_unlock(&id).unwrap();
+        let vault = Vault::open_with_passphrase(&dir.path().join("vault"), "pass").unwrap();
+        assert!(state.session_to_lock().is_none());
+        assert!(state.unlock_ok(vault).is_err());
+        assert_eq!(state.status(), Status::Locked);
+        state.begin_unlock(&id).unwrap();
+    }
+
+    #[test]
+    fn background_reads_do_not_extend_idle_timeout() {
+        let (_dir, state, _id) = state_with_vault();
+        let mut settings = state.settings();
+        settings.lock_timeout_secs = 30;
+        state.set_settings(settings).unwrap();
+        state.inner.lock().unwrap().last_activity = Instant::now() - Duration::from_secs(60);
+        let session = state.session().unwrap();
+        state.with_vault(|_| Ok(())).unwrap();
+        state.with_session(&session, |_| Ok(())).unwrap();
+        assert!(state.idle_expired());
+        state.note_activity();
+        assert!(!state.idle_expired());
+    }
+
+    #[test]
     fn the_guard_refuses_until_unlocked_and_after_lock() {
         let (_dir, state, _id) = state_with_vault();
         // adopt_created leaves it Unlocked: the guard passes.
@@ -1184,6 +1327,7 @@ mod tests {
         .unwrap();
         let swapped = Vault::open_with_passphrase(&path, "other pass").unwrap();
         assert_eq!(swapped.header().vault_id, other_id);
+        state.begin_unlock(&id).unwrap();
         match state.unlock_ok(swapped) {
             Err(AppError::Code(code)) => assert_eq!(code, "vault_mismatch"),
             _ => panic!("a swapped folder must refuse with vault_mismatch"),
@@ -1399,7 +1543,7 @@ mod tests {
         assert_eq!(stored_sync_dir(&state, &id), None);
         assert_eq!(state.settings().sync_location, None);
         let sync = dir.path().join("sync-folder");
-        state.set_sync_dir(&id, Some(sync.clone())).unwrap();
+        state.set_sync_dir(&state.session().unwrap(), Some(sync.clone())).unwrap();
         assert_eq!(stored_sync_dir(&state, &id), Some(sync));
         assert_eq!(state.current_sync_dir(), stored_sync_dir(&state, &id));
         assert_eq!(
@@ -1411,7 +1555,7 @@ mod tests {
             stored_sync_dir(&reloaded, &id),
             stored_sync_dir(&state, &id)
         );
-        state.set_sync_dir(&id, None).unwrap();
+        state.set_sync_dir(&state.session().unwrap(), None).unwrap();
         assert_eq!(stored_sync_dir(&state, &id), None);
         assert_eq!(state.settings().sync_location, None);
     }

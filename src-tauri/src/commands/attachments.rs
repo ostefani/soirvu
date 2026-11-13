@@ -12,11 +12,11 @@ use std::io::Read;
 
 use serde::Serialize;
 use soirvu_core::attachments::{sniff_mime, validate_attachment_id};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use zeroize::Zeroize;
 
 use crate::error::{AppError, ipc};
-use crate::state::AppState;
+use crate::state::{AppState, VaultSession};
 
 /// The entry's post-commit revision rides along: the editor
 /// saves against the rev it opened, so without it every save
@@ -118,11 +118,13 @@ pub async fn attachment_finish(
     upload_id: String,
     expected_rev: i64,
 ) -> Result<AttachmentAdded, String> {
+    let session = ipc(app.state::<AppState>().session())?;
     crate::commands::run_blocking_state(app, move |state| {
         let mut upload = ipc(state.take_upload(&upload_id))?;
         let bytes = std::mem::take(&mut upload.bytes);
         ipc(finish_upload(
             state,
+            &session,
             upload.entry_id.clone(),
             upload.name.clone(),
             bytes,
@@ -161,6 +163,7 @@ fn check_base(
 /// file import.
 fn finish_upload(
     state: &AppState,
+    session: &VaultSession,
     entry_id: String,
     name: String,
     bytes: Vec<u8>,
@@ -179,7 +182,7 @@ fn finish_upload(
         bytes.zeroize();
         bytes = zeroize::Zeroizing::new(stripped);
     }
-    let (added, rev) = state.with_vault(|vault| {
+    let (added, rev) = state.with_session(session, |vault| {
         check_base(vault, &entry_id, expected_rev)?;
         let a = vault.add_attachment(&entry_id, &name, mime, &bytes)?;
         let rev = vault.get_entry(&entry_id)?.rev;
@@ -232,6 +235,7 @@ pub async fn attachment_import(
     entry_id: String,
     expected_rev: i64,
 ) -> Result<Option<AttachmentAdded>, String> {
+    let session = ipc(app.state::<AppState>().session())?;
     let Some(path) = pick_file(&app).await else {
         return Ok(None);
     };
@@ -240,13 +244,14 @@ pub async fn attachment_import(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "file".to_string());
     crate::commands::run_blocking_state(app, move |state| {
-        ipc(import_path(state, &entry_id, &path, &name, expected_rev).map(Some))
+        ipc(import_path(state, &session, &entry_id, &path, &name, expected_rev).map(Some))
     })
     .await
 }
 
-pub fn import_path(
+fn import_path(
     state: &AppState,
+    session: &VaultSession,
     entry_id: &str,
     path: &std::path::Path,
     name: &str,
@@ -295,7 +300,7 @@ pub fn import_path(
         let stripped = strip_metadata(&bytes, mime);
         bytes.zeroize();
         let bytes = zeroize::Zeroizing::new(stripped);
-        let (added, rev) = state.with_vault(|vault| {
+        let (added, rev) = state.with_session(session, |vault| {
             check_base(vault, entry_id, expected_rev)?;
             let a = vault.add_attachment(entry_id, name, mime, &bytes)?;
             let rev = vault.get_entry(entry_id)?.rev;
@@ -310,7 +315,7 @@ pub fn import_path(
     }
     let mut source = std::io::Cursor::new(&head[..head_len]).chain(file);
     let mut reader = BoundedAttachmentReader { source: &mut source, remaining: cap };
-    let (added, rev) = state.with_vault(|vault| {
+    let (added, rev) = state.with_session(session, |vault| {
         check_base(vault, entry_id, expected_rev)?;
         let a = vault.add_attachment_from_reader(entry_id, name, mime, &mut reader)
             .map_err(|error| match error {
@@ -381,8 +386,9 @@ pub async fn attachment_open(app: AppHandle, id: String) -> Result<bool, String>
     if validate_attachment_id(&id).is_err() {
         return Err("invalid_input".into());
     }
+    let session = ipc(app.state::<AppState>().session())?;
     crate::commands::run_blocking_state(app, move |state| {
-        ipc(state.with_vault_exclusive(|vault| {
+        ipc(state.with_session(&session, |vault| {
             let path = materialize_open_copy_locked(vault, state, &id)?;
             if crate::platform::open_external(&path.to_string_lossy()).is_err() {
                 let _ = std::fs::remove_file(path);
@@ -489,10 +495,10 @@ fn asset(status: u16, mime: &str, body: Vec<u8>, extra: &[(&str, String)]) -> As
 /// Serves one attachment by id. Locked vault → 403; unknown or
 /// tombstoned id → 404; a satisfiable Range → 206 with exactly those
 /// bytes (§6.4: only the needed chunks are decrypted).
-pub fn serve_asset(state: &AppState, id: &str, range_header: Option<&str>) -> AssetResponse {
+pub(crate) fn serve_asset(state: &AppState, session: &VaultSession, id: &str, range_header: Option<&str>) -> AssetResponse {
     let text = |status: u16, msg: &str| asset(status, "text/plain", msg.as_bytes().to_vec(), &[]);
     let caps = state.settings().caps;
-    let response = state.with_vault(|vault| {
+    let response = state.with_session(session, |vault| {
         let info = vault.get_attachment(id)?;
         let mime = sniff_stored_attachment(vault, id, info.size)?;
         let total = info.size as u64;
@@ -774,6 +780,7 @@ mod tests {
             .rev;
         let added = finish_upload(
             &state,
+            &state.session().unwrap(),
             entry_id.clone(),
             "clip.gif".to_string(),
             b"GIF89a\x01\x00\x01\x00\x00\x00\x00;".to_vec(),
@@ -835,6 +842,7 @@ mod tests {
             .unwrap();
         let refused = finish_upload(
             &state,
+            &state.session().unwrap(),
             entry_id.clone(),
             "clip.gif".to_string(),
             b"GIF89a\x01\x00\x01\x00\x00\x00\x00;".to_vec(),
@@ -854,6 +862,7 @@ mod tests {
         // Retrying against the fresh rev commits.
         let added = finish_upload(
             &state,
+            &state.session().unwrap(),
             entry_id.clone(),
             "clip.gif".to_string(),
             b"GIF89a\x01\x00\x01\x00\x00\x00\x00;".to_vec(),
@@ -900,7 +909,7 @@ mod tests {
             })
             .unwrap();
 
-        let response = super::serve_asset(&state, &synced.id, Some("bytes=0-999999"));
+        let response = super::serve_asset(&state, &state.session().unwrap(), &synced.id, Some("bytes=0-999999"));
         assert_eq!(response.status, 206);
         assert_eq!(response.body, png);
         for (name, value) in [
@@ -917,12 +926,12 @@ mod tests {
             );
         }
         assert_eq!(
-            super::serve_asset(&state, &known.id, Some("bytes=999-")).status,
+            super::serve_asset(&state, &state.session().unwrap(), &known.id, Some("bytes=999-")).status,
             416
         );
-        assert_eq!(super::serve_asset(&state, &pdf.id, None).status, 415);
+        assert_eq!(super::serve_asset(&state, &state.session().unwrap(), &pdf.id, None).status, 415);
 
-        let response = super::serve_asset(&state, &known.id, Some("bytes=1-3"));
+        let response = super::serve_asset(&state, &state.session().unwrap(), &known.id, Some("bytes=1-3"));
         assert_eq!(response.status, 206);
         assert_eq!(response.body, png[1..4]);
         assert!(
@@ -931,7 +940,7 @@ mod tests {
                 .iter()
                 .any(|(name, value)| { name == "Content-Type" && value == "image/png" })
         );
-        assert_eq!(super::serve_asset(&state, &unknown.id, None).status, 415);
+        assert_eq!(super::serve_asset(&state, &state.session().unwrap(), &unknown.id, None).status, 415);
 
         state
             .with_vault(|vault| {
@@ -981,9 +990,9 @@ mod tests {
         }).unwrap();
 
         for range in [None, Some("invalid")] {
-            assert_eq!(super::serve_asset(&state, &id, range).status, 413);
+            assert_eq!(super::serve_asset(&state, &state.session().unwrap(), &id, range).status, 413);
         }
-        let response = super::serve_asset(&state, &id, Some("bytes=0-"));
+        let response = super::serve_asset(&state, &state.session().unwrap(), &id, Some("bytes=0-"));
         assert_eq!(response.status, 206);
         assert_eq!(response.body.len() as u64, super::MAX_ASSET_RESPONSE_BYTES);
     }
@@ -1004,7 +1013,7 @@ mod tests {
         settings.caps.image_mb = 1;
         state.set_settings(settings).unwrap();
         for range in [None, Some("bytes=0-")] {
-            assert_eq!(super::serve_asset(&state, &id, range).status, 413);
+            assert_eq!(super::serve_asset(&state, &state.session().unwrap(), &id, range).status, 413);
         }
         assert!(super::cap_for("video/3gpp", &state.settings().caps).is_some());
         assert!(super::cap_for("video/3gpp2", &state.settings().caps).is_some());

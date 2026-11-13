@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Olha Stefanishyna
 //! open_link and settings (§6.1).
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::oneshot;
 
@@ -101,7 +101,8 @@ pub fn clipboard_note_copy(state: State<'_, AppState>) -> Result<(), String> {
 /// display name; the path never crosses the boundary.
 #[tauri::command]
 pub async fn backup_now(app: AppHandle) -> Result<String, String> {
-    crate::commands::run_blocking_state(app, |state| ipc(crate::backup::make_backup(state))).await
+    let session = ipc(app.state::<AppState>().session())?;
+    crate::commands::run_blocking_state(app, move |state| ipc(crate::backup::make_backup(state, &session))).await
 }
 /// What an export wrote (§8): counts only, plus a display
 /// name for the destination — paths never cross the IPC
@@ -137,34 +138,29 @@ async fn confirm_export(app: &AppHandle) -> bool {
     rx.await.unwrap_or(false)
 }
 
-/// Shared export flow: warning, folder pick, then the work on
-/// a blocking thread against a standalone handle — opening it
-/// with the passphrase IS the §8 re-authentication.
+/// Pending dialogs expire when the originating session ends. Once a
+/// reauthenticated export starts, it finishes before lock can complete.
 async fn run_export(
     app: AppHandle,
     state: State<'_, AppState>,
     passphrase: String,
     json: bool,
 ) -> Result<Option<ExportOutcome>, String> {
-    use soirvu_core::Vault;
     use zeroize::Zeroizing;
 
-    let Some(id) = state.current_id() else {
-        return Err("locked".into());
-    };
-    let src = ipc(state.vault_path(&id))?;
+    let pass = Zeroizing::new(passphrase);
+    let session = ipc(state.session())?;
     if !confirm_export(&app).await {
         return Ok(None);
     }
     let Some(dir) = crate::commands::vault::pick_folder(&app).await else {
         return Ok(None);
     };
-    let pass = Zeroizing::new(passphrase);
     let permit = super::vault::INTERACTIVE_KDF.try_acquire().map_err(|_| "busy".to_string())?;
-    let joined =
-        tauri::async_runtime::spawn_blocking(move || -> crate::error::AppResult<ExportOutcome> {
-            let _permit = permit;
-            let vault = Vault::open_with_passphrase(&src, &pass)?;
+    let result = crate::commands::run_blocking_state(app, move |state| {
+        let _permit = permit;
+        ipc(state.with_session(&session, |vault| {
+            vault.verify_passphrase(&pass)?;
             if json {
                 let file = dir.join("soirvu-export.json");
                 let report = vault.export_json(&file).map_err(|error| match error {
@@ -192,13 +188,10 @@ async fn run_export(
                         .unwrap_or_default(),
                 })
             }
-        })
-        .await;
-    let result = match joined {
-        Ok(inner) => inner,
-        Err(_) => Err(crate::error::AppError::Code("storage".into())),
-    };
-    Ok(Some(ipc(result)?))
+        }))
+    })
+    .await?;
+    Ok(Some(result))
 }
 
 /// §8: the whole diary as Markdown files with front matter,
@@ -257,11 +250,13 @@ impl From<soirvu_core::import::ImportReport> for ImportOutcome {
 /// import module for the id rules.
 #[tauri::command]
 pub async fn import_markdown(app: AppHandle) -> Result<Option<ImportOutcome>, String> {
+    let session = ipc(app.state::<AppState>().session())?;
     let Some(dir) = crate::commands::vault::pick_folder(&app).await else {
         return Ok(None);
     };
     let report = crate::commands::run_blocking_state(app, move |state| {
-        ipc(state.with_vault(|vault| Ok(vault.import_markdown(&dir)?)))
+        let parsed = ipc(soirvu_core::import::MarkdownImport::read(&dir).map_err(Into::into))?;
+        ipc(state.with_session(&session, |vault| Ok(vault.import_parsed_markdown(parsed)?)))
     })
     .await?;
     Ok(Some(report.into()))
@@ -272,11 +267,13 @@ pub async fn import_markdown(app: AppHandle) -> Result<Option<ImportOutcome>, St
 /// are skipped, never overwritten.
 #[tauri::command]
 pub async fn import_json(app: AppHandle) -> Result<Option<ImportOutcome>, String> {
+    let session = ipc(app.state::<AppState>().session())?;
     let Some(file) = crate::commands::vault::pick_file(&app).await else {
         return Ok(None);
     };
     let report = crate::commands::run_blocking_state(app, move |state| {
-        ipc(state.with_vault(|vault| Ok(vault.import_json(&file)?)))
+        let parsed = ipc(soirvu_core::import::JsonImport::read(&file).map_err(Into::into))?;
+        ipc(state.with_session(&session, |vault| Ok(vault.import_parsed_json(parsed)?)))
     })
     .await?;
     Ok(Some(report.into()))

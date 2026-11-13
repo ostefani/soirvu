@@ -65,6 +65,8 @@ Open SoirVu, choose a location for your vault and create a passphrase. Save the 
 
 The Rust backend handles vault keys, cryptography and vault file operations. Encryption protects your diary at rest — it cannot protect text while you are reading it, so auto-lock exists to shrink that window. Keyloggers, screen recorders and a compromised OS are explicitly out of scope.
 
+Import and export dialogs expire when their vault session ends. Once an authenticated export starts, locking waits for it to finish. Background reads and media playback do not reset the inactivity timer.
+
 ## Tech
 
 - Tauri v2

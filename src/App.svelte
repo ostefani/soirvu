@@ -55,7 +55,8 @@
 
     const ACTIVITY_REPORT_INTERVAL = 5000;
     let lastActivitySent = 0;
-    function noteActivity() {
+    function noteActivity(event) {
+        if (!event.isTrusted || screen !== APPLICATION_SCREEN.DIARY) return;
         const now = Date.now();
         if (now - lastActivitySent < ACTIVITY_REPORT_INTERVAL) return;
         lastActivitySent = now;
@@ -64,7 +65,7 @@
 
     // Manual lock: Cmd/Ctrl+Shift+L from anywhere in the diary
     function handleKeydown(event) {
-        noteActivity();
+        noteActivity(event);
         const isLockShortcut =
             (event.metaKey || event.ctrlKey) &&
             event.shiftKey &&

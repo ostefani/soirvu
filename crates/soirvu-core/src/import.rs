@@ -51,6 +51,57 @@ fn read_bounded_file(file: fs::File, limit: u64) -> Result<Vec<u8>> {
     Err(Error::InvalidInput("import file exceeds its size limit".into()))
 }
 
+/// Bounded Markdown input read before taking the vault write lease.
+pub struct MarkdownImport {
+    dir: PathBuf,
+    root: Directory,
+    manifest: Option<Manifest>,
+    notes: Vec<ParsedNote>,
+    skipped: usize,
+}
+
+struct ParsedNote {
+    file: PathBuf,
+    modified: Option<std::time::SystemTime>,
+    fm: FrontMatter,
+    body: String,
+}
+
+impl MarkdownImport {
+    pub fn read(dir: &Path) -> Result<Self> {
+        let root = Directory::open(dir)?;
+        let manifest = load_manifest(&root);
+        let mut files = Vec::new();
+        let mut tree_items = MAX_MARKDOWN_TREE_ITEMS;
+        collect_markdown(dir, &mut files, 0, &mut tree_items)?;
+        files.sort();
+        let mut notes = Vec::with_capacity(files.len());
+        let mut skipped = 0usize;
+        let mut remaining = MAX_MARKDOWN_PLAN_BYTES;
+        for file in &files {
+            let relative = file.strip_prefix(dir).map_err(|_| Error::InvalidInput("note outside import root".into()))?;
+            let (text, modified) = match (|| {
+                let handle = root.open_regular(relative)?;
+                let modified = handle.metadata().ok().and_then(|meta| meta.modified().ok());
+                let bytes = read_bounded_file(handle, remaining.min(MAX_MARKDOWN_NOTE_BYTES))?;
+                let text = String::from_utf8(bytes).map_err(|_| Error::InvalidInput("note must be UTF-8".into()))?;
+                Ok::<_, Error>((text, modified))
+            })()
+            {
+                Ok(text) => text,
+                Err(_) => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+            remaining -= text.len() as u64;
+            let (fm, body) = split_front_matter(&text);
+            notes.push(ParsedNote { file: file.clone(), modified, fm, body });
+        }
+        Ok(Self { dir: dir.to_path_buf(), root, manifest, notes, skipped })
+    }
+}
+
 /// What an import did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportReport {
@@ -88,12 +139,11 @@ impl Vault {
     /// planning belongs to the desktop bridge, which shares the
     /// editor's Markdown parser.
     pub fn import_markdown(&mut self, dir: &Path) -> Result<ImportReport> {
-        let root = Directory::open(dir)?;
-        let manifest = load_manifest(&root);
-        let mut files = Vec::new();
-        let mut tree_items = MAX_MARKDOWN_TREE_ITEMS;
-        collect_markdown(dir, &mut files, 0, &mut tree_items)?;
-        files.sort();
+        self.import_parsed_markdown(MarkdownImport::read(dir)?)
+    }
+
+    pub fn import_parsed_markdown(&mut self, data: MarkdownImport) -> Result<ImportReport> {
+        let MarkdownImport { dir, root, manifest, notes, skipped } = data;
         // Pass 0: manifest folders first, so entries can reference
         // them. Final ids are decided before any row is written:
         // a live folder with the same id is adopted as-is, a
@@ -169,32 +219,15 @@ impl Vault {
         // links resolve in pass 2.
         let mut folder_ids: std::collections::HashMap<PathBuf, String> =
             std::collections::HashMap::new();
-        let mut plans: Vec<PlannedFile> = Vec::with_capacity(files.len());
+        let mut plans: Vec<PlannedFile> = Vec::with_capacity(notes.len());
         let mut id_map: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
-        let mut skipped = 0usize;
-        let mut remaining = MAX_MARKDOWN_PLAN_BYTES;
-        for file in &files {
-            let relative = file.strip_prefix(dir).map_err(|_| Error::InvalidInput("note outside import root".into()))?;
-            let (text, modified) = match (|| {
-                let handle = root.open_regular(relative)?;
-                let modified = handle.metadata().ok().and_then(|meta| meta.modified().ok());
-                let bytes = read_bounded_file(handle, remaining.min(MAX_MARKDOWN_NOTE_BYTES))?;
-                let text = String::from_utf8(bytes).map_err(|_| Error::InvalidInput("note must be UTF-8".into()))?;
-                Ok::<_, Error>((text, modified))
-            })()
-            {
-                Ok(text) => text,
-                Err(_) => {
-                    skipped += 1;
-                    continue;
-                }
-            };
-            remaining -= text.len() as u64;
-            let (fm, body) = split_front_matter(&text);
+        for ParsedNote { file, modified, fm, body } in notes {
+            let relative = file.strip_prefix(&dir)
+                .map_err(|_| Error::InvalidInput("note outside import root".into()))?;
             let folder = self.plan_entry_folder(
-                dir,
-                file,
+                &dir,
+                &file,
                 &fm,
                 &manifest_folders,
                 &mut folder_ids,
@@ -503,19 +536,11 @@ impl Vault {
     /// Entry `entry:` links are never rewritten here: entry ids
     /// are never remapped, so bodies stay byte-identical.
     pub fn import_json(&mut self, file: &Path) -> Result<ImportReport> {
-        let data: JsonImport = {
-            let text = read_bounded(file, MAX_JSON_IMPORT_BYTES)?;
-            serde_json::from_slice(&text)
-                .map_err(|e| Error::InvalidInput(format!("not a SoirVu JSON export: {e}")))?
-        };
-        if data.entries.len() + data.folders.len() + data.attachments.len() > MAX_IMPORT_RECORDS {
-            return Err(Error::InvalidInput("JSON import has too many records".into()));
-        }
-        if data.format != "soirvu-json-export" || (data.version != 1 && data.version != 2) {
-            return Err(Error::InvalidInput(
-                "not a SoirVu JSON export (bad format or version)".into(),
-            ));
-        }
+        self.import_parsed_json(JsonImport::read(file)?)
+    }
+
+    /// Apply bounded JSON already read and parsed without the write lease.
+    pub fn import_parsed_json(&mut self, data: JsonImport) -> Result<ImportReport> {
         let mut report = ImportReport {
             entries: 0,
             attachments: 0,
@@ -1144,13 +1169,32 @@ fn uuid_prefix(file_name: &str) -> Option<(&str, &str)> {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct JsonImport {
+pub struct JsonImport {
     format: String,
     version: u32,
     #[serde(default)]
     folders: Vec<JsonFolderIn>,
     entries: Vec<JsonEntryIn>,
     attachments: Vec<JsonAttachmentIn>,
+}
+
+impl JsonImport {
+    pub fn read(file: &Path) -> Result<Self> {
+        let data: JsonImport = {
+            let text = read_bounded(file, MAX_JSON_IMPORT_BYTES)?;
+            serde_json::from_slice(&text)
+                .map_err(|e| Error::InvalidInput(format!("not a SoirVu JSON export: {e}")))?
+        };
+        if data.entries.len() + data.folders.len() + data.attachments.len() > MAX_IMPORT_RECORDS {
+            return Err(Error::InvalidInput("JSON import has too many records".into()));
+        }
+        if data.format != "soirvu-json-export" || (data.version != 1 && data.version != 2) {
+            return Err(Error::InvalidInput(
+                "not a SoirVu JSON export (bad format or version)".into(),
+            ));
+        }
+        Ok(data)
+    }
 }
 
 #[derive(Deserialize)]

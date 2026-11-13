@@ -135,22 +135,16 @@ fn prune(dir: &Path, keep_path: &Path) {
 
 /// Copies the open vault into the backup location and returns
 /// the new folder's display name (`<vault>-<id8>/<stamp>`).
-pub fn make_backup(state: &AppState) -> AppResult<String> {
+pub(crate) fn make_backup(state: &AppState, session: &crate::state::VaultSession) -> AppResult<String> {
     let Some(root) = state.backup_dir() else {
         return Err(unavailable());
     };
     if !root.is_dir() {
         return Err(unavailable());
     }
-    let id = state
-        .current_id()
-        .ok_or_else(|| AppError::Code("locked".into()))?;
-    let src = state.vault_path(&id)?;
-    let per_vault = per_vault_dir(&root, &src, &id);
-    state.with_vault_exclusive(|vault| {
-        if vault.header().vault_id != id {
-            return Err(AppError::from(soirvu_core::Error::VaultMismatch));
-        }
+    state.with_session(session, |vault| {
+        let src = vault.dir().to_path_buf();
+        let per_vault = per_vault_dir(&root, &src, &session.vault_id);
         // Checkpoint and copy form one operation: no write or key change can
         // slip between them and produce a mixed-time backup.
         vault.checkpoint()?;
@@ -199,15 +193,15 @@ pub fn maybe_scheduled(state: &AppState) {
     if schedule == BackupSchedule::Off {
         return;
     }
-    let (Some(root), Some(id)) = (state.backup_dir(), state.current_id()) else {
+    let (Some(root), Ok(session)) = (state.backup_dir(), state.session()) else {
         return;
     };
-    let Ok(src) = state.vault_path(&id) else {
+    let Ok(src) = state.vault_path(&session.vault_id) else {
         return;
     };
-    let dir = per_vault_dir(&root, &src, &id);
+    let dir = per_vault_dir(&root, &src, &session.vault_id);
     if backup_due(schedule, last_backup(&dir), SystemTime::now()) {
-        let _ = make_backup(state);
+        let _ = make_backup(state, &session);
     }
 }
 

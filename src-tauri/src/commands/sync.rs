@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use soirvu_core::sync::{SyncBundleInfo, SyncOverview, SyncPruneReport, SyncReport};
 
@@ -149,9 +149,10 @@ fn configured_dir(state: &AppState) -> Result<PathBuf, String> {
 /// restamping; the refreshed overview comes back.
 #[tauri::command]
 pub async fn sync_dismiss_ack_ahead(app: AppHandle) -> Result<SyncOverviewDto, String> {
-    crate::commands::run_blocking_state(app, |state| {
-        let dir = state.current_sync_dir();
-        ipc(state.with_vault(|vault| {
+    let session = ipc(app.state::<AppState>().session())?;
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_session(&session, |vault| {
+            let dir = state.current_sync_dir();
             vault.clear_ack_ahead()?;
             let overview = vault.sync_overview()?;
             let vault_id = vault.header().vault_id.clone();
@@ -163,9 +164,10 @@ pub async fn sync_dismiss_ack_ahead(app: AppHandle) -> Result<SyncOverviewDto, S
 
 #[tauri::command]
 pub async fn sync_overview(app: AppHandle) -> Result<SyncOverviewDto, String> {
-    crate::commands::run_blocking_state(app, |state| {
-        let dir = state.current_sync_dir();
-        ipc(state.with_vault(|vault| {
+    let session = ipc(app.state::<AppState>().session())?;
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_session(&session, |vault| {
+            let dir = state.current_sync_dir();
             let overview = vault.sync_overview()?;
             let vault_id = vault.header().vault_id.clone();
             Ok(assemble_overview(&overview, dir.as_deref(), &vault_id))
@@ -283,14 +285,12 @@ pub async fn sync_pick_folder(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<Settings>, String> {
-    let Some(id) = state.current_id() else {
-        return Err("locked".into());
-    };
+    let session = ipc(state.session())?;
     let Some(path) = crate::commands::vault::pick_folder(&app).await else {
         return Ok(None);
     };
     let settings = crate::commands::run_blocking_state(app, move |state| {
-        ipc(state.set_sync_dir(&id, Some(path)))?;
+        ipc(state.set_sync_dir(&session, Some(path)))?;
         Ok(state.settings())
     })
     .await?;
@@ -301,11 +301,9 @@ pub async fn sync_pick_folder(
 /// the folder are not touched — only the setting goes.
 #[tauri::command]
 pub async fn sync_clear_folder(app: AppHandle) -> Result<Settings, String> {
-    crate::commands::run_blocking_state(app, |state| {
-        let Some(id) = state.current_id() else {
-            return Err("locked".into());
-        };
-        ipc(state.set_sync_dir(&id, None))?;
+    let session = ipc(app.state::<AppState>().session())?;
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.set_sync_dir(&session, None))?;
         Ok(state.settings())
     })
     .await
@@ -316,9 +314,12 @@ pub async fn sync_clear_folder(app: AppHandle) -> Result<Settings, String> {
 // action serialized against writes, lock, and other sync commands.
 #[tauri::command]
 pub async fn sync_emit(app: AppHandle) -> Result<Option<SyncBundleDto>, String> {
-    crate::commands::run_blocking_state(app, |state| {
-        let dir = configured_dir(state)?;
-        ipc(state.with_vault(|vault| Ok(vault.sync_emit(&dir)?.map(SyncBundleDto::from))))
+    let session = ipc(app.state::<AppState>().session())?;
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_session(&session, |vault| {
+            let dir = configured_dir(state).map_err(crate::error::AppError::Code)?;
+            Ok(vault.sync_emit(&dir)?.map(SyncBundleDto::from))
+        }))
     })
     .await
 }
@@ -328,27 +329,36 @@ pub async fn sync_emit(app: AppHandle) -> Result<Option<SyncBundleDto>, String> 
 /// a prune. (Restamp is the shared-identity remedy.)
 #[tauri::command]
 pub async fn sync_reemit(app: AppHandle) -> Result<Option<SyncBundleDto>, String> {
-    crate::commands::run_blocking_state(app, |state| {
-        let dir = configured_dir(state)?;
-        ipc(state.with_vault(|vault| Ok(vault.sync_reemit(&dir)?.map(SyncBundleDto::from))))
+    let session = ipc(app.state::<AppState>().session())?;
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_session(&session, |vault| {
+            let dir = configured_dir(state).map_err(crate::error::AppError::Code)?;
+            Ok(vault.sync_reemit(&dir)?.map(SyncBundleDto::from))
+        }))
     })
     .await
 }
 
 #[tauri::command]
 pub async fn sync_apply(app: AppHandle) -> Result<SyncReportDto, String> {
-    crate::commands::run_blocking_state(app, |state| {
-        let dir = configured_dir(state)?;
-        ipc(state.with_vault(|vault| Ok(SyncReportDto::from(vault.sync_apply(&dir)?))))
+    let session = ipc(app.state::<AppState>().session())?;
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_session(&session, |vault| {
+            let dir = configured_dir(state).map_err(crate::error::AppError::Code)?;
+            Ok(SyncReportDto::from(vault.sync_apply(&dir)?))
+        }))
     })
     .await
 }
 
 #[tauri::command]
 pub async fn sync_prune(app: AppHandle) -> Result<SyncPruneDto, String> {
-    crate::commands::run_blocking_state(app, |state| {
-        let dir = configured_dir(state)?;
-        ipc(state.with_vault(|vault| Ok(SyncPruneDto::from(vault.sync_prune(&dir)?))))
+    let session = ipc(app.state::<AppState>().session())?;
+    crate::commands::run_blocking_state(app, move |state| {
+        ipc(state.with_session(&session, |vault| {
+            let dir = configured_dir(state).map_err(crate::error::AppError::Code)?;
+            Ok(SyncPruneDto::from(vault.sync_prune(&dir)?))
+        }))
     })
     .await
 }
@@ -362,14 +372,15 @@ pub async fn sync_prune(app: AppHandle) -> Result<SyncPruneDto, String> {
 /// which keeps publishing under the old id.
 #[tauri::command]
 pub async fn restamp_device(app: AppHandle) -> Result<String, String> {
-    crate::commands::run_blocking_state(app, |state| {
+    let session = ipc(app.state::<AppState>().session())?;
+    crate::commands::run_blocking_state(app, move |state| {
         // The new identity is persisted in the registry
         // FIRST, then the live vault switches to it: if
         // the switch were interrupted, the next open
         // assigns the persisted id and writes its device
         // row then — the two cannot drift apart.
         let new_id = soirvu_core::new_device_id();
-        ipc(state.restamp_current_device(new_id.clone()))?;
+        ipc(state.restamp_current_device(&session, new_id.clone()))?;
         Ok(new_id)
     })
     .await

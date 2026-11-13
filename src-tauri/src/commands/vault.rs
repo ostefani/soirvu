@@ -438,6 +438,7 @@ pub async fn vault_unlock(
         Ok(a) => a,
         Err(e) => {
             secret.zeroize();
+            state.unlock_aborted();
             return Err(e.to_ipc());
         }
     };
@@ -503,31 +504,30 @@ fn adopt_unlocked_vault(
 
 /// Ask the UI to flush and wait for its verdict (§6.2). Never
 /// blocks an async runtime thread: call from a blocking thread.
-pub fn begin_lock_handshake(app: &AppHandle, cap: Duration) -> FlushOutcome {
+fn begin_lock_handshake(app: &AppHandle, session: &crate::state::VaultSession, cap: Duration) -> FlushOutcome {
     let state = app.state::<AppState>();
-    let generation = match state.begin_lock() {
-        Some(generation) => {
-            let _ = app.emit("lock-requested", LockRequested { generation });
-            Some(generation)
-        }
-        None => state.handshake.pending(),
+    let Some((generation, started)) = state.begin_lock(session) else {
+        return FlushOutcome::Ok;
     };
-    match generation {
-        Some(generation) => state.handshake.wait(generation, cap),
-        None => FlushOutcome::Ok,
+    if started {
+        let _ = app.emit("lock-requested", LockRequested { generation });
     }
+    state.handshake.wait(generation, cap)
 }
 
 /// Idle and OS-signal locks: never vetoed. A failed or unanswered flush locks
 /// anyway and leaves a content-free notice for the lock screen.
 /// `cap = None` skips the wait. Returns true if this call locked.
 pub fn lock_forced(app: &AppHandle, cap: Option<Duration>) -> bool {
-    let outcome = cap.map_or(FlushOutcome::Ok, |cap| begin_lock_handshake(app, cap));
     let state = app.state::<AppState>();
+    let Some(session) = state.session_to_lock() else {
+        return false;
+    };
+    let outcome = cap.map_or(FlushOutcome::Ok, |cap| begin_lock_handshake(app, &session, cap));
     if matches!(outcome, FlushOutcome::Failed | FlushOutcome::TimedOut) {
         state.handshake.flag_notice();
     }
-    if matches!(state.lock_once(), Ok(true)) {
+    if matches!(state.lock_session(&session), Ok(true)) {
         crate::commands::emit_status(app, &state);
         crate::commands::reload_main_window(app);
         true
@@ -542,9 +542,13 @@ pub async fn vault_lock(app: AppHandle) -> Result<(), String> {
     // The wait runs on a blocking thread. The lock itself is
     // forced: a failed or unanswered flush is reported on the lock screen
     // instead of refusing the user's explicit lock.
+    let Some(session) = app.state::<AppState>().session_to_lock() else {
+        return Ok(());
+    };
     let handshake_app = app.clone();
+    let handshake_session = session.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        begin_lock_handshake(&handshake_app, LOCK_ACK_WAIT)
+        begin_lock_handshake(&handshake_app, &handshake_session, LOCK_ACK_WAIT)
     })
     .await
     .unwrap_or(FlushOutcome::Ok);
@@ -552,7 +556,7 @@ pub async fn vault_lock(app: AppHandle) -> Result<(), String> {
         app.state::<AppState>().handshake.flag_notice();
     }
     let lock_result =
-        crate::commands::run_blocking_state(app.clone(), |state| ipc(state.lock_once())).await;
+        crate::commands::run_blocking_state(app.clone(), move |state| ipc(state.lock_session(&session))).await;
     let state = app.state::<AppState>();
     // Another trigger may have locked first; it already emitted
     // and reloaded, so only the winning call does it again.
@@ -765,7 +769,10 @@ pub async fn vault_unlock_touch_id(
     }
     let assignment = match state.assignment(&vault_id) {
         Ok(a) => a,
-        Err(e) => return Err(e.to_ipc()),
+        Err(e) => {
+            state.unlock_aborted();
+            return Err(e.to_ipc());
+        }
     };
     let task_assignment = assignment.clone();
     let keychain_id = vault_id.clone();
@@ -1002,11 +1009,12 @@ pub async fn vault_rotate_master_key(
     app: AppHandle,
     current_passphrase: String,
 ) -> Result<Option<String>, String> {
+    let passphrase = zeroize::Zeroizing::new(current_passphrase);
+    let session = ipc(app.state::<AppState>().session())?;
     if !confirm_rotate(&app).await {
         return Ok(None);
     }
     let Ok(permit) = INTERACTIVE_KDF.try_acquire() else {
-        drop(zeroize::Zeroizing::new(current_passphrase));
         return Err("busy".into());
     };
     // The decision is made and the work starts now — the UI
@@ -1015,18 +1023,18 @@ pub async fn vault_rotate_master_key(
     // claim work that does not exist yet).
     use tauri::Emitter;
     let _ = app.emit("rotation-started", ());
-    let passphrase = zeroize::Zeroizing::new(current_passphrase);
     let recovery_text = crate::commands::run_blocking_state(app, move |state| {
         let _permit = permit;
         let paths = rotation_paths(state).map_err(|e| e.to_ipc())?;
-        if paths.1.exists() {
-            let _ = std::fs::remove_dir_all(&paths.1);
-        }
         let (src, staging, old) = paths;
         state
             .with_vault_exclusive_then_lock(
+                &session,
                 &src,
                 |vault| {
+                    if staging.exists() {
+                        let _ = std::fs::remove_dir_all(&staging);
+                    }
                     let kdf = KdfParams::calibrate(Duration::from_millis(750))?;
                     let recovery = vault.rotate_master_key(&staging, &passphrase, kdf)?;
                     Ok(recovery.to_text())
