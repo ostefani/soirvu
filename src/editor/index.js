@@ -2,9 +2,8 @@
 // Copyright (c) 2026 Olha Stefanishyna
 // The editor component (§6.5): createEditor mounts our own view
 // over our own state, commands, rules and history. The only
-// borrowed pieces are the document model and the Markdown layer
-// (prosemirror-model / prosemirror-markdown / markdown-it, in
-// schema.js and markdown.js). Svelte talks to the editor through
+// npm dependencies are prosemirror-model and markdown-it.
+// Svelte talks to the editor through
 // the returned object; the editor owns the document in between.
 //
 // The baseline rule lives in the wiring: onChange fires only for
