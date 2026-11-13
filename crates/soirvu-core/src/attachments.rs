@@ -90,6 +90,47 @@ pub struct AttachmentSweep {
     pub invalid_ids: Vec<String>,
 }
 
+/// The §6.4 allowlist, sniffed from magic bytes — never from the
+/// file name or a UI-supplied type.
+pub fn sniff_mime(bytes: &[u8]) -> Option<&'static str> {
+    let starts = |magic: &[u8]| bytes.len() >= magic.len() && &bytes[..magic.len()] == magic;
+    if starts(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    if starts(b"\x89PNG\r\n\x1A\n") {
+        return Some("image/png");
+    }
+    if starts(b"GIF87a") || starts(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if starts(b"%PDF-") {
+        return Some("application/pdf");
+    }
+    if starts(b"ID3") || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0) {
+        return Some("audio/mpeg");
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" {
+        match &bytes[8..12] {
+            b"WEBP" => return Some("image/webp"),
+            b"WAVE" => return Some("audio/wav"),
+            _ => {}
+        }
+    }
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
+        let brand = &bytes[8..12];
+        return match brand {
+            b"M4A " | b"M4B " => Some("audio/x-m4a"),
+            b"heic" | b"heix" | b"hevc" | b"mif1" | b"msf1" => Some("image/heic"),
+            b"qt  " => Some("video/quicktime"),
+            b"isom" | b"iso2" | b"mp41" | b"mp42" | b"avc1" | b"M4V " | b"dash" => {
+                Some("video/mp4")
+            }
+            _ => None,
+        };
+    }
+    None
+}
+
 impl Vault {
     /// Stores `data` as a new attachment of a live entry.
     /// A thin wrapper over `add_attachment_from_reader` for data that is
@@ -180,7 +221,13 @@ impl Vault {
     ) -> Result<()> {
         validate_attachment_id(id)?;
         let name = validate_name(name)?;
-        let mime = validate_mime(mime)?;
+        let mime = match data {
+            Some(bytes) if i64::try_from(bytes.len()).ok() == Some(size) => {
+                sniff_mime(bytes).unwrap_or("application/octet-stream").to_owned()
+            }
+            Some(_) => return Err(Error::InvalidInput("attachment size mismatch".into())),
+            None => validate_mime(mime)?,
+        };
         if let Some(bytes) = data {
             let key = blob_key(&self.attachment_key(), id);
             write_blob(self.dir(), id, &key, &mut io::Cursor::new(bytes))?;

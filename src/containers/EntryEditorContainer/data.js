@@ -21,5 +21,7 @@ export const SESSION_TEXT = {
         'latest edits could not be saved — attach again after saving.',
     foreignAttach: 'the entry changed elsewhere — reopen it and attach again.',
     tooLargeAttach: 'that file is too large for its type.',
+    attachmentOpenFailed: 'Could not open the attachment.',
+    attachmentOpenUnsupported: 'This attachment type cannot be opened. You can retrieve it through a diary export.',
     unsupportedAttach: 'that file type is not supported.',
 };

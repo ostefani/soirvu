@@ -364,7 +364,7 @@ impl Vault {
         // Attachments first (their ids rewrite the body), then
         // the entry itself.
         let mut skipped_attachments = 0;
-        let mut attachments: Vec<(String, String, String, Vec<u8>)> = Vec::new();
+        let mut attachments: Vec<(String, String, Vec<u8>)> = Vec::new();
         for rel in asset_refs(&body) {
             // No blanket `..` rejection: nested exports legitimately
             // climb to the root `assets/` dir, and `contained_file`
@@ -393,12 +393,8 @@ impl Vault {
                 Some(id) if !self.attachment_exists(&id)? => id,
                 _ => Uuid::now_v7().to_string(),
             };
-            let mime = sniff_mime(&bytes)
-                .map(str::to_string)
-                .or_else(|| mime_by_extension(&name))
-                .unwrap_or_else(|| "application/octet-stream".to_string());
             body = body.replace(&rel, &format!("attachment:{att_id}"));
-            attachments.push((att_id, name, mime, bytes));
+            attachments.push((att_id, name, bytes));
         }
 
         let now = now_ms();
@@ -422,13 +418,13 @@ impl Vault {
         let folder = plan.folder.as_deref().filter(|id| self.folder_is_live(id));
         self.insert_entry_exact(entry_id, &draft, created, updated, None, folder)?;
         let mut imported = 0;
-        for (att_id, name, mime, bytes) in &attachments {
+        for (att_id, name, bytes) in &attachments {
             let sha = Sha256::digest(bytes);
             match self.insert_attachment_exact(
                 att_id,
                 &entry_id,
                 name,
-                mime,
+                "application/octet-stream",
                 bytes.len() as i64,
                 &sha,
                 created,
@@ -1075,61 +1071,6 @@ fn uuid_prefix(file_name: &str) -> Option<(&str, &str)> {
 }
 
 // ---------------------------------------------------------------------------
-// MIME sniffing: the same magic-byte rules the bridge applies
-// to interactive attachments (§6.4), so an imported file gets
-// the type the interactive path would have given it.
-// ---------------------------------------------------------------------------
-
-fn sniff_mime(bytes: &[u8]) -> Option<&'static str> {
-    let starts = |magic: &[u8]| bytes.len() >= magic.len() && &bytes[..magic.len()] == magic;
-    if starts(&[0xFF, 0xD8, 0xFF]) {
-        return Some("image/jpeg");
-    }
-    if starts(b"\x89PNG\r\n\x1A\n") {
-        return Some("image/png");
-    }
-    if starts(b"GIF8") {
-        return Some("image/gif");
-    }
-    if starts(b"%PDF-") {
-        return Some("application/pdf");
-    }
-    if starts(b"ID3") || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0) {
-        return Some("audio/mpeg");
-    }
-    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" {
-        match &bytes[8..12] {
-            b"WEBP" => return Some("image/webp"),
-            b"WAVE" => return Some("audio/wav"),
-            _ => {}
-        }
-    }
-    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
-        let brand = &bytes[8..12];
-        return match brand {
-            b"M4A " | b"M4B " => Some("audio/x-m4a"),
-            b"heic" | b"heix" | b"hevc" | b"mif1" | b"msf1" => Some("image/heic"),
-            b"qt  " => Some("video/quicktime"),
-            _ => Some("video/mp4"),
-        };
-    }
-    None
-}
-
-fn mime_by_extension(name: &str) -> Option<String> {
-    let ext = name.rsplit('.').next()?.to_ascii_lowercase();
-    Some(
-        match ext.as_str() {
-            "txt" | "md" => "text/plain",
-            "json" => "application/json",
-            "csv" => "text/csv",
-            _ => return None,
-        }
-        .to_string(),
-    )
-}
-
-// ---------------------------------------------------------------------------
 // JSON mirror of the export format
 // ---------------------------------------------------------------------------
 
@@ -1726,6 +1667,49 @@ mod tests {
         assert_eq!(report.attachments, 1);
         assert!(!vault.attachment_exists("legacy-id").unwrap());
         assert_eq!(vault.read_attachment(canonical).unwrap(), b"note");
+    }
+
+    #[test]
+    fn json_import_checks_size_and_derives_live_mime() {
+        let source_dir = TempDir::new().unwrap();
+        let mut source = new_vault(&source_dir);
+        let entry = source
+            .create_entry(
+                None,
+                &EntryDraft {
+                    entry_date: "2026-10-01".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let png = b"\x89PNG\r\n\x1a\n";
+        let image = source.add_attachment(&entry.id, "image.png", "text/plain", png).unwrap();
+        let unknown = source
+            .add_attachment(&entry.id, "note.txt", "text/plain", b"note")
+            .unwrap();
+        let wrong_size = source
+            .add_attachment(&entry.id, "wrong.txt", "text/plain", b"wrong")
+            .unwrap();
+        let file = source_dir.path().join("metadata.json");
+        source.export_json(&file).unwrap();
+        let mut export: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        for record in export["attachments"].as_array_mut().unwrap() {
+            if record["id"] == wrong_size.id.as_str() {
+                record["size"] = 1.into();
+            }
+        }
+        fs::write(&file, serde_json::to_vec(&export).unwrap()).unwrap();
+
+        let target_dir = TempDir::new().unwrap();
+        let mut target = new_vault(&target_dir);
+        let report = target.import_json(&file).unwrap();
+        assert_eq!(report.attachments, 2);
+        assert_eq!(report.skipped_attachments, 1);
+        assert!(!target.attachment_exists(&wrong_size.id).unwrap());
+        assert!(!crate::attachments::blob_path(target.dir(), &wrong_size.id).unwrap().exists());
+        assert_eq!(target.get_attachment(&image.id).unwrap().mime, "image/png");
+        assert_eq!(target.get_attachment(&unknown.id).unwrap().mime, "application/octet-stream");
+        assert_eq!(target.read_attachment(&unknown.id).unwrap(), b"note");
     }
 
     /// P2: byte-offset slicing panicked on multibyte input. Every

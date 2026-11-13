@@ -182,8 +182,14 @@ export function createEntrySession({
         return api.assetUrl(id);
     }
 
-    function openAttachment(id) {
-        api.attachmentOpen(id).catch(() => { });
+    async function openAttachment(id) {
+        try {
+            if (await api.attachmentOpen(id) === false) notifyError?.(SESSION_TEXT.attachmentOpenFailed);
+        } catch (error) {
+            notifyError?.(error === 'unsupported_type'
+                ? SESSION_TEXT.attachmentOpenUnsupported
+                : SESSION_TEXT.attachmentOpenFailed);
+        }
     }
 
     return {

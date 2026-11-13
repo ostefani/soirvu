@@ -9,9 +9,9 @@
 //! ever holds ids.
 
 use std::io::Read;
-use std::ops::Range;
 
 use serde::Serialize;
+use soirvu_core::attachments::sniff_mime;
 use tauri::AppHandle;
 use zeroize::Zeroize;
 
@@ -35,44 +35,6 @@ pub struct AttachmentInfo {
     pub name: String,
     pub mime: String,
     pub size: i64,
-}
-
-/// The §6.4 allowlist, sniffed from magic bytes — never from the
-/// file name or a UI-supplied type.
-pub fn sniff_mime(bytes: &[u8]) -> Option<&'static str> {
-    let starts = |magic: &[u8]| bytes.len() >= magic.len() && &bytes[..magic.len()] == magic;
-    if starts(&[0xFF, 0xD8, 0xFF]) {
-        return Some("image/jpeg");
-    }
-    if starts(b"\x89PNG\r\n\x1A\n") {
-        return Some("image/png");
-    }
-    if starts(b"GIF8") {
-        return Some("image/gif");
-    }
-    if starts(b"%PDF-") {
-        return Some("application/pdf");
-    }
-    if starts(b"ID3") || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0) {
-        return Some("audio/mpeg");
-    }
-    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" {
-        match &bytes[8..12] {
-            b"WEBP" => return Some("image/webp"),
-            b"WAVE" => return Some("audio/wav"),
-            _ => {}
-        }
-    }
-    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
-        let brand = &bytes[8..12];
-        return match brand {
-            b"M4A " | b"M4B " => Some("audio/x-m4a"),
-            b"heic" | b"heix" | b"hevc" | b"mif1" | b"msf1" => Some("image/heic"),
-            b"qt  " => Some("video/quicktime"),
-            _ => Some("video/mp4"),
-        };
-    }
-    None
 }
 
 /// The size cap (bytes) for a sniffed type, from the settings (§6.4:
@@ -219,10 +181,13 @@ pub async fn attachment_info(app: AppHandle, id: String) -> Result<AttachmentInf
     crate::commands::run_blocking_state(app, move |state| {
         ipc(state.with_vault(|vault| {
             let a = vault.get_attachment(&id)?;
+            let mime = sniff_stored_attachment(vault, &id, a.size)
+                .unwrap_or("application/octet-stream")
+                .to_owned();
             Ok(AttachmentInfo {
                 id: a.id,
                 name: a.name,
-                mime: a.mime,
+                mime,
                 size: a.size,
             })
         }))
@@ -336,8 +301,8 @@ async fn pick_file(app: &AppHandle) -> Option<std::path::PathBuf> {
 
 /// Opens an attachment in the OS default app: the decrypted
 /// bytes are written to the app-managed opened folder (wiped on
-/// lock) under the file's own name, and the OS takes it from
-/// there. The webview never sees the path.
+/// lock) under a generated name with a content-derived extension.
+/// The webview never sees the path.
 #[tauri::command]
 pub async fn attachment_open(app: AppHandle, id: String) -> Result<bool, String> {
     if !valid_attachment_id(&id) {
@@ -346,7 +311,11 @@ pub async fn attachment_open(app: AppHandle, id: String) -> Result<bool, String>
     crate::commands::run_blocking_state(app, move |state| {
         ipc(state.with_vault_exclusive(|vault| {
             let path = materialize_open_copy_locked(vault, state, &id)?;
-            Ok(crate::platform::open_external(&path.to_string_lossy()).is_ok())
+            if crate::platform::open_external(&path.to_string_lossy()).is_err() {
+                let _ = std::fs::remove_file(path);
+                return Ok(false);
+            }
+            Ok(true)
         }))
     })
     .await
@@ -361,60 +330,57 @@ fn materialize_open_copy_locked(
     state: &AppState,
     id: &str,
 ) -> Result<std::path::PathBuf, AppError> {
-    let info = vault.get_attachment(id).map_err(AppError::from)?;
-    let safe_name = std::path::Path::new(&info.name)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| "attachment".to_string());
-    let dir = state.opened_dir().join(id);
-    std::fs::create_dir_all(&dir).map_err(|_| AppError::Code("io".into()))?;
-    let path = dir.join(safe_name);
-    let temp_name = format!(
-        ".{}.tmp",
-        path.file_name().unwrap_or_default().to_string_lossy()
-    );
-    let temp = dir.join(temp_name);
-    if let Err(error) = write_copy_from_vault(vault, id, &temp) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(error);
-    }
-    if crate::platform::rename_retry(&temp, &path).is_err() {
-        let _ = std::fs::remove_file(&temp);
-        return Err(AppError::Code("io".into()));
-    }
-    Ok(path)
-}
-
-fn write_copy_from_vault(
-    vault: &mut soirvu_core::Vault,
-    id: &str,
-    path: &std::path::Path,
-) -> Result<(), AppError> {
     use std::io::Write;
-    let size = vault
-        .get_attachment(id)
-        .map_err(AppError::from)?
-        .size
-        .max(0) as u64;
-    let mut out = std::fs::File::create(path).map_err(|_| AppError::Code("io".into()))?;
+
+    let info = vault.get_attachment(id)?;
+    let size = info.size as u64;
+    let mime = sniff_stored_attachment(vault, id, info.size)?;
+    let suffix = match mime {
+        "image/jpeg" => ".jpg",
+        "image/png" => ".png",
+        "image/gif" => ".gif",
+        "image/webp" => ".webp",
+        "image/heic" => ".heic",
+        "audio/mpeg" => ".mp3",
+        "audio/wav" => ".wav",
+        "audio/x-m4a" => ".m4a",
+        "video/mp4" => ".mp4",
+        "video/quicktime" => ".mov",
+        "application/pdf" => ".pdf",
+        _ => return Err(AppError::Code("unsupported_type".into())),
+    };
+    let dir = state.opened_dir();
+    std::fs::create_dir_all(&dir).map_err(|_| AppError::Code("io".into()))?;
+    let mut out = tempfile::Builder::new()
+        .prefix("attachment-")
+        .suffix(suffix)
+        .tempfile_in(dir)
+        .map_err(|_| AppError::Code("io".into()))?;
     let mut offset = 0;
     while offset < size {
         let end = (offset + 1024 * 1024).min(size);
-        let bytes = zeroize::Zeroizing::new(
-            vault
-                .read_attachment_range(id, Range { start: offset, end })
-                .map_err(AppError::from)?,
-        );
-        if bytes.is_empty() {
-            break;
-        }
+        let bytes = zeroize::Zeroizing::new(vault.read_attachment_range(id, offset..end)?);
         out.write_all(&bytes)
             .map_err(|_| AppError::Code("io".into()))?;
         offset = end;
     }
-    out.sync_all().map_err(|_| AppError::Code("io".into()))?;
-    Ok(())
+    out.as_file()
+        .sync_all()
+        .map_err(|_| AppError::Code("io".into()))?;
+    let (_, path) = out.keep().map_err(|_| AppError::Code("io".into()))?;
+    Ok(path)
+}
+
+fn sniff_stored_attachment(
+    vault: &soirvu_core::Vault,
+    id: &str,
+    size: i64,
+) -> Result<&'static str, AppError> {
+    if size <= 0 {
+        return Err(AppError::Code("unsupported_type".into()));
+    }
+    let header = zeroize::Zeroizing::new(vault.read_attachment_range(id, 0..12)?);
+    sniff_mime(&header).ok_or_else(|| AppError::Code("unsupported_type".into()))
 }
 
 // ---------------------------------------------------------------------------
@@ -433,6 +399,11 @@ fn asset(status: u16, mime: &str, body: Vec<u8>, extra: &[(&str, String)]) -> As
         ("Content-Length".to_string(), body.len().to_string()),
         ("Accept-Ranges".to_string(), "bytes".to_string()),
         ("X-Content-Type-Options".to_string(), "nosniff".to_string()),
+        ("Cache-Control".to_string(), "no-store".to_string()),
+        (
+            "Content-Security-Policy".to_string(),
+            "default-src 'none'; sandbox".to_string(),
+        ),
     ];
     for (k, v) in extra {
         headers.push((k.to_string(), v.clone()));
@@ -449,63 +420,39 @@ fn asset(status: u16, mime: &str, body: Vec<u8>, extra: &[(&str, String)]) -> As
 /// bytes (§6.4: only the needed chunks are decrypted).
 pub fn serve_asset(state: &AppState, id: &str, range_header: Option<&str>) -> AssetResponse {
     let text = |status: u16, msg: &str| asset(status, "text/plain", msg.as_bytes().to_vec(), &[]);
-    let info = match state.with_vault(|vault| vault.get_attachment(id).map_err(AppError::from)) {
-        Ok(info) => info,
-        Err(AppError::Code(code)) if code == "locked" => return text(403, "locked"),
-        Err(_) => return text(404, "not found"),
-    };
-    let total = info.size.max(0) as u64;
-    if let Some(header) = range_header {
-        if let Some((start, _)) = parse_range(header, total) {
-            if start >= total && total > 0 {
-                return asset(
-                    416,
-                    "text/plain",
-                    Vec::new(),
-                    &[("Content-Range", format!("bytes */{total}"))],
-                );
-            }
+    let response = state.with_vault(|vault| {
+        let info = vault.get_attachment(id)?;
+        let mime = sniff_stored_attachment(vault, id, info.size)?;
+        if mime == "application/pdf" {
+            return Err(AppError::Code("unsupported_type".into()));
         }
-    }
-    let range = range_header.and_then(|h| parse_range(h, total));
-    match range {
-        Some((start, end)) => {
-            let bytes = state.with_vault(|vault| {
-                let b = vault.read_attachment_range(
-                    id,
-                    Range {
-                        start,
-                        end: end + 1,
-                    },
-                )?;
-                Ok(b)
-            });
-            match bytes {
-                Ok(bytes) => asset(
-                    206,
-                    &info.mime,
-                    bytes,
-                    &[("Content-Range", format!("bytes {start}-{end}/{total}"))],
-                ),
-                _ => text(404, "not found"),
-            }
+        let total = info.size as u64;
+        match range_header.and_then(|header| parse_range(header, total)) {
+            Some((start, end)) if start > end => Ok(asset(
+                416,
+                "text/plain",
+                Vec::new(),
+                &[("Content-Range", format!("bytes */{total}"))],
+            )),
+            Some((start, end)) => Ok(asset(
+                206,
+                mime,
+                vault.read_attachment_range(id, start..end + 1)?,
+                &[("Content-Range", format!("bytes {start}-{end}/{total}"))],
+            )),
+            None => Ok(asset(
+                200,
+                mime,
+                vault.read_attachment_range(id, 0..total)?,
+                &[],
+            )),
         }
-        None => {
-            let bytes = state.with_vault(|vault| {
-                let b = vault.read_attachment_range(
-                    id,
-                    Range {
-                        start: 0,
-                        end: total,
-                    },
-                )?;
-                Ok(b)
-            });
-            match bytes {
-                Ok(bytes) => asset(200, &info.mime, bytes, &[]),
-                _ => text(404, "not found"),
-            }
-        }
+    });
+    match response {
+        Ok(response) => response,
+        Err(AppError::Code(code)) if code == "locked" => text(403, "locked"),
+        Err(AppError::Code(code)) if code == "unsupported_type" => text(415, "unsupported type"),
+        Err(_) => text(404, "not found"),
     }
 }
 
@@ -833,6 +780,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(added.rev, kept.rev + 1);
+    }
+
+    #[test]
+    fn preview_and_open_use_attachment_bytes_instead_of_metadata() {
+        let (_dir, state, entry) = state_with_entry();
+        let png = b"\x89PNG\r\n\x1a\n";
+        let (known, unknown) = state
+            .with_vault(|vault| {
+                Ok((
+                    vault.add_attachment(&entry, "note.txt", "text/plain", png)?,
+                    vault.add_attachment(&entry, "other.png", "image/png", b"plain text")?,
+                ))
+            })
+            .unwrap();
+
+        let response = super::serve_asset(&state, &known.id, Some("bytes=1-3"));
+        assert_eq!(response.status, 206);
+        assert_eq!(response.body, png[1..4]);
+        assert!(
+            response
+                .headers
+                .iter()
+                .any(|(name, value)| { name == "Content-Type" && value == "image/png" })
+        );
+        assert_eq!(super::serve_asset(&state, &unknown.id, None).status, 415);
+
+        state
+            .with_vault(|vault| {
+                assert!(matches!(
+                    super::materialize_open_copy_locked(vault, &state, &unknown.id),
+                    Err(AppError::Code(code)) if code == "unsupported_type"
+                ));
+                assert!(!state.opened_dir().exists());
+                let path = super::materialize_open_copy_locked(vault, &state, &known.id)?;
+                assert_eq!(path.extension().unwrap(), "png");
+                assert_eq!(std::fs::read(path).unwrap(), png);
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

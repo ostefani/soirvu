@@ -851,7 +851,7 @@ impl AppState {
     }
 
     /// The folder decrypted attachment copies land in when the
-    /// user opens one (§6.4 rework): opened/<id>/<name> under the
+    /// user opens one (§6.4 rework): opened/ under the
     /// app config folder. Managed by the app, never by the user;
     /// wiped on lock and at startup, so plaintext copies exist
     /// only while the diary is unlocked.
