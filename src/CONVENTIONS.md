@@ -86,6 +86,6 @@ Scope: everything under `src/`.
 
 - `editor/` is plain JavaScript, framework-free. Components use it only
   through `createEditor` from `editor/index.js`.
-- Only three npm packages are borrowed: `prosemirror-model`,
-  `prosemirror-markdown`, `markdown-it`. Everything else is built
-  in-house; adding a dependency needs a reason that survives review.
+- The editor depends on `prosemirror-model` and `markdown-it`. The local
+  `markdown-adapter/` maps tokens to the editor model and serializes it
+  back to Markdown.

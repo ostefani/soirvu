@@ -18,11 +18,8 @@
 // how to keep fails loudly instead (see parseTokensForReal below).
 
 import MarkdownIt from "markdown-it";
-import {
-    MarkdownParser,
-    MarkdownSerializer,
-    defaultMarkdownSerializer,
-} from "prosemirror-markdown";
+import { MarkdownParser } from "./markdown-adapter/parser.js";
+import { MarkdownSerializer, commonNodes, commonMarks } from "./markdown-adapter/serializer.js";
 
 import { schema } from "./schema.js";
 import { isEntryHref } from "../lib/entry-target.js";
@@ -252,11 +249,6 @@ const parser = new MarkdownParser(schema, md, {
         getAttrs: (tok) => ({ level: +tok.tag.slice(1) }),
     },
     code_block: { block: "code_block", noCloseToken: true },
-    fence: {
-        block: "code_block",
-        getAttrs: (tok) => ({ params: tok.info || "" }),
-        noCloseToken: true,
-    },
     hr: { node: "horizontal_rule" },
     table: { block: "table" },
     tr: { block: "table_row" },
@@ -280,18 +272,12 @@ const parser = new MarkdownParser(schema, md, {
     em: { mark: "em" },
     strong: { mark: "strong" },
     s: { mark: "strike" },
-    link: {
-        mark: "link",
-        getAttrs: (tok) => ({
-            href: tok.attrGet("href"),
-            title: tok.attrGet("title") || null,
-        }),
-    },
+    link: { mark: "link" },
     code_inline: { mark: "code", noCloseToken: true },
 });
 
-// The spec system above handles one token at a time; three handlers
-// need custom logic, so they are replaced on the built parser.
+// Add custom token handlers for constructs that need more than a
+// direct mapping to a node or mark.
 
 // A raw fence becomes a raw_block with its original text.
 parser.tokenHandlers.fence = (state, tok) => {
@@ -372,7 +358,7 @@ parser.tokenHandlers.footnote_ref = (state, tok) => {
     state.addText(`[^${tok.meta.label}]`);
 };
 
-// The upstream prosemirror-markdown rule: markdown-it marks the
+// The token adapter's soft-break rule: markdown-it marks the
 // paragraphs of a tight list as hidden.
 function listIsTight(tokens, i) {
     while (++i < tokens.length) {
@@ -404,7 +390,7 @@ function renderInline(state, node, fromBlockStart) {
 
 const serializer = new MarkdownSerializer(
     {
-        ...defaultMarkdownSerializer.nodes,
+        ...commonNodes,
         paragraph(state, node) {
             if (node.childCount === 0) state.write(EMPTY_PARAGRAPH);
             else renderInline(state, node);
@@ -494,7 +480,7 @@ const serializer = new MarkdownSerializer(
         raw_block(state, node) {
             if (/^(?:[ \t]*\n)|\n[ \t]*$/.test(node.textContent)) {
                 const fenced = schema.nodes.code_block.create({ params: RAW_INFO }, node.content);
-                defaultMarkdownSerializer.nodes.code_block(state, fenced);
+                commonNodes.code_block(state, fenced);
                 return;
             }
             state.write(node.textContent);
@@ -525,7 +511,7 @@ const serializer = new MarkdownSerializer(
         },
     },
     {
-        ...defaultMarkdownSerializer.marks,
+        ...commonMarks,
         strike: {
             open: "~~",
             close: "~~",
@@ -536,12 +522,12 @@ const serializer = new MarkdownSerializer(
             escape: false,
             open(state, mark, parent, index) {
                 const text = parent.child(index).text;
-                const delimiter = defaultMarkdownSerializer.marks.code.open(state, mark, parent, index);
+                const delimiter = commonMarks.code.open(state, mark, parent, index);
                 return needsCodePadding(text) ? delimiter + " " : delimiter;
             },
             close(state, mark, parent, index) {
                 const text = parent.child(index - 1).text;
-                const delimiter = defaultMarkdownSerializer.marks.code.close(state, mark, parent, index);
+                const delimiter = commonMarks.code.close(state, mark, parent, index);
                 return needsCodePadding(text) ? " " + delimiter : delimiter;
             },
         },
