@@ -17,6 +17,8 @@ export const ERROR_SEVERITY = {
 
 /** Backend code → severity for every code the UI handles. */
 const ERROR_SEVERITY_BY_CODE = {
+    passphrase_too_short: ERROR_SEVERITY.VALIDATION,
+    passphrase_too_long: ERROR_SEVERITY.VALIDATION,
     invalid_input: ERROR_SEVERITY.VALIDATION,
     query_too_short: ERROR_SEVERITY.VALIDATION,
     too_large: ERROR_SEVERITY.VALIDATION,
@@ -36,6 +38,7 @@ const ERROR_SEVERITY_BY_CODE = {
     sync_shared_identity: ERROR_SEVERITY.CONFLICT,
     locked: ERROR_SEVERITY.UNAVAILABLE,
     storage: ERROR_SEVERITY.UNAVAILABLE,
+    rotation_recovery_needed: ERROR_SEVERITY.UNAVAILABLE,
     corrupt: ERROR_SEVERITY.UNAVAILABLE,
     vault_not_found: ERROR_SEVERITY.UNAVAILABLE,
     touch_id_unavailable: ERROR_SEVERITY.UNAVAILABLE,

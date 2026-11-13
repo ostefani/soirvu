@@ -151,6 +151,11 @@
             } else if (!ALLOWED.has(cmd)) {
                 reject("unknown command", cmd);
             }
+            if (cmd === "attachment_chunk" &&
+                typeof args?.dataBase64 === "string" &&
+                args.dataBase64.length > Math.ceil(1024 * 1024 / 3) * 4) {
+                reject("attachment chunk exceeds its size limit", cmd);
+            }
             return payload;
         };
     </script>

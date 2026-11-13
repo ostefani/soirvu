@@ -24,6 +24,24 @@ use crate::storage::now_ms;
 pub const MARK_START: char = '\u{2}';
 pub const MARK_END: char = '\u{3}';
 
+pub(crate) const MAX_ENTRY_BODY_BYTES: usize = 4 * 1024 * 1024;
+const MAX_ENTRY_TITLE_BYTES: usize = 4096;
+const MAX_ENTRY_TAGS: usize = 128;
+const MAX_QUERY_BYTES: usize = 1024;
+
+pub(crate) fn entry_within_limits(title: Option<&str>, body: Option<&str>, tags: usize) -> bool {
+    title.is_none_or(|title| title.len() <= MAX_ENTRY_TITLE_BYTES)
+        && body.is_none_or(|body| body.len() <= MAX_ENTRY_BODY_BYTES)
+        && tags <= MAX_ENTRY_TAGS
+}
+
+fn check_query_size(query: &str) -> Result<()> {
+    if query.len() > MAX_QUERY_BYTES {
+        return Err(Error::InvalidInput("search query exceeds its size limit".into()));
+    }
+    Ok(())
+}
+
 const MAX_TAG_CHARS: usize = 64;
 const MIN_WORD_CHARS: usize = 3;
 const PREVIEW_CHARS: usize = 200;
@@ -651,12 +669,13 @@ impl Vault {
                 AND substr(e.entry_date, 6, 5) = substr(?1, 6, 5)
                 AND e.entry_date < ?1
                 AND {} \
-              ORDER BY e.entry_date DESC, e.created_at DESC, e.id DESC",
+              ORDER BY e.entry_date DESC, e.created_at DESC, e.id DESC
+              LIMIT ?5",
             scope_cte(3),
             scope_predicate(3, 4),
         ))?;
         let rows = stmt.query_map(
-            params![date, PREVIEW_CHARS as i64, scope_folder, scope_mode],
+            params![date, PREVIEW_CHARS as i64, scope_folder, scope_mode, MAX_PAGE as i64],
             |row| {
                 let tags: Option<String> = row.get(6)?;
                 Ok(EntrySummary {
@@ -678,6 +697,7 @@ impl Vault {
     /// shorter words are ignored). Matching is by substring and ignores case, so
     /// «книг» finds «Книгу», «книги» and «книга». Newest entries come first.
     pub fn search(&self, query: &str, limit: usize, scope: &EntryScope) -> Result<Vec<SearchHit>> {
+        check_query_size(query)?;
         let normalized: String = query.nfc().collect();
         let words: Vec<String> = normalized
             .split_whitespace()
@@ -741,6 +761,7 @@ impl Vault {
         after: Option<CandidateCursor>,
     ) -> Result<CandidatePage> {
         let limit = limit.clamp(1, MAX_PAGE);
+        check_query_size(query)?;
         let normalized: String = query.nfc().collect();
         if normalized.trim().is_empty() {
             let items = self.recent_titles(limit + 1, after.map(|cursor| cursor.cursor))?;
@@ -992,6 +1013,7 @@ impl Vault {
         let has_more = keys.len() > limit;
         let mut items = Vec::with_capacity(keys.len().min(limit));
         let mut last_cursor = None;
+        let mut inline_remaining = 512 * 1024;
         for (id, entry_date, created_at, title, folder_id) in keys {
             if items.len() == limit {
                 break;
@@ -1009,7 +1031,8 @@ impl Vault {
                 entry_date,
                 title,
                 folder_id,
-                body: if body_size <= BACKLINK_INLINE_BYTES {
+                body: if body_size <= BACKLINK_INLINE_BYTES && body.len() <= inline_remaining {
+                    inline_remaining -= body.len();
                     Some(body)
                 } else {
                     None
@@ -1357,6 +1380,9 @@ fn normalize_tag(name: &str) -> Result<(String, String)> {
 fn normalize_tags(names: &[String]) -> Result<Vec<(String, String)>> {
     let mut tags: Vec<(String, String)> = Vec::new();
     for name in names {
+        if name.len() > MAX_TAG_CHARS * 4 {
+            return Err(Error::InvalidInput("tag name exceeds its size limit".into()));
+        }
         let tag = normalize_tag(name)?;
         if !tags.iter().any(|(_, key)| *key == tag.1) {
             tags.push(tag);
@@ -1367,6 +1393,9 @@ fn normalize_tags(names: &[String]) -> Result<Vec<(String, String)>> {
 }
 
 fn validate_draft(draft: &EntryDraft) -> Result<()> {
+    if !entry_within_limits(draft.title.as_deref(), Some(&draft.body_md), draft.tags.len()) {
+        return Err(Error::InvalidInput("entry exceeds its size or tag limit".into()));
+    }
     validate_date(&draft.entry_date)?;
     if let Some(tz) = &draft.tz
         && (tz.is_empty() || tz.chars().count() > 64)
@@ -1463,6 +1492,20 @@ mod tests {
     }
 
     /// FTS5 compares its index with the entry table and reports any difference.
+    #[test]
+    fn entry_writes_and_queries_reject_excessive_inputs() {
+        let (_tmp, mut vault) = new_vault();
+        let draft = EntryDraft {
+            entry_date: "2026-10-01".into(),
+            body_md: "a".repeat(MAX_ENTRY_BODY_BYTES + 1),
+            ..Default::default()
+        };
+        assert!(matches!(vault.create_entry(None, &draft), Err(Error::InvalidInput(_))));
+        let query = "a".repeat(MAX_QUERY_BYTES + 1);
+        assert!(matches!(vault.search(&query, 1, &EntryScope::All), Err(Error::InvalidInput(_))));
+        assert!(matches!(vault.link_candidates(&query, 1, None), Err(Error::InvalidInput(_))));
+    }
+
     fn assert_search_index_is_consistent(vault: &Vault) {
         vault
             .database()

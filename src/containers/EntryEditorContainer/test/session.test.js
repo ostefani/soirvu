@@ -98,6 +98,22 @@ function setup({ entryOverrides = {}, delay = 10000, onOpenEntry = null } = {}) 
     return { api, saves, notified, opened, session };
 }
 
+test('attachment open distinguishes unsupported types from launch failures', async () => {
+    const { session, api, notified } = setup();
+    const { SESSION_TEXT } = await import('../data.js');
+    api.attachmentOpen = async () => { throw 'unsupported_type'; };
+    await session.openAttachment('att1');
+    api.attachmentOpen = async () => false;
+    await session.openAttachment('att1');
+    api.attachmentOpen = async () => { throw 'io'; };
+    await session.openAttachment('att1');
+    assert.deepEqual(notified, [
+        SESSION_TEXT.attachmentOpenUnsupported,
+        SESSION_TEXT.attachmentOpenFailed,
+        SESSION_TEXT.attachmentOpenFailed,
+    ]);
+});
+
 test('parseTags splits and cleans tag text', () => {
     assert.deepEqual(parseTags('a, b,, c '), ['a', 'b', 'c']);
 });

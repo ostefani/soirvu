@@ -7,8 +7,8 @@
 //!   ├── soirvu.db           encrypted SQLite database (plus -wal / -shm while open)
 //!   └── attachments/ab/<id> encrypted attachment blobs, sharded by id prefix
 
-use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use crate::crypto::{DeviceSecret, KdfParams, Key, MasterKey, RecoveryKey};
@@ -42,6 +42,7 @@ impl Vault {
     /// Creates a new vault in `dir` (which must be missing or empty).
     /// Returns the open vault and the recovery key to show to the user once.
     pub fn create(dir: &Path, passphrase: &str, kdf: KdfParams) -> Result<(Vault, RecoveryKey)> {
+        crate::crypto::validate_new_passphrase(passphrase)?;
         prepare_folder(dir)?;
         match create_files(dir, passphrase, kdf, None) {
             Ok(created) => Ok(created),
@@ -64,6 +65,7 @@ impl Vault {
         kdf: KdfParams,
         device_id: &str,
     ) -> Result<(Vault, RecoveryKey)> {
+        crate::crypto::validate_new_passphrase(passphrase)?;
         prepare_folder(dir)?;
         match create_files(dir, passphrase, kdf, Some(device_id)) {
             Ok(created) => Ok(created),
@@ -322,7 +324,8 @@ impl Vault {
         &self.device_id
     }
 
-    pub fn database(&self) -> &Database {
+    #[cfg(test)]
+    pub(crate) fn database(&self) -> &Database {
         &self.db
     }
 
@@ -389,14 +392,23 @@ fn create_files(
 /// unfinished `.tmp` uploads and dotfiles are skipped, like the sweep does.
 pub fn copy_vault_files(from: &Path, to: &Path) -> Result<()> {
     fs::create_dir_all(to)?;
-    fs::copy(from.join(DB_FILE), to.join(DB_FILE))?;
-    fs::copy(from.join(HEADER_FILE), to.join(HEADER_FILE))?;
-    copy_attachments(from, to)?;
+    let input = crate::fs_boundary::Directory::open(from)?;
+    let output = crate::fs_boundary::Directory::open(to)?;
+    for name in [DB_FILE, HEADER_FILE] {
+        let path = Path::new(name);
+        let mut source = input.open_regular(path)?;
+        output.publish(path, |file| Ok(io::copy(&mut source, file)?))?;
+    }
+    copy_attachments(from, &input, &output)?;
     Ok(())
 }
 
 /// Copies finished attachment blobs, preserving the id sharding.
-fn copy_attachments(from: &Path, to: &Path) -> Result<()> {
+fn copy_attachments(
+    from: &Path,
+    input: &crate::fs_boundary::Directory,
+    output: &crate::fs_boundary::Directory,
+) -> Result<()> {
     let src = from.join("attachments");
     if !src.exists() {
         return Ok(());
@@ -416,9 +428,11 @@ fn copy_attachments(from: &Path, to: &Path) -> Result<()> {
             if name.starts_with('.') {
                 continue;
             }
-            let dest_dir = to.join("attachments").join(shard.file_name());
-            fs::create_dir_all(&dest_dir)?;
-            fs::copy(file.path(), dest_dir.join(name.as_ref()))?;
+            let relative = Path::new("attachments").join(shard.file_name());
+            let path = relative.join(name.as_ref());
+            let mut source = input.open_regular(&path)?;
+            let dest_dir = output.directory(&relative, true)?;
+            dest_dir.publish(Path::new(name.as_ref()), |file| Ok(io::copy(&mut source, file)?))?;
         }
     }
     Ok(())
@@ -437,8 +451,7 @@ fn remove_our_files(dir: &Path) {
 }
 
 fn read_header(dir: &Path) -> Result<VaultHeader> {
-    let bytes = fs::read(dir.join(HEADER_FILE))?;
-    VaultHeader::from_json(&bytes)
+    VaultHeader::read_file(&dir.join(HEADER_FILE))
 }
 
 /// Finishes a fork that died between the database write and the
@@ -460,13 +473,10 @@ fn set_marker_aside(dir: &Path, marker: &Path) {
 
 fn complete_interrupted_fork(dir: &Path, db: &Database) -> Result<Option<VaultHeader>> {
     let marker = dir.join(FORK_MARKER);
-    let bytes = match fs::read(&marker) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    let header = match VaultHeader::from_json(&bytes) {
+    let header = match VaultHeader::read_file(&marker) {
         Ok(header) => header,
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(Error::Io(error)) => return Err(error.into()),
         Err(_) => {
             set_marker_aside(dir, &marker);
             return Ok(None);
@@ -476,7 +486,7 @@ fn complete_interrupted_fork(dir: &Path, db: &Database) -> Result<Option<VaultHe
         set_marker_aside(dir, &marker);
         return Ok(None);
     }
-    write_atomic(&dir.join(HEADER_FILE), &bytes)?;
+    write_atomic(&dir.join(HEADER_FILE), &header.to_json()?)?;
     let _ = fs::remove_file(&marker);
     Ok(Some(header))
 }
@@ -547,6 +557,7 @@ impl Read for AttachmentReader<'_> {
 /// the indexer holds it open (§12); five tries over half a
 /// second cover the realistic holds. Elsewhere the first
 /// result stands.
+#[cfg(not(unix))]
 pub(crate) fn rename_retry(from: &Path, to: &Path) -> std::io::Result<()> {
     let mut result = fs::rename(from, to);
     if cfg!(windows) {
@@ -562,18 +573,9 @@ pub(crate) fn rename_retry(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("json.tmp");
-    let mut file = File::create(&tmp)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    rename_retry(&tmp, path)?;
-    // Also force the rename itself to disk (directories can be opened on Unix only).
-    #[cfg(unix)]
-    if let Some(parent) = path.parent() {
-        File::open(parent)?.sync_all()?;
-    }
-    Ok(())
+    let parent = path.parent().ok_or_else(|| Error::InvalidInput("missing vault directory".into()))?;
+    let name = path.file_name().ok_or_else(|| Error::InvalidInput("missing vault filename".into()))?;
+    crate::fs_boundary::Directory::open(parent)?.replace(Path::new(name), bytes)
 }
 
 #[cfg(test)]

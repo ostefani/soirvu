@@ -2,28 +2,86 @@
 // Copyright (c) 2026 Olha Stefanishyna
 //! open_link and settings (§6.1).
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::oneshot;
 
 use crate::error::ipc;
 use crate::platform;
-use crate::state::{AppState, Settings};
+use crate::state::{AppState, Settings, SettingsPatch};
 
-/// Only https and mailto may leave the app (§6.1).
-fn scheme_allowed(url: &str) -> bool {
-    url.starts_with("https://") || url.starts_with("mailto:")
+const MAX_OUTBOUND_URL_BYTES: usize = 4096;
+
+fn contains_unsafe_url_text(text: &str) -> bool {
+    text.chars().any(|c| c.is_control()
+        || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+}
+
+fn parse_outbound_url(input: &str) -> Option<tauri::Url> {
+    if input.len() > MAX_OUTBOUND_URL_BYTES
+        || input.chars().any(char::is_whitespace)
+        || input.contains('\\')
+        || contains_unsafe_url_text(input)
+        || contains_unsafe_url_text(&percent_encoding::percent_decode_str(input).decode_utf8().ok()?)
+    {
+        return None;
+    }
+    let url = tauri::Url::parse(input).ok()?;
+    let (_, rest) = input.split_once(':')?;
+    match url.scheme() {
+        "https" => {
+            let authority = rest.strip_prefix("//")?.split(['/', '?', '#']).next()?;
+            if authority.is_empty() || authority.contains('@') || url.host().is_none() {
+                return None;
+            }
+        }
+        // Allow one address and optional subject/body. Adding recipients,
+        // attachments or arbitrary mail headers is outside this command.
+        "mailto" => {
+            if !url.cannot_be_a_base() || url.fragment().is_some() {
+                return None;
+            }
+            let recipient = percent_encoding::percent_decode_str(url.path()).decode_utf8().ok()?;
+            let (local, domain) = recipient.split_once('@')?;
+            if local.is_empty() || domain.is_empty()
+                || !local.bytes().all(|b| b.is_ascii_alphanumeric() || b".!#$&'*+-=_~".contains(&b))
+                || !domain.split('.').all(|label| {
+                    !label.is_empty() && !label.starts_with('-') && !label.ends_with('-')
+                        && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                })
+            {
+                return None;
+            }
+            let (mut subject, mut body) = (false, false);
+            for field in url.query().into_iter().flat_map(|query| query.split('&')) {
+                let (key, _) = field.split_once('=')?;
+                let seen = match key {
+                    "subject" => &mut subject,
+                    "body" => &mut body,
+                    _ => return None,
+                };
+                if std::mem::replace(seen, true) {
+                    return None;
+                }
+            }
+        }
+        _ => return None,
+    }
+    (url.as_str().len() <= MAX_OUTBOUND_URL_BYTES).then_some(url)
 }
 
 #[tauri::command]
 pub async fn open_link(app: AppHandle, url: String) -> Result<bool, String> {
-    if !scheme_allowed(&url) {
-        return Err("invalid_input".into());
-    }
+    let url = parse_outbound_url(&url).ok_or_else(|| "invalid_input".to_string())?;
+    let destination = if url.scheme() == "https" {
+        url.origin().ascii_serialization()
+    } else {
+        url.path().to_owned()
+    };
     // A native confirmation, from Rust: the webview cannot skip it.
     let (tx, rx) = oneshot::channel();
     app.dialog()
-        .message(format!("Open this link in your browser?\n\n{url}"))
+        .message(format!("Open this link?\n\nDestination: {destination}\n\n{url}"))
         .title("SoirVu")
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::OkCancelCustom(
@@ -36,7 +94,7 @@ pub async fn open_link(app: AppHandle, url: String) -> Result<bool, String> {
     if !rx.await.unwrap_or(false) {
         return Ok(false);
     }
-    ipc(platform::open_external(&url).map_err(Into::into))?;
+    ipc(platform::open_external(std::ffi::OsStr::new(url.as_str())).map_err(Into::into))?;
     Ok(true)
 }
 
@@ -46,14 +104,26 @@ pub async fn settings_get(app: AppHandle) -> Result<Settings, String> {
 }
 
 #[tauri::command]
-pub async fn settings_set(app: AppHandle, settings: Settings) -> Result<(), String> {
-    crate::commands::run_blocking_state(app, move |state| ipc(state.set_settings(settings))).await
+pub async fn settings_set(app: AppHandle, settings: SettingsPatch) -> Result<(), String> {
+    let (previous, next) = ipc(app.state::<AppState>().prepare_settings(settings))?;
+    if next.weakens_protection(&previous) {
+        let (tx, rx) = oneshot::channel();
+        app.dialog()
+            .message("Allow this change to the diary’s lock, privacy, or attachment limits?")
+            .title("Change diary protection settings")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom("Allow change".into(), "Cancel".into()))
+            .show(move |confirmed| { let _ = tx.send(confirmed); });
+        if !rx.await.unwrap_or(false) {
+            return Err("cancelled".into());
+        }
+    }
+    crate::commands::run_blocking_state(app, move |state| ipc(state.commit_settings(previous, next))).await
 }
 
 /// Picks the backup folder with the native dialog and stores
 /// the PATH in Rust (app.json). The UI gets back the updated
-/// settings, whose backup_location is the full path (read-only:
-/// settings_set ignores the value it is sent back) — the user
+/// settings, whose backup_location is a read-only full path. The user
 /// should always know where the backups are.
 #[tauri::command]
 pub async fn settings_pick_backup_dir(app: AppHandle) -> Result<Option<Settings>, String> {
@@ -101,7 +171,8 @@ pub fn clipboard_note_copy(state: State<'_, AppState>) -> Result<(), String> {
 /// display name; the path never crosses the boundary.
 #[tauri::command]
 pub async fn backup_now(app: AppHandle) -> Result<String, String> {
-    crate::commands::run_blocking_state(app, |state| ipc(crate::backup::make_backup(state))).await
+    let session = ipc(app.state::<AppState>().session())?;
+    crate::commands::run_blocking_state(app, move |state| ipc(crate::backup::make_backup(state, &session))).await
 }
 /// What an export wrote (§8): counts only, plus a display
 /// name for the destination — paths never cross the IPC
@@ -137,38 +208,36 @@ async fn confirm_export(app: &AppHandle) -> bool {
     rx.await.unwrap_or(false)
 }
 
-/// Shared export flow: warning, folder pick, then the work on
-/// a blocking thread against a standalone handle — opening it
-/// with the passphrase IS the §8 re-authentication.
+/// Pending dialogs expire when the originating session ends. Once a
+/// reauthenticated export starts, it finishes before lock can complete.
 async fn run_export(
     app: AppHandle,
     state: State<'_, AppState>,
     passphrase: String,
     json: bool,
 ) -> Result<Option<ExportOutcome>, String> {
-    use soirvu_core::Vault;
     use zeroize::Zeroizing;
 
-    let Some(id) = state.current_id() else {
-        return Err("locked".into());
-    };
-    let src = ipc(state.vault_path(&id))?;
+    let pass = Zeroizing::new(passphrase);
+    let session = ipc(state.session())?;
     if !confirm_export(&app).await {
         return Ok(None);
     }
     let Some(dir) = crate::commands::vault::pick_folder(&app).await else {
         return Ok(None);
     };
-    let pass = Zeroizing::new(passphrase);
-    let joined =
-        tauri::async_runtime::spawn_blocking(move || -> crate::error::AppResult<ExportOutcome> {
-            let vault = Vault::open_with_passphrase(&src, &pass)?;
+    let permit = super::vault::INTERACTIVE_KDF.try_acquire().map_err(|_| "busy".to_string())?;
+    let result = crate::commands::run_blocking_state(app, move |state| {
+        let _permit = permit;
+        ipc(state.with_session(&session, |vault| {
+            vault.verify_passphrase(&pass)?;
             if json {
                 let file = dir.join("soirvu-export.json");
-                if file.exists() {
-                    return Err(crate::error::AppError::Code("export_target_exists".into()));
-                }
-                let report = vault.export_json(&file)?;
+                let report = vault.export_json(&file).map_err(|error| match error {
+                    soirvu_core::Error::Io(ref io) if io.kind() == std::io::ErrorKind::AlreadyExists =>
+                        crate::error::AppError::Code("export_target_exists".into()),
+                    error => crate::error::AppError::from(error),
+                })?;
                 let folder = dir
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -189,13 +258,10 @@ async fn run_export(
                         .unwrap_or_default(),
                 })
             }
-        })
-        .await;
-    let result = match joined {
-        Ok(inner) => inner,
-        Err(_) => Err(crate::error::AppError::Code("storage".into())),
-    };
-    Ok(Some(ipc(result)?))
+        }))
+    })
+    .await?;
+    Ok(Some(result))
 }
 
 /// §8: the whole diary as Markdown files with front matter,
@@ -230,6 +296,7 @@ pub struct ImportOutcome {
     pub attachments: usize,
     pub skipped_entries: usize,
     pub skipped_attachments: usize,
+    pub export_only_attachments: usize,
     pub folders: usize,
     pub skipped_folders: usize,
 }
@@ -241,6 +308,7 @@ impl From<soirvu_core::import::ImportReport> for ImportOutcome {
             attachments: report.attachments,
             skipped_entries: report.skipped_entries,
             skipped_attachments: report.skipped_attachments,
+            export_only_attachments: report.export_only_attachments,
             folders: report.folders,
             skipped_folders: report.skipped_folders,
         }
@@ -252,11 +320,13 @@ impl From<soirvu_core::import::ImportReport> for ImportOutcome {
 /// import module for the id rules.
 #[tauri::command]
 pub async fn import_markdown(app: AppHandle) -> Result<Option<ImportOutcome>, String> {
+    let session = ipc(app.state::<AppState>().session())?;
     let Some(dir) = crate::commands::vault::pick_folder(&app).await else {
         return Ok(None);
     };
     let report = crate::commands::run_blocking_state(app, move |state| {
-        ipc(state.with_vault(|vault| Ok(vault.import_markdown(&dir)?)))
+        let parsed = ipc(soirvu_core::import::MarkdownImport::read(&dir).map_err(Into::into))?;
+        ipc(state.with_session(&session, |vault| Ok(vault.import_parsed_markdown(parsed)?)))
     })
     .await?;
     Ok(Some(report.into()))
@@ -267,12 +337,46 @@ pub async fn import_markdown(app: AppHandle) -> Result<Option<ImportOutcome>, St
 /// are skipped, never overwritten.
 #[tauri::command]
 pub async fn import_json(app: AppHandle) -> Result<Option<ImportOutcome>, String> {
+    let session = ipc(app.state::<AppState>().session())?;
     let Some(file) = crate::commands::vault::pick_file(&app).await else {
         return Ok(None);
     };
     let report = crate::commands::run_blocking_state(app, move |state| {
-        ipc(state.with_vault(|vault| Ok(vault.import_json(&file)?)))
+        let parsed = ipc(soirvu_core::import::JsonImport::read(&file).map_err(Into::into))?;
+        ipc(state.with_session(&session, |vault| Ok(vault.import_parsed_json(parsed)?)))
     })
     .await?;
     Ok(Some(report.into()))
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::*;
+
+    #[test]
+    fn outbound_urls_require_an_explicit_destination_and_safe_mail_fields() {
+        let https = parse_outbound_url("HTTPS://Example.COM:443/help?q=a%20b").unwrap();
+        assert_eq!(https.as_str(), "https://example.com/help?q=a%20b");
+        let mail = "mailto:note+diary@example.com?subject=Diary%20note&body=Hello";
+        assert_eq!(parse_outbound_url(mail).unwrap().as_str(), mail);
+
+        for invalid in [
+            "http://example.com",
+            "file:///notes",
+            "https:///example.com",
+            "https://user@example.com",
+            "https://@example.com",
+            "https://example.com/\n",
+            "https://example.com/%00",
+            "https://example.com/%E2%80%AE",
+            "mailto:a@example.com,b@example.com",
+            "mailto:a@example.com?bcc=b@example.com",
+            "mailto:a@example.com?subject=one&subject=two",
+            "mailto:a@example.com?body=hello%0D%0Aworld",
+            "mailto:a@example.com#fragment",
+        ] {
+            assert!(parse_outbound_url(invalid).is_none(), "{invalid:?}");
+        }
+        assert!(parse_outbound_url(&format!("https://example.com/{}", "a".repeat(MAX_OUTBOUND_URL_BYTES))).is_none());
+    }
 }

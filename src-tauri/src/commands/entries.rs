@@ -94,6 +94,9 @@ fn encode_cursor(cursor: &Cursor) -> String {
 
 fn decode_cursor(text: &str) -> Result<Cursor, AppError> {
     let invalid = || AppError::Code("invalid_input".into());
+    if text.len() > 80 {
+        return Err(invalid());
+    }
     let mut parts = text.splitn(3, '|');
     let entry_date = parts.next().filter(|s| !s.is_empty()).ok_or_else(invalid)?;
     let created_at: i64 = parts

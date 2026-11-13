@@ -10,6 +10,7 @@
 //! fresh id. Nothing is merged and nothing is deleted.
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -20,6 +21,86 @@ use crate::entries::EntryDraft;
 use crate::error::{Error, Result};
 use crate::export::civil_from_days;
 use crate::folder::Vault;
+use crate::fs_boundary::Directory;
+
+const MAX_MARKDOWN_DEPTH: usize = 32;
+const MAX_MARKDOWN_TREE_ITEMS: usize = 20_000;
+const MAX_MARKDOWN_PLAN_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_MARKDOWN_NOTE_BYTES: u64 = crate::entries::MAX_ENTRY_BODY_BYTES as u64 + 64 * 1024;
+const MAX_MARKDOWN_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_IMPORT_RECORDS: usize = 100_000;
+const MAX_MARKDOWN_ASSETS_PER_NOTE: usize = 128;
+const MAX_JSON_IMPORT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_ATTACHMENT_IMPORT_BYTES: u64 = 256 * 1024 * 1024;
+
+fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let name = path.file_name().ok_or_else(|| Error::InvalidInput("missing import filename".into()))?;
+    read_bounded_file(Directory::open(parent)?.open_regular(Path::new(name))?, limit)
+}
+
+fn read_bounded_file(file: fs::File, limit: u64) -> Result<Vec<u8>> {
+    let metadata = file.metadata()?;
+    if metadata.len() <= limit {
+        let mut bytes = Vec::new();
+        file.take(limit + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 <= limit {
+            return Ok(bytes);
+        }
+    }
+    Err(Error::InvalidInput("import file exceeds its size limit".into()))
+}
+
+/// Bounded Markdown input read before taking the vault write lease.
+pub struct MarkdownImport {
+    dir: PathBuf,
+    root: Directory,
+    manifest: Option<Manifest>,
+    notes: Vec<ParsedNote>,
+    skipped: usize,
+}
+
+struct ParsedNote {
+    file: PathBuf,
+    modified: Option<std::time::SystemTime>,
+    fm: FrontMatter,
+    body: String,
+}
+
+impl MarkdownImport {
+    pub fn read(dir: &Path) -> Result<Self> {
+        let root = Directory::open(dir)?;
+        let manifest = load_manifest(&root);
+        let mut files = Vec::new();
+        let mut tree_items = MAX_MARKDOWN_TREE_ITEMS;
+        collect_markdown(dir, &mut files, 0, &mut tree_items)?;
+        files.sort();
+        let mut notes = Vec::with_capacity(files.len());
+        let mut skipped = 0usize;
+        let mut remaining = MAX_MARKDOWN_PLAN_BYTES;
+        for file in &files {
+            let relative = file.strip_prefix(dir).map_err(|_| Error::InvalidInput("note outside import root".into()))?;
+            let (text, modified) = match (|| {
+                let handle = root.open_regular(relative)?;
+                let modified = handle.metadata().ok().and_then(|meta| meta.modified().ok());
+                let bytes = read_bounded_file(handle, remaining.min(MAX_MARKDOWN_NOTE_BYTES))?;
+                let text = String::from_utf8(bytes).map_err(|_| Error::InvalidInput("note must be UTF-8".into()))?;
+                Ok::<_, Error>((text, modified))
+            })()
+            {
+                Ok(text) => text,
+                Err(_) => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+            remaining -= text.len() as u64;
+            let (fm, body) = split_front_matter(&text);
+            notes.push(ParsedNote { file: file.clone(), modified, fm, body });
+        }
+        Ok(Self { dir: dir.to_path_buf(), root, manifest, notes, skipped })
+    }
+}
 
 /// What an import did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +109,7 @@ pub struct ImportReport {
     pub attachments: usize,
     pub skipped_entries: usize,
     pub skipped_attachments: usize,
+    pub export_only_attachments: usize,
     pub skipped_folders: usize,
     /// Folders created (or adopted) by this import.
     pub folders: usize,
@@ -57,10 +139,11 @@ impl Vault {
     /// planning belongs to the desktop bridge, which shares the
     /// editor's Markdown parser.
     pub fn import_markdown(&mut self, dir: &Path) -> Result<ImportReport> {
-        let manifest = load_manifest(dir);
-        let mut files = Vec::new();
-        collect_markdown(dir, &mut files);
-        files.sort();
+        self.import_parsed_markdown(MarkdownImport::read(dir)?)
+    }
+
+    pub fn import_parsed_markdown(&mut self, data: MarkdownImport) -> Result<ImportReport> {
+        let MarkdownImport { dir, root, manifest, notes, skipped } = data;
         // Pass 0: manifest folders first, so entries can reference
         // them. Final ids are decided before any row is written:
         // a live folder with the same id is adopted as-is, a
@@ -136,22 +219,15 @@ impl Vault {
         // links resolve in pass 2.
         let mut folder_ids: std::collections::HashMap<PathBuf, String> =
             std::collections::HashMap::new();
-        let mut plans: Vec<PlannedFile> = Vec::with_capacity(files.len());
+        let mut plans: Vec<PlannedFile> = Vec::with_capacity(notes.len());
         let mut id_map: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
-        let mut skipped = 0usize;
-        for file in &files {
-            let text = match fs::read_to_string(file) {
-                Ok(text) => text,
-                Err(_) => {
-                    skipped += 1;
-                    continue;
-                }
-            };
-            let (fm, body) = split_front_matter(&text);
+        for ParsedNote { file, modified, fm, body } in notes {
+            let relative = file.strip_prefix(&dir)
+                .map_err(|_| Error::InvalidInput("note outside import root".into()))?;
             let folder = self.plan_entry_folder(
-                dir,
-                file,
+                &dir,
+                &file,
                 &fm,
                 &manifest_folders,
                 &mut folder_ids,
@@ -168,7 +244,7 @@ impl Vault {
                 _ => {
                     let fresh = Uuid::now_v7().to_string();
                     if let Some(old) = &fm.id {
-                        if !old.is_empty() {
+                        if crate::storage::is_canonical_uuid(old) {
                             id_map.insert(old.clone(), fresh.clone());
                         }
                     }
@@ -176,7 +252,8 @@ impl Vault {
                 }
             };
             plans.push(PlannedFile {
-                file: file.clone(),
+                file: relative.to_path_buf(),
+                modified,
                 fm,
                 body,
                 folder,
@@ -188,6 +265,7 @@ impl Vault {
             attachments: 0,
             skipped_entries: skipped,
             skipped_attachments: 0,
+            export_only_attachments: 0,
             skipped_folders: 0,
             folders: folder_ids.len() + manifest_folders.len(),
             links_remapped: 0,
@@ -197,16 +275,20 @@ impl Vault {
         // their attachments.
         let mut seen_targets: std::collections::HashSet<String> = std::collections::HashSet::new();
         for mut plan in plans {
-            for (old, new) in &id_map {
-                if old != new {
-                    let from = format!("entry:{old}");
-                    let matches = plan.body.matches(&from).count();
-                    if matches > 0 {
-                        plan.body = plan.body.replace(&from, &format!("entry:{new}"));
-                        report.links_remapped += matches;
-                    }
+            let mut rewritten = String::with_capacity(plan.body.len());
+            let mut rest = plan.body.as_str();
+            while let Some(pos) = rest.find("entry:") {
+                let after = pos + "entry:".len();
+                rewritten.push_str(&rest[..after]);
+                rest = &rest[after..];
+                if let Some((old, new)) = rest.get(..36).and_then(|id| id_map.get_key_value(id)) {
+                    rewritten.push_str(new);
+                    report.links_remapped += usize::from(old != new);
+                    rest = &rest[36..];
                 }
             }
+            rewritten.push_str(rest);
+            plan.body = rewritten;
             for target in entry_link_targets(&plan.body) {
                 if !seen_targets.contains(&target)
                     && !id_map.contains_key(&target)
@@ -216,11 +298,12 @@ impl Vault {
                     report.links_unresolved += 1;
                 }
             }
-            match self.insert_planned_markdown(dir, &plan) {
-                Ok((a, sa)) => {
+            match self.insert_planned_markdown(&root, &plan) {
+                Ok((a, sa, export_only)) => {
                     report.entries += 1;
                     report.attachments += a;
                     report.skipped_attachments += sa;
+                    report.export_only_attachments += export_only;
                 }
                 Err(_) => report.skipped_entries += 1,
             }
@@ -328,9 +411,9 @@ impl Vault {
     /// folder. The body already carries remapped entry links.
     fn insert_planned_markdown(
         &mut self,
-        root: &Path,
+        root: &Directory,
         plan: &PlannedFile,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<(usize, usize, usize)> {
         let file = &plan.file;
         let fm = &plan.fm;
         let mut body = plan.body.clone();
@@ -345,10 +428,7 @@ impl Vault {
         let entry_date = date_prefix(&stem)
             .or_else(|| fm.created.map(|ms| date_of_ms(ms)))
             .or_else(|| {
-                fs::metadata(file)
-                    .ok()?
-                    .modified()
-                    .ok()?
+                plan.modified?
                     .duration_since(std::time::UNIX_EPOCH)
                     .ok()
                     .map(|d| date_of_ms(d.as_millis() as i64))
@@ -364,41 +444,40 @@ impl Vault {
         // Attachments first (their ids rewrite the body), then
         // the entry itself.
         let mut skipped_attachments = 0;
-        let mut attachments: Vec<(String, String, String, Vec<u8>)> = Vec::new();
-        for rel in asset_refs(&body) {
-            // No blanket `..` rejection: nested exports legitimately
-            // climb to the root `assets/` dir, and `contained_file`
-            // already refuses anything that resolves outside it.
-            let md_dir = file.parent().unwrap_or(root);
-            let path = [md_dir.join(&rel), root.join(&rel)]
+        let mut attachments: Vec<(String, String, Vec<u8>)> = Vec::new();
+        let mut remaining = MAX_ATTACHMENT_IMPORT_BYTES;
+        let (refs, extra_refs) = asset_refs(&body);
+        skipped_attachments += extra_refs;
+        for rel in refs {
+            // Nested notes can refer back to the root assets directory.
+            let note_dir = file.parent().unwrap_or(Path::new(""));
+            let source = [note_dir.join(&rel), PathBuf::from(&rel)]
                 .into_iter()
-                .find(|p| contained_file(root, p));
-            let Some(path) = path else {
+                .filter_map(|path| normalize_relative(&path))
+                .find_map(|path| root.open_regular(&path).ok().map(|file| (path, file)));
+            let Some((path, file)) = source else {
                 skipped_attachments += 1;
                 continue;
             };
-            let Ok(bytes) = fs::read(&path) else {
+            let Ok(bytes) = read_bounded_file(file, remaining) else {
                 skipped_attachments += 1;
                 continue;
             };
+            remaining -= bytes.len() as u64;
             let file_name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let (old_id, name) = match uuid_prefix(&file_name) {
-                Some((uuid, rest)) => (Some(uuid), rest.to_string()),
+                Some((uuid, rest)) => (Some(uuid.to_ascii_lowercase()), rest.to_string()),
                 None => (None, file_name.clone()),
             };
-            let att_id = match &old_id {
-                Some(id) if !self.attachment_exists(id)? => id.to_string(),
+            let att_id = match old_id {
+                Some(id) if !self.attachment_exists(&id)? => id,
                 _ => Uuid::now_v7().to_string(),
             };
-            let mime = sniff_mime(&bytes)
-                .map(str::to_string)
-                .or_else(|| mime_by_extension(&name))
-                .unwrap_or_else(|| "application/octet-stream".to_string());
             body = body.replace(&rel, &format!("attachment:{att_id}"));
-            attachments.push((att_id, name, mime, bytes));
+            attachments.push((att_id, name, bytes));
         }
 
         let now = now_ms();
@@ -422,24 +501,28 @@ impl Vault {
         let folder = plan.folder.as_deref().filter(|id| self.folder_is_live(id));
         self.insert_entry_exact(entry_id, &draft, created, updated, None, folder)?;
         let mut imported = 0;
-        for (att_id, name, mime, bytes) in &attachments {
+        let mut export_only = 0;
+        for (att_id, name, bytes) in &attachments {
             let sha = Sha256::digest(bytes);
             match self.insert_attachment_exact(
                 att_id,
                 &entry_id,
                 name,
-                mime,
+                "application/octet-stream",
                 bytes.len() as i64,
                 &sha,
                 created,
                 None,
                 Some(bytes),
             ) {
-                Ok(()) => imported += 1,
+                Ok(()) => {
+                    imported += 1;
+                    export_only += usize::from(crate::attachments::sniff_mime(bytes).is_none());
+                }
                 Err(_) => skipped_attachments += 1,
             }
         }
-        Ok((imported, skipped_attachments))
+        Ok((imported, skipped_attachments, export_only))
     }
 
     /// Imports a SoirVu JSON export (see `export_json`).
@@ -453,19 +536,17 @@ impl Vault {
     /// Entry `entry:` links are never rewritten here: entry ids
     /// are never remapped, so bodies stay byte-identical.
     pub fn import_json(&mut self, file: &Path) -> Result<ImportReport> {
-        let text = fs::read_to_string(file)?;
-        let data: JsonImport = serde_json::from_str(&text)
-            .map_err(|e| Error::InvalidInput(format!("not a SoirVu JSON export: {e}")))?;
-        if data.format != "soirvu-json-export" || (data.version != 1 && data.version != 2) {
-            return Err(Error::InvalidInput(
-                "not a SoirVu JSON export (bad format or version)".into(),
-            ));
-        }
+        self.import_parsed_json(JsonImport::read(file)?)
+    }
+
+    /// Apply bounded JSON already read and parsed without the write lease.
+    pub fn import_parsed_json(&mut self, data: JsonImport) -> Result<ImportReport> {
         let mut report = ImportReport {
             entries: 0,
             attachments: 0,
             skipped_entries: 0,
             skipped_attachments: 0,
+            export_only_attachments: 0,
             skipped_folders: 0,
             folders: 0,
             links_remapped: 0,
@@ -578,7 +659,8 @@ impl Vault {
             }
         }
         for att in &data.attachments {
-            let skip = self.attachment_exists(&att.id)?
+            let skip = !crate::storage::is_canonical_uuid(&att.id)
+                || self.attachment_exists(&att.id)?
                 || self.entry_exists(&att.entry_id).map(|e| !e).unwrap_or(true);
             if skip {
                 report.skipped_attachments += 1;
@@ -591,14 +673,10 @@ impl Vault {
                 match att
                     .data_base64
                     .as_deref()
+                    .filter(|b| b.len() as u64 <= MAX_ATTACHMENT_IMPORT_BYTES.div_ceil(3) * 4)
                     .and_then(|b| data_encoding::BASE64.decode(b.as_bytes()).ok())
                 {
-                    Some(bytes)
-                        if data_encoding::HEXLOWER.encode(&Sha256::digest(&bytes))
-                            == att.sha256 =>
-                    {
-                        Some(bytes)
-                    }
+                    Some(bytes) if bytes.len() as u64 <= MAX_ATTACHMENT_IMPORT_BYTES => Some(bytes),
                     _ => {
                         report.skipped_attachments += 1;
                         continue;
@@ -619,7 +697,13 @@ impl Vault {
                 att.deleted_at,
                 data_bytes.as_deref(),
             ) {
-                Ok(()) => report.attachments += 1,
+                Ok(()) => {
+                    report.attachments += 1;
+                    if let Some(bytes) = &data_bytes {
+                        report.export_only_attachments +=
+                            usize::from(crate::attachments::sniff_mime(bytes).is_none());
+                    }
+                }
                 Err(_) => report.skipped_attachments += 1,
             }
         }
@@ -656,6 +740,7 @@ fn now_ms() -> i64 {
 /// entry id and resolved live folder (or `None` for root).
 struct PlannedFile {
     file: PathBuf,
+    modified: Option<std::time::SystemTime>,
     fm: FrontMatter,
     body: String,
     folder: Option<String>,
@@ -688,9 +773,13 @@ struct ManifestFolder {
 /// Reads the export manifest when the imported directory is our
 /// own export. Unknown versions are ignored (layout guessing
 /// takes over) rather than failing the whole import.
-fn load_manifest(dir: &Path) -> Option<Manifest> {
-    let text = fs::read_to_string(dir.join("soirvu-export.json")).ok()?;
-    let manifest: Manifest = serde_json::from_str(&text).ok()?;
+fn load_manifest(dir: &Directory) -> Option<Manifest> {
+    let file = dir.open_regular(Path::new("soirvu-export.json")).ok()?;
+    let bytes = read_bounded_file(file, MAX_MARKDOWN_MANIFEST_BYTES).ok()?;
+    let manifest: Manifest = serde_json::from_slice(&bytes).ok()?;
+    if manifest.folders.len() > MAX_IMPORT_RECORDS {
+        return None;
+    }
     if manifest.format != "soirvu-markdown-export" || manifest.version != 2 {
         return None;
     }
@@ -740,6 +829,7 @@ fn strip_id_suffix(seg: &str) -> String {
 /// caller counts the unresolved rather than parsing Markdown.
 fn entry_link_targets(body: &str) -> Vec<String> {
     let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     let mut rest = body;
     while let Some(pos) = rest.find("entry:") {
         let after = &rest[pos + 6..];
@@ -749,7 +839,7 @@ fn entry_link_targets(body: &str) -> Vec<String> {
         let linked = after.get(..36).filter(|head| Uuid::parse_str(head).is_ok());
         if let Some(head) = linked {
             let id = head.to_string();
-            if !out.contains(&id) {
+            if seen.insert(id.clone()) {
                 out.push(id);
             }
             rest = &after[36..];
@@ -760,38 +850,33 @@ fn entry_link_targets(body: &str) -> Vec<String> {
     out
 }
 
-/// A path is usable when it is a real file under `root`: the final
-/// component must not be a symlink, no intermediate component may
-/// be one either (a symlinked directory would otherwise redirect
-/// resolution outside `root` while a lexical check still passes),
-/// and the resolved parent must stay inside the resolved root.
-/// Both sides resolve, so a symlinked root (macOS `/tmp`)
-/// compares like with like. Anything unresolvable is unusable.
-fn contained_file(root: &Path, path: &Path) -> bool {
-    if path
-        .symlink_metadata()
-        .is_ok_and(|m| m.file_type().is_symlink())
-    {
-        return false;
+fn normalize_relative(path: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir if normalized.pop() => {}
+            _ => return None,
+        }
     }
-    if !path.is_file() {
-        return false;
-    }
-    let Some(parent) = path.parent() else {
-        return false;
-    };
-    let (Ok(canonical_root), Ok(canonical_parent)) = (root.canonicalize(), parent.canonicalize())
-    else {
-        return false;
-    };
-    canonical_parent.starts_with(canonical_root)
+    Some(normalized)
 }
 
-fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(read) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in read.filter_map(|e| e.ok()) {
+fn collect_markdown(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+    depth: usize,
+    remaining: &mut usize,
+) -> Result<()> {
+    if depth > MAX_MARKDOWN_DEPTH {
+        return Err(Error::InvalidInput("Markdown import directory is too deep".into()));
+    }
+    for entry in fs::read_dir(dir)? {
+        *remaining = remaining.checked_sub(1)
+            .ok_or_else(|| Error::InvalidInput("Markdown import has too many directory items".into()))?;
+        let entry = entry?;
         // Never follow symlinks: a linked file outside the root
         // is not part of the import, and a dir loop must not hang
         // the walk.
@@ -806,7 +891,7 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
         }
         let path = entry.path();
         if is_dir {
-            collect_markdown(&path, out);
+            collect_markdown(&path, out, depth + 1, remaining)?;
         } else if is_file
             && path
                 .extension()
@@ -816,6 +901,7 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1031,19 +1117,24 @@ fn first_heading(body: &str) -> Option<String> {
 /// such a path is usable (escapes still count as skipped).
 /// Anything else — `entry:` targets, URLs, sibling notes — is not
 /// an asset and is left alone.
-fn asset_refs(body: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+fn asset_refs(body: &str) -> (Vec<String>, usize) {
+    let mut out = Vec::new();
+    let mut extra = 0;
     let mut rest = body;
     while let Some(pos) = rest.find("](") {
         let after = &rest[pos + 2..];
         let Some(end) = after.find(')') else { break };
         let dest = after[..end].split_whitespace().next().unwrap_or("");
         if is_asset_dest(dest) && !out.iter().any(|d| d == dest) {
-            out.push(dest.to_string());
+            if out.len() < MAX_MARKDOWN_ASSETS_PER_NOTE {
+                out.push(dest.to_string());
+            } else {
+                extra += 1;
+            }
         }
         rest = &after[end..];
     }
-    out
+    (out, extra)
 }
 
 /// An asset destination: `assets/…`, optionally reached through
@@ -1074,72 +1165,36 @@ fn uuid_prefix(file_name: &str) -> Option<(&str, &str)> {
 }
 
 // ---------------------------------------------------------------------------
-// MIME sniffing: the same magic-byte rules the bridge applies
-// to interactive attachments (§6.4), so an imported file gets
-// the type the interactive path would have given it.
-// ---------------------------------------------------------------------------
-
-fn sniff_mime(bytes: &[u8]) -> Option<&'static str> {
-    let starts = |magic: &[u8]| bytes.len() >= magic.len() && &bytes[..magic.len()] == magic;
-    if starts(&[0xFF, 0xD8, 0xFF]) {
-        return Some("image/jpeg");
-    }
-    if starts(b"\x89PNG\r\n\x1A\n") {
-        return Some("image/png");
-    }
-    if starts(b"GIF8") {
-        return Some("image/gif");
-    }
-    if starts(b"%PDF-") {
-        return Some("application/pdf");
-    }
-    if starts(b"ID3") || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0) {
-        return Some("audio/mpeg");
-    }
-    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" {
-        match &bytes[8..12] {
-            b"WEBP" => return Some("image/webp"),
-            b"WAVE" => return Some("audio/wav"),
-            _ => {}
-        }
-    }
-    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
-        let brand = &bytes[8..12];
-        return match brand {
-            b"M4A " | b"M4B " => Some("audio/x-m4a"),
-            b"heic" | b"heix" | b"hevc" | b"mif1" | b"msf1" => Some("image/heic"),
-            b"qt  " => Some("video/quicktime"),
-            _ => Some("video/mp4"),
-        };
-    }
-    None
-}
-
-fn mime_by_extension(name: &str) -> Option<String> {
-    let ext = name.rsplit('.').next()?.to_ascii_lowercase();
-    Some(
-        match ext.as_str() {
-            "txt" | "md" => "text/plain",
-            "json" => "application/json",
-            "csv" => "text/csv",
-            _ => return None,
-        }
-        .to_string(),
-    )
-}
-
-// ---------------------------------------------------------------------------
 // JSON mirror of the export format
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct JsonImport {
+pub struct JsonImport {
     format: String,
     version: u32,
     #[serde(default)]
     folders: Vec<JsonFolderIn>,
     entries: Vec<JsonEntryIn>,
     attachments: Vec<JsonAttachmentIn>,
+}
+
+impl JsonImport {
+    pub fn read(file: &Path) -> Result<Self> {
+        let data: JsonImport = {
+            let text = read_bounded(file, MAX_JSON_IMPORT_BYTES)?;
+            serde_json::from_slice(&text)
+                .map_err(|e| Error::InvalidInput(format!("not a SoirVu JSON export: {e}")))?
+        };
+        if data.entries.len() + data.folders.len() + data.attachments.len() > MAX_IMPORT_RECORDS {
+            return Err(Error::InvalidInput("JSON import has too many records".into()));
+        }
+        if data.format != "soirvu-json-export" || (data.version != 1 && data.version != 2) {
+            return Err(Error::InvalidInput(
+                "not a SoirVu JSON export (bad format or version)".into(),
+            ));
+        }
+        Ok(data)
+    }
 }
 
 #[derive(Deserialize)]
@@ -1678,6 +1733,181 @@ mod tests {
             vault.get_entry(good).unwrap().title.as_deref(),
             Some("Good")
         );
+    }
+
+    #[test]
+    fn json_import_skips_noncanonical_attachment_ids() {
+        let tmp = TempDir::new().unwrap();
+        let mut vault = new_vault(&tmp);
+        let entry = vault
+            .create_entry(
+                None,
+                &EntryDraft {
+                    entry_date: "2026-10-01".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let canonical = "01900000-0000-7000-8000-00000000000a";
+        let attachment = |id: &str, deleted_at: Option<i64>| {
+            serde_json::json!({
+                "id": id,
+                "entry_id": entry.id,
+                "name": "note.txt",
+                "mime": "text/plain",
+                "size": 4,
+                "sha256": data_encoding::HEXLOWER.encode(&Sha256::digest(b"note")),
+                "created_at": 1,
+                "deleted_at": deleted_at,
+                "data_base64": deleted_at.is_none().then(|| data_encoding::BASE64.encode(b"note")),
+            })
+        };
+        let file = tmp.path().join("attachment-ids.json");
+        let export = serde_json::json!({
+            "format": "soirvu-json-export",
+            "version": 2,
+            "entries": [],
+            "attachments": [
+                attachment(&canonical.to_ascii_uppercase(), None),
+                attachment("legacy-id", Some(2)),
+                attachment(canonical, None),
+            ],
+        });
+        fs::write(&file, serde_json::to_vec(&export).unwrap()).unwrap();
+
+        let report = vault.import_json(&file).unwrap();
+        assert_eq!(report.skipped_attachments, 2);
+        assert_eq!(report.attachments, 1);
+        assert!(!vault.attachment_exists("legacy-id").unwrap());
+        assert_eq!(vault.read_attachment(canonical).unwrap(), b"note");
+    }
+
+    #[test]
+    fn json_import_checks_size_and_derives_live_mime() {
+        let source_dir = TempDir::new().unwrap();
+        let mut source = new_vault(&source_dir);
+        let entry = source
+            .create_entry(
+                None,
+                &EntryDraft {
+                    entry_date: "2026-10-01".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let png = b"\x89PNG\r\n\x1a\n";
+        let image = source.add_attachment(&entry.id, "image.png", "text/plain", png).unwrap();
+        let unknown = source
+            .add_attachment(&entry.id, "note.txt", "text/plain", b"note")
+            .unwrap();
+        let video = source
+            .add_attachment(&entry.id, "clip.mp4", "application/octet-stream",
+                b"\0\0\0\x14ftypiso5\0\0\0\0iso5")
+            .unwrap();
+        let wrong_size = source
+            .add_attachment(&entry.id, "wrong.txt", "text/plain", b"wrong")
+            .unwrap();
+        let wrong_hash = source
+            .add_attachment(&entry.id, "hash.txt", "text/plain", b"hash")
+            .unwrap();
+        let missing_data = source
+            .add_attachment(&entry.id, "missing.txt", "text/plain", b"missing")
+            .unwrap();
+        let file = source_dir.path().join("metadata.json");
+        source.export_json(&file).unwrap();
+        let mut export: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        for record in export["attachments"].as_array_mut().unwrap() {
+            if record["id"] == wrong_size.id.as_str() {
+                record["size"] = 1.into();
+            } else if record["id"] == wrong_hash.id.as_str() {
+                record["sha256"] = "00".repeat(32).into();
+            } else if record["id"] == missing_data.id.as_str() {
+                record["data_base64"] = serde_json::Value::Null;
+            }
+        }
+        fs::write(&file, serde_json::to_vec(&export).unwrap()).unwrap();
+
+        let target_dir = TempDir::new().unwrap();
+        let mut target = new_vault(&target_dir);
+        let report = target.import_json(&file).unwrap();
+        assert_eq!(report.attachments, 3);
+        assert_eq!(target.get_attachment(&video.id).unwrap().mime, "video/mp4");
+        assert_eq!(report.skipped_attachments, 3);
+        assert_eq!(report.export_only_attachments, 1);
+        for id in [&wrong_size.id, &wrong_hash.id, &missing_data.id] {
+            assert!(!target.attachment_exists(id).unwrap());
+            assert!(!crate::attachments::blob_path(target.dir(), id).unwrap().exists());
+        }
+        assert_eq!(target.get_attachment(&image.id).unwrap().mime, "image/png");
+        assert_eq!(target.get_attachment(&unknown.id).unwrap().mime, "application/octet-stream");
+        assert_eq!(target.read_attachment(&unknown.id).unwrap(), b"note");
+    }
+
+    #[test]
+    fn markdown_keeps_unrecognized_text_for_export() {
+        let tmp = TempDir::new().unwrap();
+        let mut vault = new_vault(&tmp);
+        let input = tmp.path().join("input");
+        fs::create_dir_all(input.join("assets")).unwrap();
+        fs::write(input.join("2026-10-01-note.md"), "[Note](assets/note.txt)").unwrap();
+        fs::write(input.join("assets/note.txt"), b"note bytes").unwrap();
+
+        let report = vault.import_markdown(&input).unwrap();
+        assert_eq!(report.attachments, 1);
+        assert_eq!(report.export_only_attachments, 1);
+        let entry = all_entries(&vault).pop().unwrap();
+        let attachment = vault.list_attachments(&entry.id).unwrap().pop().unwrap();
+        assert_eq!(attachment.mime, "application/octet-stream");
+        let output = tmp.path().join("output");
+        vault.export_markdown(&output).unwrap();
+        assert_eq!(
+            fs::read(output.join("assets").join(format!("{}-note.txt", attachment.id))).unwrap(),
+            b"note bytes"
+        );
+    }
+
+    #[test]
+    fn markdown_inventory_counts_non_note_items_and_bounds_depth() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("ignored.txt"), "").unwrap();
+        assert!(collect_markdown(tmp.path(), &mut Vec::new(), 0, &mut 0).is_err());
+        let child = tmp.path().join("child");
+        fs::create_dir(&child).unwrap();
+        assert!(collect_markdown(tmp.path(), &mut Vec::new(), MAX_MARKDOWN_DEPTH, &mut 10).is_err());
+    }
+
+    #[test]
+    fn bounded_import_reads_enforce_the_limit() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("data");
+        fs::write(&path, b"1234").unwrap();
+        assert_eq!(read_bounded(&path, 4).unwrap(), b"1234");
+        assert!(matches!(read_bounded(&path, 3), Err(Error::InvalidInput(_))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_import_rejects_symlinked_files() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("data");
+        let link = tmp.path().join("link");
+        fs::write(&file, b"data").unwrap();
+        std::os::unix::fs::symlink(file, &link).unwrap();
+        assert!(read_bounded(&link, 8).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_import_rejects_a_fifo_without_a_writer() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("pipe");
+        let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a valid, NUL-terminated path for this call.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert!(read_bounded(&path, 8).is_err());
     }
 
     /// P2: byte-offset slicing panicked on multibyte input. Every

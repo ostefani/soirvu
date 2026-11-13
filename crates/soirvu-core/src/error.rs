@@ -19,6 +19,8 @@ pub enum Error {
     Unlock,
     /// Creating a vault with an empty passphrase is not allowed.
     EmptyPassphrase,
+    PassphraseTooShort,
+    PassphraseTooLong,
     /// A new vault can only be created in an empty folder.
     FolderNotEmpty,
     /// The header and the database are not from the same vault.
@@ -95,6 +97,8 @@ impl fmt::Display for Error {
             Error::InvalidRecoveryKey(s) => write!(f, "invalid recovery key: {s}"),
             Error::Unlock => write!(f, "could not unlock the vault"),
             Error::EmptyPassphrase => write!(f, "the passphrase must not be empty"),
+            Error::PassphraseTooShort => write!(f, "use at least 8 characters for a new passphrase"),
+            Error::PassphraseTooLong => write!(f, "the passphrase exceeds the 64 KiB limit"),
             Error::FolderNotEmpty => write!(f, "the folder is not empty"),
             Error::VaultMismatch => write!(f, "the database does not belong to this vault header"),
             Error::Io(e) => write!(f, "file error: {e}"),

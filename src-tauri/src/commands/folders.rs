@@ -35,9 +35,7 @@ fn to_dto(
     let entry_count = vault.count_direct_entries(&folder.id)?;
     let recovered = match &folder.parent_id {
         None => false,
-        Some(parent) => {
-            !soirvu_core::folders::folder_is_live(vault.database().connection(), parent)?
-        }
+        Some(parent) => !vault.has_live_folder(parent)?,
     };
     Ok(FolderDto {
         id: folder.id.clone(),

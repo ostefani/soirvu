@@ -5,6 +5,8 @@ expression: "lines.join(\"\\n\")"
 ---
 Unlock -> wrong_passphrase
 EmptyPassphrase -> empty_passphrase
+PassphraseTooShort -> passphrase_too_short
+PassphraseTooLong -> passphrase_too_long
 InvalidRecoveryKey -> invalid_recovery_key
 UnsupportedFormat -> unsupported_version
 InvalidHeader -> corrupt

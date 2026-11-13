@@ -50,7 +50,7 @@
 //! `Vault::restamp_device` on one of the copies.
 
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
@@ -63,7 +63,8 @@ use unicode_normalization::UnicodeNormalization;
 use crate::crypto::{NONCE_LEN, random_bytes};
 use crate::entries::next_lseq;
 use crate::error::{Error, Result};
-use crate::folder::{Vault, rename_retry};
+use crate::attachments::MAX_BLOB_PLAINTEXT_BYTES;
+use crate::folder::Vault;
 
 /// Bundle format 2 adds folder records and entry membership
 /// (format 1 has neither). A v2 client still READS v1 bundles —
@@ -127,7 +128,6 @@ const MAX_SYNC_FILES: usize = 20_000;
 const MAX_ACK_FILES: usize = 512;
 const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_APPLY_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_BLOB_PLAINTEXT_BYTES: u64 = 1024 * 1024 * 1024;
 const ACK_DIR: &str = "acks";
 
 /// What one emit produced (or None when nothing changed).
@@ -436,7 +436,9 @@ fn read_acks(sync_dir: &Path, vault_id: &str) -> Result<Vec<SyncAck>> {
 /// Reads at most `limit + 1` bytes so a concurrent file growth cannot
 /// turn a metadata size check into an unbounded allocation.
 fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
-    let file = File::open(path)?;
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let name = path.file_name().ok_or_else(|| Error::InvalidInput("missing sync filename".into()))?;
+    let file = crate::fs_boundary::Directory::open(parent)?.open_regular(Path::new(name))?;
     let mut bytes = Vec::with_capacity(limit.min(1024 * 1024) as usize);
     file.take(limit + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
@@ -447,24 +449,18 @@ fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
 
 /// Copies a sync blob with a streaming ciphertext-size ceiling derived from
 /// the advertised plaintext size. The caller authenticates it after copying.
-fn copy_bounded_blob(source: &Path, dest: &Path, expected_size: i64) -> Result<()> {
+fn copy_bounded_blob(input: File, output: &mut File, expected_size: i64) -> Result<()> {
     if expected_size < 0 || expected_size as u64 > MAX_BLOB_PLAINTEXT_BYTES {
         return Err(Error::InvalidInput("attachment exceeds size limit".into()));
     }
     let max_file_size = crate::attachments::encrypted_blob_len(expected_size)
         .ok_or_else(|| Error::InvalidInput("attachment size is invalid".into()))?;
-    let input = File::open(source)?;
-    let mut output = File::create(dest)?;
-    let copied = std::io::copy(&mut input.take(max_file_size + 1), &mut output)?;
-    if copied > max_file_size {
-        drop(output);
-        let _ = fs::remove_file(dest);
+    let copied = std::io::copy(&mut input.take(max_file_size + 1), output)?;
+    if copied != max_file_size {
         return Err(Error::InvalidInput(
             "attachment size does not match its sync record".into(),
         ));
     }
-    output.flush()?;
-    output.sync_all()?;
     Ok(())
 }
 
@@ -662,22 +658,35 @@ impl Vault {
         }
         let from_lseq = watermark + 1;
 
+        for record in &attachments {
+            crate::attachments::validate_attachment_id(&record.id)?;
+        }
+
         // Blobs first: a bundle must never reference a blob
         // that has not arrived next to it.
-        let blobs_dir = sync_dir.join("blobs");
+        fs::create_dir_all(sync_dir)?;
+        let sync_root = crate::fs_boundary::Directory::open(sync_dir)?;
+        let vault_root = crate::fs_boundary::Directory::open(self.dir())?;
         for record in &attachments {
             if record.deleted_at.is_some() {
                 continue;
             }
-            let dest = blobs_dir.join(&record.id);
-            if !dest.exists() {
-                let src = crate::attachments::blob_path(self.dir(), &record.id);
-                if src.exists() {
-                    fs::create_dir_all(&blobs_dir)?;
-                    let tmp = blobs_dir.join(format!(".tmp-{}", record.id));
-                    fs::copy(&src, &tmp)?;
-                    rename_retry(&tmp, &dest)?;
-                }
+            let relative = crate::attachments::blob_path(Path::new(""), &record.id)?;
+            let mut source = match vault_root.open_regular(&relative) {
+                Ok(source) => source,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let blobs = sync_root.directory(Path::new("blobs"), true)?;
+            let name = Path::new(&record.id);
+            if blobs.open_regular(name).is_ok() {
+                continue;
+            }
+            match blobs.publish(name, |file| Ok(std::io::copy(&mut source, file)?)) {
+                Ok(_) => {}
+                Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists
+                    && blobs.open_regular(name).is_ok() => {}
+                Err(error) => return Err(error),
             }
         }
 
@@ -725,7 +734,7 @@ impl Vault {
             // torn copy of it — or another copy of this
             // vault writing under my device id, whose bundle
             // must never be silently overwritten.
-            let existing = fs::read(&dest)?;
+            let existing = read_bounded(&dest, MAX_BUNDLE_BYTES)?;
             match open_bundle(&cipher, &existing) {
                 Ok((old_header, old_bundle)) => {
                     let identical = old_header.vault_id == header.vault_id
@@ -758,15 +767,11 @@ impl Vault {
                         // removing the file, not restamp.
                         return Err(Error::SyncUnreadable(file_name.clone()));
                     }
-                    let tmp = sync_dir.join(format!(".tmp-{file_name}"));
-                    fs::write(&tmp, &bytes)?;
-                    rename_retry(&tmp, &dest)?;
+                    sync_root.replace(Path::new(&file_name), &bytes)?;
                 }
             }
         } else {
-            let tmp = sync_dir.join(format!(".tmp-{file_name}"));
-            fs::write(&tmp, &bytes)?;
-            rename_retry(&tmp, &dest)?;
+            sync_root.write(Path::new(&file_name), &bytes)?;
         }
 
         // The watermark moves only after the bundle is
@@ -1441,10 +1446,10 @@ impl Vault {
                 }
             }
         }
-        fs::create_dir_all(&acks_dir)?;
-        let tmp = acks_dir.join(format!(".tmp-{}", self.device_id));
-        fs::write(&tmp, &bytes)?;
-        rename_retry(&tmp, &dest)?;
+        let root = crate::fs_boundary::Directory::open(sync_dir)?;
+        let acks = root.directory(Path::new("acks"), true)?;
+        let name = dest.file_name().ok_or_else(|| Error::InvalidInput("missing sync ack name".into()))?;
+        acks.replace(Path::new(name), &bytes)?;
         Ok(AckPublish {
             ahead: warning,
             warning: note,
@@ -1874,19 +1879,25 @@ impl Vault {
                     if entry_exists {
                         let tx = self.db.conn_mut().transaction()?;
                         let lseq = next_lseq(&tx)?;
+                        // The authenticated record preserves the historical
+                        // digest. A tombstone has no blob to verify.
                         insert_attachment_row(&tx, record, lseq, &record.sha256)?;
                         tx.commit()?;
                     }
                     return Ok(());
                 }
-                let src = sync_dir.join("blobs").join(&record.id);
-                if !src.exists() {
-                    report.problems.push(format!(
-                        "attachment {}: its blob is missing from the sync folder",
-                        record.id
-                    ));
-                    return Ok(());
-                }
+                let source = crate::fs_boundary::Directory::open(sync_dir)
+                    .and_then(|root| root.open_regular(&Path::new("blobs").join(&record.id)));
+                let source = match source {
+                    Ok(source) => source,
+                    Err(_) => {
+                        report.problems.push(format!(
+                            "attachment {}: its blob is missing or unsafe in the sync folder",
+                            record.id
+                        ));
+                        return Ok(());
+                    }
+                };
                 let entry_exists = self
                     .db
                     .connection()
@@ -1903,45 +1914,55 @@ impl Vault {
                     ));
                     return Ok(());
                 }
-                let dest = crate::attachments::blob_path(self.dir(), &record.id);
-                if let Some(parent) = dest.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let tmp = dest.with_extension("sync-tmp");
-                match copy_bounded_blob(&src, &tmp, record.size) {
+                let relative = crate::attachments::blob_path(Path::new(""), &record.id)?;
+                let vault_root = crate::fs_boundary::Directory::open(self.dir())?;
+                let shard = vault_root.directory(relative.parent().expect("blob has a parent"), true)?;
+                let dest = Path::new(&record.id);
+                let attachment = crate::attachments::Attachment {
+                    id: record.id.clone(),
+                    entry_id: record.entry_id.clone(),
+                    name: record.name.clone(),
+                    mime: record.mime.clone(),
+                    size: record.size,
+                    sha256: record.sha256.clone(),
+                    created_at: record.created_at,
+                };
+                let key = self.attachment_key();
+                let staged = match shard.open_regular(dest) {
+                    // A crash may have published the blob before its row. Reuse it
+                    // only if it still authenticates against this record.
+                    Ok(mut file) => crate::attachments::verify_staged_blob(&mut file, &attachment, &key),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        shard.publish(dest, |file| {
+                            copy_bounded_blob(source, file, record.size)?;
+                            crate::attachments::verify_staged_blob(file, &attachment, &key)
+                        })
+                    }
+                    Err(error) => Err(error.into()),
+                };
+                match staged {
                     Ok(()) => {}
-                    Err(Error::InvalidInput(_)) => {
+                    Err(Error::InvalidInput(_) | Error::CorruptAttachment(_)) => {
                         report.problems.push(format!(
-                            "attachment {}: blob size is invalid or exceeds the limit",
+                            "attachment {}: content does not match its size or hash; rejected",
                             record.id
                         ));
                         return Ok(());
                     }
                     Err(error) => return Err(error),
                 }
-                rename_retry(&tmp, &dest)?;
-                {
+                let commit = (|| -> Result<()> {
                     let tx = self.db.conn_mut().transaction()?;
                     let lseq = next_lseq(&tx)?;
                     insert_attachment_row(&tx, record, lseq, &record.sha256)?;
                     tx.commit()?;
+                    Ok(())
+                })();
+                if commit.is_err() {
+                    let _ = shard.remove_file(dest);
                 }
-                // Authenticate what arrived: the plaintext
-                // hash must match the record (the same check
-                // JSON import makes, §8).
-                let verified = self.verify_attachment_integrity(&record.id).is_ok();
-                if verified {
-                    report.attachments_applied += 1;
-                } else {
-                    let tx = self.db.conn_mut().transaction()?;
-                    tx.execute("DELETE FROM attachment WHERE id = ?1", [&record.id])?;
-                    tx.commit()?;
-                    crate::attachments::remove_blob(self.dir(), &record.id);
-                    report.problems.push(format!(
-                        "attachment {}: content does not match its hash; rejected",
-                        record.id
-                    ));
-                }
+                commit?;
+                report.attachments_applied += 1;
             }
         }
         Ok(())
@@ -2003,6 +2024,9 @@ fn validate_bundle_records(bundle: &Bundle) -> std::result::Result<(), &'static 
                 && !crate::storage::is_canonical_uuid(&entry.base_device))
         {
             return Err("entry id or device id is invalid");
+        }
+        if !crate::entries::entry_within_limits(entry.title.as_deref(), entry.body_md.as_deref(), entry.tags.len()) {
+            return Err("entry exceeds its size or tag limit");
         }
         if entry.rev < 1 || entry.base_rev < 0 {
             return Err("entry revision is invalid");
@@ -3276,6 +3300,35 @@ mod tests {
         let report = a.sync_prune(sync.path()).unwrap();
         assert_eq!(report.blobs_removed, 1);
         assert!(!blob.exists());
+    }
+
+    #[test]
+    fn sync_authenticates_blobs_before_publication_and_reuses_valid_orphans() {
+        let (_da, _db, mut a, mut b) = two_devices();
+        let sync = TempDir::new().unwrap();
+        let entry = a.create_entry(None, &draft("with file")).unwrap();
+        let att = a.add_attachment(&entry.id, "note.txt", "text/plain", b"blob bytes").unwrap();
+        a.sync_emit(sync.path()).unwrap();
+
+        let source = sync.path().join("blobs").join(&att.id);
+        let original = fs::read(&source).unwrap();
+        let mut damaged = original.clone();
+        *damaged.last_mut().unwrap() ^= 1;
+        fs::write(&source, damaged).unwrap();
+        let destination = crate::attachments::blob_path(b.dir(), &att.id).unwrap();
+        let report = b.sync_apply(sync.path()).unwrap();
+        assert_eq!(report.problems.len(), 1);
+        assert!(!destination.exists());
+        assert!(b.list_attachments(&entry.id).unwrap().is_empty());
+
+        // Simulate interruption after publishing valid ciphertext and before
+        // committing metadata. Reapplying completes the operation.
+        fs::write(source, &original).unwrap();
+        fs::write(destination, original).unwrap();
+        let report = b.sync_apply(sync.path()).unwrap();
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert_eq!(report.attachments_applied, 1);
+        assert_eq!(b.read_attachment(&att.id).unwrap(), b"blob bytes");
     }
 
     #[test]

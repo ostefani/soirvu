@@ -53,9 +53,27 @@ Open SoirVu, choose a location for your vault and create a passphrase. Save the 
 - [x] **Auto-lock** — the vault locks on idle, sleep, screen lock or manual shortcut, and the keys are wiped from memory.
 - [x] **Key management** — change your passphrase, regenerate your recovery key or rotate the vault's master key in the app.
 
+- Diary import retains unrecognized attachment formats for export and reports them separately.
+- JSON imports allow up to 512 MiB per file and 256 MiB per decoded attachment. Markdown imports allow up to 256 MiB of linked attachments per note. Imports skip attachments beyond those limits and reject an oversized JSON file before parsing.
+- Inline previews respect the current per-type attachment limits. Files above those limits remain available through external opening for supported formats or through export.
+- Markdown planning accepts at most 20,000 directory items, 32 levels below the root and 64 MiB of note text per import. New entry writes and incoming sync records allow up to 4 MiB of body text, a 4 KiB title and 128 tags.
+- Inline attachment responses are limited to 8 MiB. Larger previews require a webview that requests byte ranges. Supported files can still open externally.
+- Passphrase operations accept vaults with up to 1 GiB of Argon2 memory and a combined memory-times-passes budget of 4 GiB-passes. Vaults with higher parameters can still be read using their recovery key.
+- Exports publish complete files without replacing existing names. Export, attachment storage and vault copying require a filesystem that supports hard links, such as APFS, ext4 or NTFS. Use a supported local volume if a removable or shared volume cannot publish the files.
+
 ## Security model
 
 The Rust backend handles vault keys, cryptography and vault file operations. Encryption protects your diary at rest — it cannot protect text while you are reading it, so auto-lock exists to shrink that window. Keyloggers, screen recorders and a compromised OS are explicitly out of scope.
+
+Import and export dialogs expire when their vault session ends. Once an authenticated export starts, locking waits for it to finish. Background reads and media playback do not reset the inactivity timer.
+
+New passphrases require at least eight Unicode characters and at most 64 KiB. Existing shorter passphrases still unlock. If an old credential exceeds the byte limit, use the recovery key to open the vault. The inactivity timeout accepts 1 minute to 24 hours, and attachment size preferences accept 1 to 1024 MiB. The app asks for native confirmation before increasing those limits or disabling metadata stripping or clipboard clearing.
+
+External links require confirmation and support HTTPS or a single mail recipient with optional subject and body. The app webview stays on its packaged origin or the configured development origin. Vault connections enable SQLite defensive mode and disable trusted schemas.
+
+The vault schema checks entry and folder revisions, attachment sizes, and digest lengths on write. Upgrading a valid vault creates an encrypted pre-upgrade backup. If the upgrade finds invalid legacy metadata, it stops and preserves the existing rows for recovery. Older app builds cannot open the upgraded schema.
+
+Photo metadata stripping is best effort for JPEG, PNG, and WebP attachments. Unsupported or malformed files can retain metadata. Diary interchange imports preserve their attachment bytes. Opening an attachment externally creates a plaintext copy that SoirVu clears on lock or startup. An external app may keep its own copy.
 
 ## Tech
 

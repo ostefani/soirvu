@@ -27,7 +27,7 @@
 //! 2 = the command line itself was wrong.
 
 use std::env;
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -166,9 +166,7 @@ fn open_args(args: &[String]) -> Result<(&[String], Option<&str>), RunError> {
 
 fn create(dir: &Path) -> Result<(), RunError> {
     let passphrase = read_passphrase("New passphrase: ")?;
-    if passphrase.is_empty() {
-        return Err(RunError::Failed(Error::EmptyPassphrase.to_string()));
-    }
+    soirvu_core::crypto::validate_new_passphrase(&passphrase).map_err(failed)?;
     // Calibrated on this machine, about 0.5–1 s per unlock (DESIGN §5).
     let kdf = KdfParams::calibrate(Duration::from_millis(750)).map_err(failed)?;
     let (vault, recovery) = Vault::create(dir, &passphrase, kdf).map_err(failed)?;
@@ -181,9 +179,7 @@ fn create(dir: &Path) -> Result<(), RunError> {
 }
 
 fn header_info(dir: &Path) -> Result<(), RunError> {
-    let bytes = std::fs::read(dir.join(HEADER_FILE))
-        .map_err(|e| RunError::Failed(format!("cannot read the vault header: {e}")))?;
-    let header = VaultHeader::from_json(&bytes).map_err(failed)?;
+    let header = VaultHeader::read_file(&dir.join(HEADER_FILE)).map_err(failed)?;
     println!("format version: {}", header.format_version);
     println!("suite: {}", header.suite);
     println!("vault id: {}", header.vault_id);
@@ -327,12 +323,18 @@ fn export_json(dir: &Path, out: &Path, recovery: Option<&str>) -> Result<(), Run
 /// Passphrase from SOIRVU_PASSPHRASE, else a terminal prompt with echo off
 /// (via `stty`; if that fails the typed text is visible), else a line from
 /// standard input (for scripts that pipe it).
-fn read_passphrase(prompt: &str) -> Result<String, RunError> {
+fn read_passphrase(prompt: &str) -> Result<zeroize::Zeroizing<String>, RunError> {
+    use soirvu_core::crypto::MAX_PASSPHRASE_BYTES;
+    use zeroize::Zeroizing;
     if let Ok(passphrase) = env::var("SOIRVU_PASSPHRASE") {
+        let passphrase = Zeroizing::new(passphrase);
+        if passphrase.len() > MAX_PASSPHRASE_BYTES {
+            return Err(failed(Error::PassphraseTooLong));
+        }
         return Ok(passphrase);
     }
     let stdin = io::stdin();
-    let mut line = String::new();
+    let mut line = Zeroizing::new(String::new());
     if stdin.is_terminal() {
         eprint!("{prompt}");
         let _ = io::stderr().flush();
@@ -341,7 +343,7 @@ fn read_passphrase(prompt: &str) -> Result<String, RunError> {
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
-        let read = stdin.lock().read_line(&mut line);
+        let read = stdin.lock().take((MAX_PASSPHRASE_BYTES + 3) as u64).read_line(&mut line);
         if echo_off {
             let _ = std::process::Command::new("stty").arg("echo").status();
             eprintln!();
@@ -350,10 +352,19 @@ fn read_passphrase(prompt: &str) -> Result<String, RunError> {
     } else {
         stdin
             .lock()
+            .take((MAX_PASSPHRASE_BYTES + 3) as u64)
             .read_line(&mut line)
             .map_err(|e| RunError::Failed(e.to_string()))?;
     }
-    Ok(line.trim_end_matches(['\n', '\r']).to_string())
+    // Remove the input delimiter only, preserving the passphrase itself.
+    let len = line.strip_suffix('\n').map_or(line.len(), |without_lf| {
+        without_lf.strip_suffix('\r').unwrap_or(without_lf).len()
+    });
+    line.truncate(len);
+    if line.len() > MAX_PASSPHRASE_BYTES {
+        return Err(failed(Error::PassphraseTooLong));
+    }
+    Ok(line)
 }
 
 fn sync_emit(

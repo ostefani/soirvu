@@ -77,7 +77,7 @@
         try {
             await api.vaultChangePassphrase(security.curPass, security.newPass);
             if (!alive) return;
-            security.curPass = security.newPass;
+            security.curPass = '';
             security.newPass = '';
             security.newPass2 = '';
             notify(
@@ -172,7 +172,10 @@
                 let message = `Imported ${outcome.entries} entries and ${outcome.attachments} attachments.`;
                 if (outcome.folders > 0) message += ` ${outcome.folders} folders.`;
                 if (outcome.skippedEntries > 0 || outcome.skippedAttachments > 0) {
-                    message += ` Skipped ${outcome.skippedEntries} entries and ${outcome.skippedAttachments} attachments (already present or unreadable).`;
+                    message += ` Skipped ${outcome.skippedEntries} entries and ${outcome.skippedAttachments} attachments (already present, invalid, unreadable or over the size limit).`;
+                }
+                if (outcome.exportOnlyAttachments > 0) {
+                    message += ` Attachments available through export only: ${outcome.exportOnlyAttachments}.`;
                 }
                 notify(EVENT_TYPE.SAVED, message);
             }
@@ -203,18 +206,12 @@
         }
     }
 
-    // Folder picker/clear results re-enter as one-field patches
-    // through the same sequence: merging over the latest
-    // acknowledgement keeps a racing preference write from
-    // reverting the picked folder, and vice versa.
     async function pickSync() {
         general.error = '';
         try {
             const updated = await api.syncPickFolder();
             if (updated) {
-                const next = await settingsCommit.save({
-                    sync_location: updated.sync_location,
-                });
+                const next = await settingsCommit.refresh();
                 if (!alive) return;
                 general.settings = next;
                 await loadSync();
@@ -228,10 +225,8 @@
     async function clearSync() {
         general.error = '';
         try {
-            const cleared = await api.syncClearFolder();
-            const next = await settingsCommit.save({
-                sync_location: cleared.sync_location,
-            });
+            await api.syncClearFolder();
+            const next = await settingsCommit.refresh();
             if (!alive) return;
             general.settings = next;
             sync.pruneArm = false;
@@ -403,7 +398,7 @@
             const settings = await api.settingsGet();
             if (!alive) return;
             general.settings = settings;
-            settingsCommit = createSettingsCommit(general.settings, {
+            settingsCommit = createSettingsCommit({
                 set: (next) => api.settingsSet(next),
                 get: () => api.settingsGet(),
             });
@@ -432,23 +427,34 @@
             const next = await settingsCommit.save(patch);
             if (!alive) return;
             general.settings = next;
+            general.timeoutMin = toMinutes(next.lock_timeout_secs);
             notify(EVENT_TYPE.SAVED, successMessage);
         } catch (e) {
             if (!alive) return;
-            general.error = unknownErrorText(e);
+            general.timeoutMin = toMinutes(general.settings.lock_timeout_secs);
+            if (e === 'cancelled') return;
+            general.error = e === 'invalid_input'
+                ? 'Use a lock timeout between 1 minute and 24 hours.'
+                : unknownErrorText(e);
         } finally {
             general.prefsSaving = --pendingSaves > 0;
         }
     }
 
-    const saveTimeout = () =>
-        saveSetting({ lock_timeout_secs: toMinutes(general.timeoutMin * 60) * 60 }, 'Inactivity lock timeout saved.');
+    const saveTimeout = () => {
+        const minutes = general.timeoutMin;
+        if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes > 1440) {
+            general.error = 'Use a lock timeout between 1 minute and 24 hours.';
+            return;
+        }
+        return saveSetting({ lock_timeout_secs: minutes * 60 }, 'Inactivity lock timeout saved.');
+    };
 
     const saveStrip = (strip) =>
         saveSetting(
             { strip_exif: strip },
             strip
-                ? 'Location metadata will be removed from imported photos.'
+                ? 'The app will try to strip location metadata from supported photo attachments.'
                 : 'Location metadata will be kept in imported photos.',
         );
     const saveClipboard = (clear) =>
@@ -485,9 +491,7 @@
         try {
             const updated = await api.settingsPickBackupDir();
             if (updated) {
-                const next = await settingsCommit.save({
-                    backup_location: updated.backup_location,
-                });
+                const next = await settingsCommit.refresh();
                 if (!alive) return;
                 general.settings = next;
             }
@@ -500,10 +504,8 @@
     async function clearBackup() {
         general.error = '';
         try {
-            const cleared = await api.settingsClearBackupDir();
-            const next = await settingsCommit.save({
-                backup_location: cleared.backup_location,
-            });
+            await api.settingsClearBackupDir();
+            const next = await settingsCommit.refresh();
             if (!alive) return;
             general.settings = next;
         } catch (e) {

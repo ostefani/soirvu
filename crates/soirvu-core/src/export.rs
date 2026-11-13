@@ -50,7 +50,7 @@ impl Vault {
     /// rewrites them with that parser; the CLI documents the
     /// limitation instead of corrupting samples).
     pub fn export_markdown(&self, out_dir: &Path) -> Result<ExportReport> {
-        prepare_out_dir(out_dir)?;
+        let output = prepare_out_dir(out_dir)?;
         let mut report = ExportReport {
             entries: 0,
             attachments: 0,
@@ -65,7 +65,7 @@ impl Vault {
         let placed = self.export_folder_paths()?;
         for folder in placed.values() {
             if !folder.segments.is_empty() {
-                fs::create_dir_all(out_dir.join(folder.segments.join("/")))?;
+                output.directory(Path::new(&folder.segments.join("/")), true)?;
                 report.folders += 1;
             }
         }
@@ -100,10 +100,9 @@ impl Vault {
             let prefix = "../".repeat(dir_rel.components().count());
             let mut body = entry.body_md.clone();
             for att in &attachments {
-                let file_name = format!("{}-{}", att.id, att.name);
-                let assets = out_dir.join("assets");
-                fs::create_dir_all(&assets)?;
-                fs::write(assets.join(&file_name), self.read_attachment(&att.id)?)?;
+                let file_name = format!("{}-{}", att.id, export_attachment_name(&att.name));
+                let assets = output.directory(Path::new("assets"), true)?;
+                assets.write(Path::new(&file_name), self.read_attachment(&att.id)?)?;
                 body = body.replace(
                     &format!("attachment:{}", att.id),
                     &format!("{prefix}assets/{file_name}"),
@@ -111,19 +110,14 @@ impl Vault {
                 report.attachments += 1;
             }
 
-            let dir = if dir_rel.as_os_str().is_empty() {
-                out_dir.to_path_buf()
-            } else {
-                fs::create_dir_all(out_dir.join(&dir_rel))?;
-                out_dir.join(&dir_rel)
-            };
+            let dir = output.directory(&dir_rel, true)?;
             let short_id = &entry.id[..8];
             let file_name = format!(
                 "{}-{}-{short_id}.md",
                 entry.entry_date,
                 slug(entry.title.as_deref())
             );
-            fs::write(dir.join(&file_name), render_entry(&entry, &body))?;
+            dir.write(Path::new(&file_name), render_entry(&entry, &body))?;
             manifest_entries.push(ManifestEntry {
                 id: entry.id.clone(),
                 path: dir_rel
@@ -152,8 +146,8 @@ impl Vault {
                 .collect(),
             entries: manifest_entries,
         };
-        fs::write(
-            out_dir.join("soirvu-export.json"),
+        output.write(
+            Path::new("soirvu-export.json"),
             serde_json::to_string_pretty(&manifest)
                 .map_err(|e| Error::InvalidInput(e.to_string()))?,
         )?;
@@ -477,7 +471,9 @@ impl Vault {
         };
         let text = serde_json::to_string_pretty(&export)
             .map_err(|e| Error::InvalidInput(e.to_string()))?;
-        fs::write(out_file, text)?;
+        let parent = out_file.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let name = out_file.file_name().ok_or_else(|| Error::InvalidInput("missing export filename".into()))?;
+        crate::fs_boundary::Directory::open(parent)?.write(Path::new(name), text)?;
         Ok(ExportReport {
             entries: export.entries.len(),
             attachments: export.attachments.len(),
@@ -487,18 +483,13 @@ impl Vault {
     }
 }
 
-fn prepare_out_dir(dir: &Path) -> Result<()> {
-    if dir.exists() {
-        let has_content = fs::read_dir(dir)?
-            .filter_map(|entry| entry.ok())
-            .any(|entry| entry.file_name() != ".DS_Store");
-        if has_content {
-            return Err(Error::FolderNotEmpty);
-        }
-    } else {
-        fs::create_dir_all(dir)?;
+fn prepare_out_dir(dir: &Path) -> Result<crate::fs_boundary::Directory> {
+    fs::create_dir_all(dir)?;
+    let output = crate::fs_boundary::Directory::open(dir)?;
+    if fs::read_dir(dir)?.any(|entry| entry.is_err() || entry.is_ok_and(|e| e.file_name() != ".DS_Store")) {
+        return Err(Error::FolderNotEmpty);
     }
-    Ok(())
+    Ok(output)
 }
 
 /// A YAML double-quoted string: backslash and quote are escaped, control
@@ -516,6 +507,46 @@ fn yaml_string(text: &str) -> String {
     }
     out.push('"');
     out
+}
+
+// Stored names can come from older or foreign clients. Reserve space for a
+// conventional extension and keep the UUID-prefixed filename under 255 bytes.
+fn export_attachment_name(name: &str) -> String {
+    use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
+
+    fn sanitize(text: &str, limit: usize) -> String {
+        let mut safe = String::new();
+        for c in text.nfc() {
+            let c = if c.is_alphanumeric() || is_combining_mark(c) || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            };
+            if safe.len() + c.len_utf8() > limit {
+                break;
+            }
+            safe.push(c);
+        }
+        safe.trim_matches('.').into()
+    }
+
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty()
+            && !ext.is_empty()
+            && ext.len() <= 32
+            && ext.bytes().all(|b| b.is_ascii_alphanumeric()) => (stem, ext),
+        _ => (name, ""),
+    };
+    let extension_len = extension.len() + usize::from(!extension.is_empty());
+    let mut safe = sanitize(stem, 200 - extension_len);
+    if safe.is_empty() {
+        safe.push_str("attachment");
+    }
+    if !extension.is_empty() {
+        safe.push('.');
+        safe.push_str(extension);
+    }
+    safe
 }
 
 /// A file-name version of the title: letters and digits (any alphabet) are
@@ -611,6 +642,18 @@ mod tests {
         assert_eq!(iso_utc(951_782_400_000), "2000-02-29T00:00:00Z"); // leap day
         assert_eq!(iso_utc(1_762_000_000_000), "2025-11-01T12:26:40Z");
         assert_eq!(iso_utc(-1), "1969-12-31T23:59:59Z");
+    }
+
+    #[test]
+    fn attachment_export_names_are_safe_and_keep_extensions() {
+        assert_eq!(export_attachment_name(""), "attachment");
+        assert_eq!(export_attachment_name("meeting notes"), "meeting_notes");
+        assert_eq!(export_attachment_name("CON.txt"), "CON.txt");
+        assert_eq!(export_attachment_name("re\u{301}sume\u{301}.pdf"), "résumé.pdf");
+        assert_eq!(export_attachment_name("../folder\\note: draft.txt"), "_folder_note__draft.txt");
+        let name = export_attachment_name(&format!("{}.png", "é".repeat(150)));
+        assert!(name.len() <= 200);
+        assert!(name.ends_with(".png"));
     }
 
     #[test]

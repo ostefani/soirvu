@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use data_encoding::HEXLOWER;
+use rusqlite::config::DbConfig;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -139,12 +140,59 @@ CREATE INDEX entry_title_key_idx ON entry(title_key) WHERE deleted_at IS NULL;
 INSERT INTO meta (key, value) VALUES ('sync_epoch', '1'), ('bootstrap_pending', '1');
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[
-    MIGRATION_1_META,
-    MIGRATION_2_ENTRIES,
-    MIGRATION_3_ATTACHMENTS,
-    MIGRATION_4_SYNC,
-    MIGRATION_5_FOLDERS,
+// Write guards preserve table layouts and the external-content FTS index.
+const MIGRATION_6_ROW_INVARIANTS: &str = "
+CREATE TRIGGER entry_invariants_insert BEFORE INSERT ON entry
+WHEN typeof(NEW.rev) != 'integer' OR NEW.rev < 1 OR typeof(NEW.base_rev) != 'integer' OR NEW.base_rev < 0
+BEGIN
+  SELECT RAISE(ABORT, 'invalid entry row');
+END;
+CREATE TRIGGER entry_invariants_update BEFORE UPDATE OF rev, base_rev ON entry
+WHEN typeof(NEW.rev) != 'integer' OR NEW.rev < 1 OR typeof(NEW.base_rev) != 'integer' OR NEW.base_rev < 0
+BEGIN
+  SELECT RAISE(ABORT, 'invalid entry row');
+END;
+CREATE TRIGGER folder_invariants_insert BEFORE INSERT ON folder
+WHEN typeof(NEW.rev) != 'integer' OR NEW.rev < 1 OR typeof(NEW.base_rev) != 'integer' OR NEW.base_rev < 0
+BEGIN
+  SELECT RAISE(ABORT, 'invalid folder row');
+END;
+CREATE TRIGGER folder_invariants_update BEFORE UPDATE OF rev, base_rev ON folder
+WHEN typeof(NEW.rev) != 'integer' OR NEW.rev < 1 OR typeof(NEW.base_rev) != 'integer' OR NEW.base_rev < 0
+BEGIN
+  SELECT RAISE(ABORT, 'invalid folder row');
+END;
+CREATE TRIGGER attachment_invariants_insert BEFORE INSERT ON attachment
+WHEN typeof(NEW.size) != 'integer' OR NEW.size < 0 OR typeof(NEW.sha256) != 'blob' OR length(NEW.sha256) != 32
+BEGIN
+  SELECT RAISE(ABORT, 'invalid attachment row');
+END;
+CREATE TRIGGER attachment_invariants_update BEFORE UPDATE OF size, sha256 ON attachment
+WHEN typeof(NEW.size) != 'integer' OR NEW.size < 0 OR typeof(NEW.sha256) != 'blob' OR length(NEW.sha256) != 32
+BEGIN
+  SELECT RAISE(ABORT, 'invalid attachment row');
+END;
+";
+
+#[derive(Clone, Copy)]
+pub(crate) struct Migration {
+    sql: &'static str,
+    preflight: Option<fn(&Connection) -> Result<()>>,
+}
+
+impl Migration {
+    pub(crate) const fn new(sql: &'static str) -> Self {
+        Self { sql, preflight: None }
+    }
+}
+
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration::new(MIGRATION_1_META),
+    Migration::new(MIGRATION_2_ENTRIES),
+    Migration::new(MIGRATION_3_ATTACHMENTS),
+    Migration::new(MIGRATION_4_SYNC),
+    Migration::new(MIGRATION_5_FOLDERS),
+    Migration { sql: MIGRATION_6_ROW_INVARIANTS, preflight: Some(check_row_invariants) },
 ];
 
 /// The schema version this build of the app understands.
@@ -273,7 +321,7 @@ impl Database {
     }
 
     /// The raw connection (read access).
-    pub fn connection(&self) -> &Connection {
+    pub(crate) fn connection(&self) -> &Connection {
         &self.conn
     }
 
@@ -287,7 +335,7 @@ pub(crate) fn create_with(
     path: &Path,
     key: &Key,
     vault_id: &str,
-    migrations: &[&str],
+    migrations: &[Migration],
 ) -> Result<Database> {
     if path.exists() {
         return Err(Error::Io(io::Error::new(
@@ -301,6 +349,7 @@ pub(crate) fn create_with(
     silence_sqlite_log();
     let mut conn = Connection::open_with_flags(path, flags)?;
     apply_key(&conn, key)?;
+    harden(&conn)?;
     configure(&conn)?;
 
     migrate(&mut conn, migrations, 0)?;
@@ -321,12 +370,13 @@ pub(crate) fn open_with(
     path: &Path,
     key: &Key,
     backup_dir: &Path,
-    migrations: &[&str],
+    migrations: &[Migration],
 ) -> Result<Database> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     silence_sqlite_log();
     let mut conn = Connection::open_with_flags(path, flags)?;
     apply_key(&conn, key)?;
+    harden(&conn)?;
 
     // SQLite does not check the key when it is set; the first real read does.
     // With a wrong key this fails with "file is not a database".
@@ -379,12 +429,36 @@ fn backfill_title_keys(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+fn check_row_invariants(conn: &Connection) -> Result<()> {
+    let invalid: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM entry
+             WHERE typeof(rev) != 'integer' OR rev < 1 OR typeof(base_rev) != 'integer' OR base_rev < 0)
+          OR EXISTS(SELECT 1 FROM folder
+             WHERE typeof(rev) != 'integer' OR rev < 1 OR typeof(base_rev) != 'integer' OR base_rev < 0)
+          OR EXISTS(SELECT 1 FROM attachment
+             WHERE typeof(size) != 'integer' OR size < 0 OR typeof(sha256) != 'blob' OR length(sha256) != 32)",
+        [],
+        |row| row.get(0),
+    )?;
+    if invalid {
+        return Err(Error::InvalidInput(
+            "vault has invalid revision or attachment metadata; restore a verified backup before upgrading".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Runs the migrations after `from`, each in its own transaction.
-fn migrate(conn: &mut Connection, migrations: &[&str], from: i64) -> Result<()> {
-    for (index, sql) in migrations.iter().enumerate().skip(from as usize) {
+fn migrate(conn: &mut Connection, migrations: &[Migration], from: i64) -> Result<()> {
+    for (index, migration) in migrations.iter().enumerate().skip(from as usize) {
         let version = index as i64 + 1;
-        let tx = conn.transaction()?;
-        tx.execute_batch(sql)?;
+        // Keep the check and installation in the same write transaction,
+        // so another connection cannot change the rows between them.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if let Some(preflight) = migration.preflight {
+            preflight(&tx)?;
+        }
+        tx.execute_batch(migration.sql)?;
         tx.pragma_update(None, "user_version", version)?;
         tx.commit()?;
     }
@@ -401,13 +475,15 @@ fn backup_before_migration(
 ) -> Result<()> {
     // Move everything still waiting in the -wal file into the main file,
     // so that copying that one file copies everything.
-    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+    let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+    if busy != 0 {
+        return Err(Error::Io(io::Error::other("vault backup checkpoint is busy")));
+    }
     fs::create_dir_all(backup_dir)?;
-    let target = backup_dir.join(format!("soirvu-v{from}-before-v{to}-{}.db", now_ms()));
-    fs::copy(path, &target)?;
-    // Opened writable on purpose: sync_all on a read-only
-    // handle is FlushFileBuffers, which Windows refuses.
-    fs::OpenOptions::new().write(true).open(&target)?.sync_all()?;
+    let backup = crate::fs_boundary::Directory::open(backup_dir)?;
+    let name = format!("soirvu-v{from}-before-v{to}-{}.db", uuid::Uuid::now_v7());
+    let mut source = fs::File::open(path)?;
+    backup.publish(Path::new(&name), |file| Ok(io::copy(&mut source, file)?))?;
     Ok(())
 }
 
@@ -440,9 +516,6 @@ fn silence_sqlite_log() {
     });
 }
 
-/// `PRAGMA key` must be the first statement on a connection.
-/// The `x'...'` form hands SQLCipher the raw 32-byte key, so it does not run its
-/// own (slower) password-to-key step; Argon2id already did the slow part.
 impl Database {
     /// Copies this whole database into a new file encrypted
     /// under `key`, via SQLCipher's export: schema and data —
@@ -454,44 +527,53 @@ impl Database {
         // and SQLite will not let such a connection create the
         // attached file. Materialize the destination first, with
         // its own short-lived connection under the new key.
+        let path = dest.to_str()
+            .ok_or_else(|| Error::InvalidInput("database export path must be UTF-8".into()))?;
+        fs::OpenOptions::new().write(true).create_new(true).open(dest)?;
         {
             let pre = Connection::open_with_flags(
                 dest,
-                OpenFlags::SQLITE_OPEN_READ_WRITE
-                    | OpenFlags::SQLITE_OPEN_CREATE
-                    | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
             )?;
             apply_key(&pre, key)?;
+            harden(&pre)?;
             pre.execute_batch(
-                "CREATE TABLE IF NOT EXISTS _soirvu_export (x); DROP TABLE _soirvu_export;",
+                "CREATE TABLE _soirvu_export (x); DROP TABLE _soirvu_export;",
             )?;
         }
         let hex = Zeroizing::new(HEXLOWER.encode(&key[..]));
-        let path = dest.to_string_lossy().replace('\'', "''");
-        let sql = Zeroizing::new(format!(
-            "ATTACH DATABASE '{path}' AS rotated KEY \"x'{}'\"; SELECT sqlcipher_export('rotated'); DETACH DATABASE rotated;",
-            hex.as_str()
-        ));
-        // The export carries schema and data but not the
-        // user_version stamp; copy it across or the result
-        // reads as a database with no schema.
-        let version: i64 =
-            self.connection().query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        self.connection().execute_batch(&sql)?;
+        let raw_key = Zeroizing::new(format!("x'{}'", hex.as_str()));
+        // The export carries schema and data but not the user_version stamp.
+        let conn = self.connection();
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        conn.execute("ATTACH DATABASE ?1 AS rotated KEY ?2", params![path, raw_key.as_str()])?;
+        let exported = conn.query_row("SELECT sqlcipher_export('rotated')", [], |_| Ok(()));
+        let detached = conn.execute_batch("DETACH DATABASE rotated");
+        exported?;
+        detached?;
         let dest_conn = Connection::open_with_flags(
             dest,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         apply_key(&dest_conn, key)?;
+        harden(&dest_conn)?;
         dest_conn.execute_batch(&format!("PRAGMA user_version = {version};"))?;
         Ok(())
     }
 }
 
+/// Set the raw key before any SQL reads. Argon2id already derived it.
 fn apply_key(conn: &Connection, key: &Key) -> Result<()> {
     let hex = Zeroizing::new(HEXLOWER.encode(&key[..]));
     let sql = Zeroizing::new(format!("PRAGMA key = \"x'{}'\";", hex.as_str()));
     conn.execute_batch(&sql)?;
+    Ok(())
+}
+
+fn harden(conn: &Connection) -> Result<()> {
+    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
+    conn.execute_batch("PRAGMA cipher_log_level = 'NONE';")?;
     Ok(())
 }
 
@@ -501,8 +583,7 @@ fn configure(conn: &Connection) -> Result<()> {
          PRAGMA synchronous = FULL;
          PRAGMA foreign_keys = ON;
          PRAGMA temp_store = MEMORY;
-         PRAGMA cipher_memory_security = ON;
-         PRAGMA cipher_log_level = 'NONE';",
+         PRAGMA cipher_memory_security = ON;",
     )?;
     Ok(())
 }
@@ -514,6 +595,77 @@ mod tests {
 
     fn key() -> Key {
         Zeroizing::new([7u8; 32])
+    }
+
+    #[test]
+    fn production_connections_harden_schema_access() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("vault.db");
+        let db = Database::create(&path, &key(), "vault").unwrap();
+        let conn = db.connection();
+        assert!(conn.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE).unwrap());
+        assert!(!conn.db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA).unwrap());
+        assert!(conn.execute("UPDATE sqlite_schema SET sql = NULL", []).is_err());
+        drop(db);
+        let db = Database::open(&path, &key(), tmp.path()).unwrap();
+        assert!(db.connection().db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE).unwrap());
+        assert!(!db.connection().db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA).unwrap());
+    }
+
+    #[test]
+    fn row_guard_upgrade_preserves_valid_rows_and_rejects_new_invalid_metadata() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("vault.db");
+        let backup = tmp.path().join("backup");
+        let db = create_with(&path, &key(), "vault", &MIGRATIONS[..5]).unwrap();
+        db.connection().execute_batch(
+            "INSERT INTO device VALUES ('d', 'device', 0);
+             INSERT INTO entry (id, entry_date, created_at, updated_at, device_id, lseq, body_md)
+               VALUES ('e', '2026-10-01', 0, 0, 'd', 1, 'searchable note');
+             INSERT INTO attachment (id, entry_id, name, mime, size, sha256, created_at, lseq)
+               VALUES ('a', 'e', 'note', 'text/plain', 0, zeroblob(32), 0, 2);",
+        ).unwrap();
+        drop(db);
+        let db = Database::open(&path, &key(), &backup).unwrap();
+        assert_eq!(user_version(&db), SCHEMA_VERSION);
+        let backups = backup_files(&backup);
+        assert_eq!(backups.len(), 1);
+        let restored = open_with(&backups[0], &key(), &backup, &MIGRATIONS[..5]).unwrap();
+        assert_eq!(user_version(&restored), 5);
+        assert_eq!(
+            restored.connection().query_row("SELECT size FROM attachment", [], |row| row.get::<_, i64>(0)).unwrap(),
+            0,
+        );
+        let conn = db.connection();
+        for sql in [
+            "UPDATE entry SET rev = 0",
+            "UPDATE entry SET base_rev = -1",
+            "UPDATE attachment SET size = -1",
+            "UPDATE attachment SET sha256 = zeroblob(31)",
+        ] {
+            assert!(conn.execute(sql, []).is_err(), "{sql}");
+        }
+        assert_eq!(conn.query_row("SELECT count(*) FROM entry_fts WHERE entry_fts MATCH 'searchable'",
+            [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
+    fn row_guard_upgrade_refuses_invalid_legacy_rows_without_rewriting_them() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("vault.db");
+        let backup = tmp.path().join("backup");
+        let db = create_with(&path, &key(), "vault", &MIGRATIONS[..5]).unwrap();
+        db.connection().execute_batch(
+            "INSERT INTO device VALUES ('d', 'device', 0);
+             INSERT INTO entry (id, entry_date, created_at, updated_at, device_id, lseq, rev)
+               VALUES ('e', '2026-10-01', 0, 0, 'd', 1, 0);",
+        ).unwrap();
+        drop(db);
+        assert!(matches!(Database::open(&path, &key(), &backup), Err(Error::InvalidInput(_))));
+        let db = open_with(&path, &key(), &backup, &MIGRATIONS[..5]).unwrap();
+        assert_eq!(user_version(&db), 5);
+        assert_eq!(db.connection().query_row("SELECT rev FROM entry", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(backup_files(&backup).len(), 1);
     }
 
     fn user_version(db: &Database) -> i64 {
@@ -655,9 +807,9 @@ mod tests {
         drop(create_with(&path, &key(), "vid", &MIGRATIONS[..1]).unwrap());
 
         // Version 2 creates a table and then hits a syntax error.
-        let broken: &[&str] = &[
-            MIGRATION_1_META,
-            "CREATE TABLE half_done (x); THIS IS NOT SQL;",
+        let broken = &[
+            Migration::new(MIGRATION_1_META),
+            Migration::new("CREATE TABLE half_done (x); THIS IS NOT SQL;"),
         ];
         let result = open_with(&path, &key(), &backups, broken);
         assert!(matches!(result, Err(Error::Database(_))));

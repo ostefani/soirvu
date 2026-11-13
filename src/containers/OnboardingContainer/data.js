@@ -27,16 +27,17 @@ export const onboardingText = {
     backButton: 'Back',
 
     // Validation messages
-    passphraseTooShortError:
-        'Use at least 8 characters — longer is better. This passphrase is the only protection the diary has.',
     passphraseMismatchError: 'The two passphrases do not match.',
 
     // System error translations
     errors: {
+        busy: 'Another vault operation is in progress. Try again when it finishes.',
         not_a_vault:
             'That folder does not hold a diary. Create the new diary in an empty folder, or open the folder with the diary files.',
         folder_not_empty:
             'That folder is not empty. A vault needs an empty folder — pick one, or create a new subfolder for it.',
+        passphrase_too_short: 'Use at least 8 characters for a new passphrase.',
+        passphrase_too_long: 'The passphrase exceeds the 64 KiB limit.',
         empty_passphrase: 'The passphrase must not be empty.',
         no_folder_picked: 'Pick a folder first.',
         storage: 'The vault could not be written there. Is the folder writable?',

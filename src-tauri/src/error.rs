@@ -43,6 +43,8 @@ impl From<Error> for AppError {
             // not pretend it can.
             Unlock => "wrong_passphrase",
             EmptyPassphrase => "empty_passphrase",
+            PassphraseTooShort => "passphrase_too_short",
+            PassphraseTooLong => "passphrase_too_long",
             InvalidRecoveryKey(_) => "invalid_recovery_key",
             UnsupportedFormat(_) => "unsupported_version",
             InvalidHeader(_) | CorruptAttachment(_) => "corrupt",

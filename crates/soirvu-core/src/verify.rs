@@ -91,19 +91,27 @@ impl Vault {
         }
 
         // 3. Attachments.
-        let ids: Vec<String> = {
-            let mut stmt =
-                conn.prepare("SELECT id FROM attachment WHERE deleted_at IS NULL ORDER BY id")?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        let rows: Vec<(i64, String, bool)> = {
+            let mut stmt = conn.prepare(
+                "SELECT rid, id, deleted_at IS NOT NULL FROM attachment ORDER BY rid",
+            )?;
+            let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
         };
-        for id in &ids {
-            if !blob_path(self.dir(), id).exists() {
-                report
+        for (rid, id, deleted) in rows {
+            match blob_path(self.dir(), &id) {
+                Err(_) => report
                     .problems
-                    .push(format!("attachment {id}: blob file is missing"));
-            } else if let Err(e) = self.read_attachment(id) {
-                report.problems.push(e.to_string());
+                    .push(format!("attachment row {rid}: invalid attachment ID")),
+                Ok(_) if deleted => {}
+                Ok(path) if !path.exists() => report
+                    .problems
+                    .push(format!("attachment {id}: blob file is missing")),
+                Ok(_) => {
+                    if let Err(e) = self.read_attachment(&id) {
+                        report.problems.push(e.to_string());
+                    }
+                }
             }
         }
         Ok(report)
@@ -167,7 +175,7 @@ mod tests {
     #[test]
     fn a_tampered_blob_is_reported_not_hidden() {
         let (_tmp, vault, att_id) = vault_with_attachment();
-        let path = blob_path(vault.dir(), &att_id);
+        let path = blob_path(vault.dir(), &att_id).unwrap();
         let mut bytes = fs::read(&path).unwrap();
         let last = bytes.len() - 1;
         bytes[last] ^= 0x01;
@@ -184,12 +192,36 @@ mod tests {
     #[test]
     fn a_missing_blob_is_reported() {
         let (_tmp, vault, att_id) = vault_with_attachment();
-        fs::remove_file(blob_path(vault.dir(), &att_id)).unwrap();
+        fs::remove_file(blob_path(vault.dir(), &att_id).unwrap()).unwrap();
 
         let report = vault.verify().unwrap();
         assert!(!report.ok());
         assert_eq!(report.problems.len(), 1);
         assert!(report.problems[0].contains("missing"), "{:?}", report.problems);
+    }
+
+    #[test]
+    fn legacy_invalid_attachment_ids_are_reported_without_blob_cleanup() {
+        let (_tmp, vault, att_id) = vault_with_attachment();
+        let path = blob_path(vault.dir(), &att_id).unwrap();
+        let invalid_id = "legacy-id".to_string();
+        vault
+            .db
+            .connection()
+            .execute(
+                "UPDATE attachment SET id = ?1 WHERE id = ?2",
+                [&invalid_id, &att_id],
+            )
+            .unwrap();
+
+        let report = vault.verify().unwrap();
+        assert_eq!(report.problems.len(), 1);
+        assert!(report.problems[0].contains("invalid attachment ID"));
+
+        let sweep = vault.sweep_attachments().unwrap();
+        assert_eq!(sweep.invalid_ids, [invalid_id]);
+        assert_eq!(sweep.orphans_removed, 0);
+        assert!(path.is_file());
     }
 
     #[test]

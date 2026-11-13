@@ -108,7 +108,7 @@ impl From<FolderRow> for Folder {
 /// Whether a folder row exists and is not tombstoned. The Tauri
 /// layer uses this for effective-hierarchy flags; core reads use it
 /// for scope validation.
-pub fn folder_is_live(conn: &rusqlite::Connection, id: &str) -> Result<bool> {
+pub(crate) fn folder_is_live(conn: &rusqlite::Connection, id: &str) -> Result<bool> {
     Ok(conn
         .query_row(
             "SELECT 1 FROM folder WHERE id = ?1 AND deleted_at IS NULL",
@@ -143,6 +143,11 @@ fn ancestors(conn: &rusqlite::Connection, mut parent: Option<String>) -> Result<
 }
 
 impl Vault {
+    /// Whether the given ID belongs to a live folder.
+    pub fn has_live_folder(&self, id: &str) -> Result<bool> {
+        folder_is_live(self.db.connection(), id)
+    }
+
     /// Creates a folder under `parent_id` (`None` is the vault root).
     pub fn create_folder(&mut self, parent_id: Option<&str>, name: &str) -> Result<Folder> {
         if let Some(parent) = parent_id {
@@ -884,7 +889,7 @@ mod tests {
         let attachment = vault
             .add_attachment(&nested.id, "file.txt", "text/plain", b"private attachment")
             .unwrap();
-        let blob = crate::attachments::blob_path(vault.dir(), &attachment.id);
+        let blob = crate::attachments::blob_path(vault.dir(), &attachment.id).unwrap();
         assert!(blob.exists());
         let tomb = vault.delete_folder_tree(&root.id, root.rev).unwrap();
         assert_eq!(tomb.rev, root.rev + 1);
@@ -964,7 +969,11 @@ mod tests {
             vault.read_attachment(&attachment.id).unwrap(),
             b"kept attachment"
         );
-        assert!(crate::attachments::blob_path(vault.dir(), &attachment.id).exists());
+        assert!(
+            crate::attachments::blob_path(vault.dir(), &attachment.id)
+                .unwrap()
+                .exists()
+        );
     }
 
     /// Deleting a folder needs it empty and at the caller's revision;
@@ -1045,7 +1054,7 @@ mod tests {
     }
 
     /// A schema-4 database has no folders and no title keys. Opening it
-    /// upgrades to 5, roots every existing entry, backfills title keys
+    /// upgrades the schema, roots every existing entry, backfills title keys
     /// with the same normalizer live writes use, and leaves a pre-migration
     /// backup behind.
     #[test]
@@ -1080,7 +1089,7 @@ mod tests {
             .connection()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, crate::storage::SCHEMA_VERSION);
         let (folder_id, title_key): (Option<String>, Option<String>) = db
             .connection()
             .query_row(
@@ -1106,10 +1115,10 @@ mod tests {
         crate::storage::create_with(&path, &key, "vault-1", &MIGRATIONS[..4]).unwrap();
         let backup = tmp.path().join("backup");
         std::fs::create_dir(&backup).unwrap();
-        let broken: Vec<&str> = MIGRATIONS[..4]
+        let broken: Vec<_> = MIGRATIONS[..4]
             .iter()
             .copied()
-            .chain(std::iter::once("THIS IS NOT SQL;"))
+            .chain(std::iter::once(crate::storage::Migration::new("THIS IS NOT SQL;")))
             .collect();
         assert!(crate::storage::open_with(&path, &key, &backup, &broken).is_err());
         // Still schema 4: the failed upgrade changed nothing.

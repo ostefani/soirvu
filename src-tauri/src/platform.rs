@@ -5,29 +5,53 @@
 
 use std::process::Command;
 
-/// Opens a URL in the user's default browser/mail client. Used only
-/// by the open_link command, after its scheme check and the user's
-/// confirmation — the webview itself has no opener (§6.3).
-pub fn open_external(url: &str) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
-    let mut cmd = {
-        let mut c = Command::new("open");
-        c.arg(url);
-        c
-    };
-    #[cfg(target_os = "linux")]
-    let mut cmd = {
-        let mut c = Command::new("xdg-open");
-        c.arg(url);
-        c
-    };
+/// Pass a validated URL or app-managed file path to the default OS handler.
+pub fn open_external(target: &std::ffi::OsStr) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
-    let mut cmd = {
-        let mut c = Command::new("cmd");
-        c.args(["/C", "start", "", url]);
-        c
-    };
-    cmd.spawn().map(|_| ())
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "shell32")]
+        unsafe extern "system" {
+            fn ShellExecuteW(
+                window: *mut std::ffi::c_void,
+                operation: *const u16,
+                file: *const u16,
+                parameters: *const u16,
+                directory: *const u16,
+                show: i32,
+            ) -> isize;
+        }
+        let mut target: Vec<u16> = target.encode_wide().collect();
+        if target.contains(&0) {
+            return Err(std::io::ErrorKind::InvalidInput.into());
+        }
+        target.push(0);
+        // SAFETY: the target is NUL-terminated and the optional pointers are null.
+        let result = unsafe {
+            ShellExecuteW(std::ptr::null_mut(), std::ptr::null(), target.as_ptr(),
+                std::ptr::null(), std::ptr::null(), 1)
+        };
+        if result <= 32 {
+            return Err(std::io::Error::other("could not open the destination"));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_os = "macos")]
+        let program = "open";
+        #[cfg(not(target_os = "macos"))]
+        let program = "xdg-open";
+        Command::new(program).arg(target).spawn().map(|_| ())
+    }
+}
+
+pub(crate) fn packaged_webview_origin() -> &'static str {
+    if cfg!(any(target_os = "windows", target_os = "android")) {
+        "http://tauri.localhost"
+    } else {
+        "tauri://localhost"
+    }
 }
 
 // WER (Windows Error Reporting) exclusion: tells Windows
@@ -50,22 +74,54 @@ const SEM_FAILCRITICALERRORS: u32 = 0x0001;
 #[cfg(target_os = "windows")]
 const SEM_NOGPFAULTERRORBOX: u32 = 0x0002;
 
-/// Rename, retrying briefly (mirrors the core helper): on
-/// Windows a just-closed file or folder can stay
-/// unrenamable while an antivirus or the indexer holds it
-/// (§12). Used for the backup and rotation swaps.
-pub fn rename_retry(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
-    let mut result = std::fs::rename(from, to);
-    if cfg!(windows) {
-        for _ in 0..4 {
-            if result.is_ok() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            result = std::fs::rename(from, to);
+/// Publish a directory or move it aside only if the destination is vacant.
+pub fn rename_new(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let from = std::ffi::CString::new(from.as_os_str().as_bytes())?;
+        let to = std::ffi::CString::new(to.as_os_str().as_bytes())?;
+        // SAFETY: both paths are valid NUL-terminated strings.
+        #[cfg(target_os = "macos")]
+        let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+        // SAFETY: both paths are valid NUL-terminated strings.
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::renameat2(libc::AT_FDCWD, from.as_ptr(), libc::AT_FDCWD, to.as_ptr(), libc::RENAME_NOREPLACE)
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error());
         }
+        Ok(())
     }
-    result
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
+        }
+        let encode = |path: &std::path::Path| -> std::io::Result<Vec<u16>> {
+            let mut path: Vec<u16> = path.as_os_str().encode_wide().collect();
+            if path.contains(&0) {
+                return Err(std::io::ErrorKind::InvalidInput.into());
+            }
+            path.push(0);
+            Ok(path)
+        };
+        let from = encode(from)?;
+        let to = encode(to)?;
+        // SAFETY: both paths are NUL-terminated. No replace flag is set.
+        if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = (from, to);
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
 }
 
 /// Release-build process hardening (§9): no debugger may
@@ -304,6 +360,17 @@ impl LockEvents for NoLockEvents {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rename_new_preserves_existing_empty_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let src = root.path().join("src");
+        let dest = root.path().join("dest");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::create_dir(&dest).unwrap();
+        assert!(super::rename_new(&src, &dest).is_err());
+        assert!(src.is_dir() && dest.is_dir());
+    }
+
     use super::*;
 
     #[test]

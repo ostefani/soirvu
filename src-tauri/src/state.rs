@@ -63,12 +63,36 @@ pub struct VaultRef {
     pub device_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Caps {
     pub image_mb: u64,
     pub pdf_mb: u64,
     pub audio_mb: u64,
     pub video_mb: u64,
+}
+
+const MIN_LOCK_SECS: u64 = 60;
+const MAX_LOCK_SECS: u64 = 24 * 60 * 60;
+const MAX_ATTACHMENT_MIB: u64 = 1024;
+
+impl Caps {
+    fn values(&self) -> [u64; 4] {
+        [self.image_mb, self.pdf_mb, self.audio_mb, self.video_mb]
+    }
+
+    pub(crate) fn bytes_for(&self, mime: &str) -> Option<u64> {
+        let mib = match mime {
+            "application/pdf" => self.pdf_mb,
+            m if m.starts_with("image/") => self.image_mb,
+            m if m.starts_with("audio/") => self.audio_mb,
+            m if m.starts_with("video/") => self.video_mb,
+            _ => return None,
+        };
+        (1..=MAX_ATTACHMENT_MIB).contains(&mib)
+            .then(|| mib.checked_mul(1024 * 1024))
+            .flatten()
+    }
 }
 
 impl Default for Caps {
@@ -94,7 +118,8 @@ pub enum BackupSchedule {
     Weekly,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub lock_timeout_secs: u64,
     pub strip_exif: bool,
@@ -106,34 +131,25 @@ pub struct Settings {
     #[serde(default)]
     pub backup_schedule: BackupSchedule,
     pub caps: Caps,
-    /// Where backups go, as a full path. Derived from
-    /// AppConfig::backup_dir whenever settings are read; the
-    /// value sent back by settings_set is ignored. The full
-    /// path is shown on purpose, like the diary's own home:
-    /// the user should always know where the backups are.
-    /// Null until a folder is picked.
-    #[serde(default)]
+    /// The full backup path, derived from AppConfig on read.
+    #[serde(skip_deserializing)]
     pub backup_location: Option<String>,
-    /// Where the open diary lives, as a full path (derived like
-    /// backup_location; the value sent back by settings_set is
-    /// ignored). The diary's own home is shown in full, on
-    /// purpose: the user should always know where it is.
-    #[serde(default)]
+    /// The full path to the open diary, derived from its registry entry.
+    #[serde(skip_deserializing)]
     pub vault_location: Option<String>,
     /// The OS this build runs on ("macos", "linux",
     /// "windows" — std::env::consts::OS), derived on read
-    /// like the two locations above and ignored on set. The
+    /// like the two locations above. The
     /// UI uses it to offer only what the platform supports
     /// (the clipboard clear is macOS-only: it needs the
     /// NSPasteboard change counter).
-    #[serde(default)]
+    #[serde(skip_deserializing)]
     pub platform: String,
     /// Display name of the OPEN vault's sync folder (never
     /// a path). Derived from the vault's registry entry
-    /// whenever settings are read, like backup_location;
-    /// the value sent back by settings_set is ignored.
+    /// whenever settings are read, like backup_location.
     /// Null until a sync folder is picked for this vault.
-    #[serde(default)]
+    #[serde(skip_deserializing)]
     pub sync_location: Option<String>,
 }
 
@@ -150,6 +166,61 @@ impl Default for Settings {
             vault_location: None,
             sync_location: None,
         }
+    }
+}
+
+/// Writable IPC fields. Paths and platform data are derived by Rust.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsPatch {
+    pub lock_timeout_secs: Option<u64>,
+    pub strip_exif: Option<bool>,
+    pub clipboard_clear: Option<bool>,
+    pub backup_schedule: Option<BackupSchedule>,
+    pub caps: Option<Caps>,
+}
+
+impl Settings {
+    fn apply_patch(&self, patch: SettingsPatch) -> AppResult<Self> {
+        let next = Self {
+            lock_timeout_secs: patch.lock_timeout_secs.unwrap_or(self.lock_timeout_secs),
+            strip_exif: patch.strip_exif.unwrap_or(self.strip_exif),
+            clipboard_clear: patch.clipboard_clear.unwrap_or(self.clipboard_clear),
+            backup_schedule: patch.backup_schedule.unwrap_or(self.backup_schedule),
+            caps: patch.caps.unwrap_or_else(|| self.caps.clone()),
+            ..Self::default()
+        };
+        if !(MIN_LOCK_SECS..=MAX_LOCK_SECS).contains(&next.lock_timeout_secs)
+            || !next.caps.values().into_iter().all(|cap| (1..=MAX_ATTACHMENT_MIB).contains(&cap))
+        {
+            return Err(AppError::Code("invalid_input".into()));
+        }
+        Ok(next)
+    }
+
+    fn repair_loaded(&mut self) {
+        let defaults = Self::default();
+        if !(MIN_LOCK_SECS..=MAX_LOCK_SECS).contains(&self.lock_timeout_secs) {
+            self.lock_timeout_secs = defaults.lock_timeout_secs;
+        }
+        for (cap, default) in [
+            (&mut self.caps.image_mb, defaults.caps.image_mb),
+            (&mut self.caps.pdf_mb, defaults.caps.pdf_mb),
+            (&mut self.caps.audio_mb, defaults.caps.audio_mb),
+            (&mut self.caps.video_mb, defaults.caps.video_mb),
+        ] {
+            if !(1..=MAX_ATTACHMENT_MIB).contains(cap) {
+                *cap = default;
+            }
+        }
+    }
+
+    pub(crate) fn weakens_protection(&self, previous: &Self) -> bool {
+        self.lock_timeout_secs > previous.lock_timeout_secs
+            || (previous.strip_exif && !self.strip_exif)
+            || (previous.clipboard_clear && !self.clipboard_clear)
+            || self.caps.values().into_iter().zip(previous.caps.values())
+                .any(|(next, previous)| next > previous)
     }
 }
 
@@ -176,10 +247,19 @@ pub struct VaultInfo {
     pub state: String,
 }
 
+/// Rust-only grant for a particular unlocked vault instance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VaultSession {
+    pub(crate) vault_id: String,
+    generation: u64,
+}
+
 struct Inner {
     status: Status,
     vault: Option<Vault>,
     current: Option<String>,
+    generation: u64,
+    unlock_cancelled: bool,
     config: AppConfig,
     last_activity: Instant,
     unlock_failures: u32,
@@ -292,15 +372,18 @@ impl AppState {
     /// Loads (or starts) app.json in the app config folder (§3).
     pub fn load(app_config_dir: PathBuf) -> AppState {
         let config_file = app_config_dir.join("app.json");
-        let config = fs::read_to_string(&config_file)
+        let mut config: AppConfig = fs::read_to_string(&config_file)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default();
+        config.settings.repair_loaded();
         let state = AppState {
             inner: Mutex::new(Inner {
                 status: Status::Unavailable,
                 vault: None,
                 current: None,
+                generation: 0,
+                unlock_cancelled: false,
                 config,
                 last_activity: Instant::now(),
                 unlock_failures: 0,
@@ -322,10 +405,14 @@ impl AppState {
     }
 
     fn save_config(&self, inner: &Inner) -> AppResult<()> {
+        self.persist_config(&inner.config)
+    }
+
+    fn persist_config(&self, config: &AppConfig) -> AppResult<()> {
         if let Some(parent) = self.config_file.parent() {
             fs::create_dir_all(parent)?;
         }
-        let text = serde_json::to_string_pretty(&inner.config)?;
+        let text = serde_json::to_string_pretty(config)?;
         let tmp = self
             .config_file
             .with_extension(format!("json.tmp.{}", std::process::id()));
@@ -335,9 +422,11 @@ impl AppState {
         file.sync_all()?;
         drop(file);
         fs::rename(&tmp, &self.config_file)?;
+        // The rename committed the update. Directory durability is best
+        // effort so a post-rename error cannot leave memory on the old value.
         #[cfg(unix)]
         if let Some(parent) = self.config_file.parent() {
-            fs::File::open(parent)?.sync_all()?;
+            let _ = fs::File::open(parent).and_then(|dir| dir.sync_all());
         }
         Ok(())
     }
@@ -392,12 +481,34 @@ impl AppState {
         self.inner.lock().unwrap().config.settings.clipboard_clear
     }
 
-    pub fn set_settings(&self, settings: Settings) -> AppResult<()> {
+    pub(crate) fn prepare_settings(&self, patch: SettingsPatch) -> AppResult<(Settings, Settings)> {
+        let previous = self.inner.lock().unwrap().config.settings.clone();
+        let next = previous.apply_patch(patch)?;
+        Ok((previous, next))
+    }
+
+    pub(crate) fn commit_settings(&self, previous: Settings, next: Settings) -> AppResult<()> {
         let mut inner = self.inner.lock().unwrap();
-        // backup_location in the DTO is read-only (see Settings):
-        // the stored path never comes from the webview.
-        inner.config.settings = settings;
-        self.save_config(&inner)
+        if inner.config.settings != previous {
+            return Err(AppError::Code("revision_conflict".into()));
+        }
+        let mut config = inner.config.clone();
+        config.settings = next;
+        self.persist_config(&config)?;
+        inner.config = config;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_settings(&self, settings: Settings) -> AppResult<()> {
+        let (previous, next) = self.prepare_settings(SettingsPatch {
+            lock_timeout_secs: Some(settings.lock_timeout_secs),
+            strip_exif: Some(settings.strip_exif),
+            clipboard_clear: Some(settings.clipboard_clear),
+            backup_schedule: Some(settings.backup_schedule),
+            caps: Some(settings.caps),
+        })?;
+        self.commit_settings(previous, next)
     }
 
     /// Stores (or clears) the backup folder chosen through the
@@ -432,14 +543,16 @@ impl AppState {
 
     /// Stores (or clears) a vault's sync folder, chosen
     /// through the native picker. Only Rust sees the path.
-    pub fn set_sync_dir(&self, vault_id: &str, dir: Option<PathBuf>) -> AppResult<()> {
+    pub(crate) fn set_sync_dir(&self, session: &VaultSession, dir: Option<PathBuf>) -> AppResult<()> {
         let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
+        Self::check_session(&inner, session)?;
+        let vault_id = &session.vault_id;
         let entry = inner
             .config
             .vaults
             .iter_mut()
-            .find(|v| v.id == vault_id)
+            .find(|v| &v.id == vault_id)
             .ok_or_else(|| AppError::Code("vault_not_found".into()))?;
         entry.sync_dir = dir;
         self.save_config(&inner)
@@ -493,22 +606,21 @@ impl AppState {
     /// Persists and applies an identity change as one serialized vault
     /// operation. Persistence precedes the core write so an interrupted
     /// update converges to the assigned identity on the next open.
-    pub fn restamp_current_device(&self, device_id: String) -> AppResult<()> {
+    pub(crate) fn restamp_current_device(
+        &self,
+        session: &VaultSession,
+        device_id: String,
+    ) -> AppResult<()> {
         let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
-        if inner.status != Status::Unlocked {
-            return Err(AppError::Code("locked".into()));
-        }
-        let vault_id = inner
-            .current
-            .clone()
-            .ok_or_else(|| AppError::Code("locked".into()))?;
+        Self::check_session(&inner, session)?;
+        let vault_id = &session.vault_id;
         let previous = inner.config.clone();
         let entry = inner
             .config
             .vaults
             .iter_mut()
-            .find(|entry| entry.id == vault_id)
+            .find(|entry| &entry.id == vault_id)
             .ok_or_else(|| AppError::Code("vault_not_found".into()))?;
         entry.device_id = Some(device_id.clone());
         if let Err(error) = self.save_config(&inner) {
@@ -706,7 +818,11 @@ impl AppState {
     /// Locked ──► Unlocking. Enforces the failure backoff (§6.2):
     /// after each failed unlock the wait doubles, capped at 30 s.
     pub fn begin_unlock(&self, vault_id: &str) -> AppResult<()> {
+        let _operation = self.lock_vault_operations();
         let mut inner = self.inner.lock().unwrap();
+        if !matches!(inner.status, Status::Locked | Status::Unavailable) {
+            return Err(AppError::Code("busy".into()));
+        }
         if let Some(until) = inner.backoff_until {
             if Instant::now() < until {
                 let secs = (until - Instant::now()).as_secs() + 1;
@@ -714,6 +830,7 @@ impl AppState {
             }
         }
         inner.current = Some(vault_id.to_string());
+        inner.unlock_cancelled = false;
         inner.status = Status::Unlocking;
         Ok(())
     }
@@ -730,14 +847,24 @@ impl AppState {
     /// `Unlocking` at this point, and leaving it there would wedge
     /// every later guard until the next attempt.
     pub fn unlock_ok(&self, vault: Vault) -> AppResult<()> {
+        let _operation = self.lock_vault_operations();
         let opened_id = vault.header().vault_id.clone();
         let mut inner = self.inner.lock().unwrap();
+        if inner.status != Status::Unlocking || inner.unlock_cancelled {
+            if inner.status == Status::Unlocking {
+                inner.status = Status::Locked;
+            }
+            drop(inner);
+            vault.lock();
+            return Err(AppError::Code("locked".into()));
+        }
         if inner.current.as_deref() != Some(opened_id.as_str()) {
             inner.status = Status::Locked;
             drop(inner);
             vault.lock();
             return Err(AppError::from(soirvu_core::Error::VaultMismatch));
         }
+        inner.generation = inner.generation.wrapping_add(1);
         inner.vault = Some(vault);
         inner.status = Status::Unlocked;
         inner.last_activity = Instant::now();
@@ -754,8 +881,12 @@ impl AppState {
     /// were just derived here, there is nothing to re-ask.
     pub fn adopt_created(&self, vault: Vault, vault_id: &str) {
         let _operation = self.lock_vault_operations();
+        let _ = self.clear_opened();
         let mut inner = self.inner.lock().unwrap();
+        inner.uploads.clear();
+        inner.upload_bytes = 0;
         inner.current = Some(vault_id.to_string());
+        inner.generation = inner.generation.wrapping_add(1);
         inner.vault = Some(vault);
         inner.status = Status::Unlocked;
         inner.last_activity = Instant::now();
@@ -768,12 +899,21 @@ impl AppState {
     /// guess, and the §6.2 backoff is for guesses).
     pub fn unlock_aborted(&self) {
         let mut inner = self.inner.lock().unwrap();
+        if inner.status != Status::Unlocking {
+            return;
+        }
         inner.status = Status::Locked;
     }
 
     pub fn unlock_failed(&self) {
         let mut inner = self.inner.lock().unwrap();
+        if inner.status != Status::Unlocking {
+            return;
+        }
         inner.status = Status::Locked;
+        if inner.unlock_cancelled {
+            return;
+        }
         inner.unlock_failures += 1;
         let wait = Duration::from_secs((1u64 << inner.unlock_failures.min(5)).min(30));
         inner.backoff_until = Some(Instant::now() + wait);
@@ -851,7 +991,7 @@ impl AppState {
     }
 
     /// The folder decrypted attachment copies land in when the
-    /// user opens one (§6.4 rework): opened/<id>/<name> under the
+    /// user opens one (§6.4 rework): opened/ under the
     /// app config folder. Managed by the app, never by the user;
     /// wiped on lock and at startup, so plaintext copies exist
     /// only while the diary is unlocked.
@@ -879,32 +1019,37 @@ impl AppState {
     }
 
     /// Begin a lock handshake. None if not Unlocked or one is pending.
-    pub fn begin_lock(&self) -> Option<u64> {
-        if self.status() != Status::Unlocked {
-            return None;
-        }
-        self.handshake.begin()
+    pub(crate) fn begin_lock(&self, session: &VaultSession) -> Option<(u64, bool)> {
+        let inner = self.inner.lock().unwrap();
+        Self::check_session(&inner, session).ok()?;
+        self.handshake.begin().map(|generation| (generation, true))
+            .or_else(|| self.handshake.pending().map(|generation| (generation, false)))
     }
 
     /// Lock only if still Unlocked. Returns true if this call locked.
     /// A trigger that joined someone else's wait uses this, so the
     /// window is reloaded once, not once per trigger.
-    pub fn lock_once(&self) -> AppResult<bool> {
+    pub(crate) fn lock_session(&self, session: &VaultSession) -> AppResult<bool> {
         let _serial = self
             .lock_serial
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.status() != Status::Unlocked {
+        let _operation = self.lock_vault_operations();
+        if Self::check_session(&self.inner.lock().unwrap(), session).is_err() {
             return Ok(false);
         }
-        self.lock()?;
+        self.lock_under_gate()?;
         Ok(true)
     }
 
-    /// Unlocked ──► Locking ──► Locked (or Unavailable if the vault
-    /// folder is gone). Zeroizes the keys via the core's lock().
+    /// Zeroize the open vault and remove the session's plaintext copies.
+    #[cfg(test)]
     pub fn lock(&self) -> AppResult<()> {
         let _operation = self.lock_vault_operations();
+        self.lock_under_gate()
+    }
+
+    fn lock_under_gate(&self) -> AppResult<()> {
         let mut inner = self.inner.lock().unwrap();
         // A direct lock supersedes any pending handshake: the keys
         // drop now, so a late ack must not end a later wait.
@@ -912,6 +1057,9 @@ impl AppState {
         inner.uploads.clear();
         inner.upload_bytes = 0;
         if inner.vault.is_none() {
+            if inner.status == Status::Unlocking {
+                inner.unlock_cancelled = true;
+            }
             drop(inner);
             return self.clear_opened();
         }
@@ -956,7 +1104,9 @@ impl AppState {
     /// since this stamp, not since unlock.
     pub fn note_activity(&self) {
         let mut inner = self.inner.lock().unwrap();
-        inner.last_activity = Instant::now();
+        if inner.status == Status::Unlocked {
+            inner.last_activity = Instant::now();
+        }
     }
 
     /// THE guard (§6.2). Every vault-touching command runs its work
@@ -966,26 +1116,73 @@ impl AppState {
     /// I/O error. Returns true when it locked. The watcher calls
     /// this every few seconds; with_vault checks too.
     pub fn lock_if_current_missing(&self) -> bool {
-        let gone = {
-            let inner = self.inner.lock().unwrap();
-            if inner.status != Status::Unlocked {
-                return false;
-            }
-            match &inner.current {
-                Some(id) => inner
-                    .config
-                    .vaults
-                    .iter()
-                    .find(|v| &v.id == id)
-                    .map(|v| availability_of(&v.path) != "available")
-                    .unwrap_or(false),
-                None => false,
-            }
+        let Ok(session) = self.session() else {
+            return false;
         };
-        if gone {
-            let _ = self.lock();
+        let gone = self.vault_path(&session.vault_id)
+            .is_ok_and(|path| availability_of(&path) != "available");
+        gone && !matches!(self.lock_session(&session), Ok(false))
+    }
+
+    /// Get the session to lock, or cancel an authentication still in progress.
+    pub(crate) fn session_to_lock(&self) -> Option<VaultSession> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.status {
+            Status::Unlocking => {
+                inner.unlock_cancelled = true;
+                None
+            }
+            Status::Unlocked => Some(VaultSession {
+                vault_id: inner.current.clone().expect("Unlocked implies a vault ID"),
+                generation: inner.generation,
+            }),
+            _ => None,
         }
-        gone
+    }
+
+    pub(crate) fn session(&self) -> AppResult<VaultSession> {
+        let inner = self.inner.lock().unwrap();
+        if inner.status != Status::Unlocked {
+            return Err(AppError::Code("locked".into()));
+        }
+        Ok(VaultSession {
+            vault_id: inner.current.clone().expect("Unlocked implies a vault ID"),
+            generation: inner.generation,
+        })
+    }
+
+    fn check_session(inner: &Inner, session: &VaultSession) -> AppResult<()> {
+        if inner.status != Status::Unlocked
+            || inner.generation != session.generation
+            || inner.current.as_deref() != Some(&session.vault_id)
+        {
+            return Err(AppError::Code("locked".into()));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn with_session<T>(
+        &self,
+        session: &VaultSession,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T> {
+        if self.lock_if_current_missing() {
+            return Err(AppError::Code("vault_unavailable".into()));
+        }
+        let _operation = self.lock_vault_operations();
+        Self::check_session(&self.inner.lock().unwrap(), session)?;
+        self.with_vault_locked(work)
+    }
+
+    /// Hand off plaintext while lock and session replacement are excluded.
+    pub(crate) fn deliver_session(
+        &self,
+        session: &VaultSession,
+        deliver: impl FnOnce(bool),
+    ) {
+        let _operation = self.lock_vault_operations();
+        let current = Self::check_session(&self.inner.lock().unwrap(), session).is_ok();
+        deliver(current);
     }
 
     pub fn with_vault<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
@@ -1000,6 +1197,7 @@ impl AppState {
 
     /// Runs a complete multi-step operation while excluding every other
     /// vault operation and lock transition.
+    #[cfg(test)]
     pub fn with_vault_exclusive<T>(
         &self,
         work: impl FnOnce(&mut Vault) -> AppResult<T>,
@@ -1014,8 +1212,9 @@ impl AppState {
     /// Runs a final authenticated vault migration, locks the in-memory vault,
     /// wipes opened plaintext, and performs the filesystem swap before any
     /// competing vault operation can start.
-    pub fn with_vault_exclusive_then_lock<T>(
+    pub(crate) fn with_vault_exclusive_then_lock<T>(
         &self,
+        session: &VaultSession,
         expected_vault_path: &std::path::Path,
         work: impl FnOnce(&mut Vault) -> AppResult<T>,
         after_lock: impl FnOnce() -> AppResult<()>,
@@ -1026,9 +1225,7 @@ impl AppState {
         let _operation = self.lock_vault_operations();
         let mut vault = {
             let mut inner = self.inner.lock().unwrap();
-            if inner.status != Status::Unlocked {
-                return Err(AppError::Code("locked".into()));
-            }
+            Self::check_session(&inner, session)?;
             let current_matches = inner
                 .current
                 .as_ref()
@@ -1078,7 +1275,6 @@ impl AppState {
             if inner.status != Status::Unlocked {
                 return Err(AppError::Code("locked".into()));
             }
-            inner.last_activity = Instant::now();
             VaultLease {
                 state: self,
                 vault: Some(inner.vault.take().expect("Unlocked implies a vault")),
@@ -1138,7 +1334,7 @@ mod tests {
     fn state_with_vault() -> (tempfile::TempDir, AppState, String) {
         let dir = tempfile::TempDir::new().unwrap();
         let vault_dir = dir.path().join("vault");
-        let (vault, _recovery) = Vault::create(&vault_dir, "pass", fast_legal_kdf()).unwrap();
+        let (vault, _recovery) = Vault::create(&vault_dir, "test passphrase", fast_legal_kdf()).unwrap();
         let vault_id = vault.header().vault_id.clone();
         let state = AppState::load(dir.path().join("config"));
         state
@@ -1146,6 +1342,53 @@ mod tests {
             .unwrap();
         state.adopt_created(vault, &vault_id);
         (dir, state, vault_id)
+    }
+
+    #[test]
+    fn stale_session_cannot_write_deliver_or_lock_after_reopening_same_vault() {
+        let (dir, state, id) = state_with_vault();
+        let old = state.session().unwrap();
+        state.lock().unwrap();
+        assert!(state.session().is_err());
+        state.begin_unlock(&id).unwrap();
+        let vault = Vault::open_with_passphrase(&dir.path().join("vault"), "test passphrase").unwrap();
+        state.unlock_ok(vault).unwrap();
+
+        let current = state.session().unwrap();
+        assert_ne!(old, current);
+        assert!(state.with_session::<()>(&old, |_| panic!("stale write ran")).is_err());
+        assert!(state.set_sync_dir(&old, Some(dir.path().join("sync"))).is_err());
+        state.deliver_session(&old, |allowed| assert!(!allowed));
+        state.deliver_session(&current, |allowed| assert!(allowed));
+        assert!(!state.lock_session(&old).unwrap());
+        assert!(state.with_session(&current, |_| Ok(())).is_ok());
+    }
+
+    #[test]
+    fn lock_cancels_pending_unlock_adoption() {
+        let (dir, state, id) = state_with_vault();
+        state.lock().unwrap();
+        state.begin_unlock(&id).unwrap();
+        let vault = Vault::open_with_passphrase(&dir.path().join("vault"), "test passphrase").unwrap();
+        assert!(state.session_to_lock().is_none());
+        assert!(state.unlock_ok(vault).is_err());
+        assert_eq!(state.status(), Status::Locked);
+        state.begin_unlock(&id).unwrap();
+    }
+
+    #[test]
+    fn background_reads_do_not_extend_idle_timeout() {
+        let (_dir, state, _id) = state_with_vault();
+        let mut settings = state.settings();
+        settings.lock_timeout_secs = MIN_LOCK_SECS;
+        state.set_settings(settings).unwrap();
+        state.inner.lock().unwrap().last_activity = Instant::now() - Duration::from_secs(MIN_LOCK_SECS + 1);
+        let session = state.session().unwrap();
+        state.with_vault(|_| Ok(())).unwrap();
+        state.with_session(&session, |_| Ok(())).unwrap();
+        assert!(state.idle_expired());
+        state.note_activity();
+        assert!(!state.idle_expired());
     }
 
     #[test]
@@ -1184,6 +1427,7 @@ mod tests {
         .unwrap();
         let swapped = Vault::open_with_passphrase(&path, "other pass").unwrap();
         assert_eq!(swapped.header().vault_id, other_id);
+        state.begin_unlock(&id).unwrap();
         match state.unlock_ok(swapped) {
             Err(AppError::Code(code)) => assert_eq!(code, "vault_mismatch"),
             _ => panic!("a swapped folder must refuse with vault_mismatch"),
@@ -1357,12 +1601,72 @@ mod tests {
     }
 
     #[test]
+    fn settings_reject_read_only_fields_and_invalid_ranges() {
+        assert!(serde_json::from_str::<SettingsPatch>(r#"{"backup_location":"elsewhere"}"#).is_err());
+        let (_dir, state, _) = state_with_vault();
+        assert!(state.prepare_settings(SettingsPatch {
+            lock_timeout_secs: Some(MAX_LOCK_SECS + 1),
+            ..Default::default()
+        }).is_err());
+        let mut caps = Caps::default();
+        caps.video_mb = u64::MAX;
+        assert!(caps.bytes_for("video/mp4").is_none());
+        assert!(state.prepare_settings(SettingsPatch {
+            caps: Some(caps),
+            ..Default::default()
+        }).is_err());
+    }
+
+    #[test]
+    fn persisted_settings_repair_only_invalid_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("app.json"), r#"{
+            "vaults": [], "last_opened": null,
+            "settings": {"lock_timeout_secs": 0, "strip_exif": false,
+                "caps": {"image_mb": 12, "pdf_mb": 0, "audio_mb": 200, "video_mb": 9999}}
+        }"#).unwrap();
+        let settings = AppState::load(dir.path().to_path_buf()).settings();
+        assert_eq!(settings.lock_timeout_secs, Settings::default().lock_timeout_secs);
+        assert_eq!(settings.caps.image_mb, 12);
+        assert_eq!(settings.caps.pdf_mb, Caps::default().pdf_mb);
+        assert_eq!(settings.caps.video_mb, Caps::default().video_mb);
+        assert!(!settings.strip_exif);
+    }
+
+    #[test]
+    fn settings_commit_rejects_stale_confirmation_and_keeps_memory_on_write_failure() {
+        let (_dir, state, _) = state_with_vault();
+        let (previous, next) = state.prepare_settings(SettingsPatch {
+            lock_timeout_secs: Some(MAX_LOCK_SECS),
+            ..Default::default()
+        }).unwrap();
+        assert!(next.weakens_protection(&previous));
+        let (base, unrelated) = state.prepare_settings(SettingsPatch {
+            clipboard_clear: Some(true),
+            ..Default::default()
+        }).unwrap();
+        state.commit_settings(base, unrelated).unwrap();
+        assert!(state.commit_settings(previous, next).is_err());
+
+        let (previous, next) = state.prepare_settings(SettingsPatch {
+            lock_timeout_secs: Some(MAX_LOCK_SECS),
+            ..Default::default()
+        }).unwrap();
+        std::fs::remove_file(&state.config_file).unwrap();
+        std::fs::create_dir(&state.config_file).unwrap();
+        assert!(state.commit_settings(previous.clone(), next).is_err());
+        assert_eq!(state.settings().lock_timeout_secs, previous.lock_timeout_secs);
+        assert!(state.settings().clipboard_clear);
+    }
+
+    #[test]
     fn idle_expiry_uses_the_settings_timeout() {
         let (_dir, state, _id) = state_with_vault();
         assert!(!state.idle_expired());
         let mut settings = state.settings();
-        settings.lock_timeout_secs = 0;
+        settings.lock_timeout_secs = MIN_LOCK_SECS;
         state.set_settings(settings).unwrap();
+        state.inner.lock().unwrap().last_activity = Instant::now() - Duration::from_secs(MIN_LOCK_SECS + 1);
         assert!(state.idle_expired());
         let _ = state.lock();
         assert!(
@@ -1399,7 +1703,7 @@ mod tests {
         assert_eq!(stored_sync_dir(&state, &id), None);
         assert_eq!(state.settings().sync_location, None);
         let sync = dir.path().join("sync-folder");
-        state.set_sync_dir(&id, Some(sync.clone())).unwrap();
+        state.set_sync_dir(&state.session().unwrap(), Some(sync.clone())).unwrap();
         assert_eq!(stored_sync_dir(&state, &id), Some(sync));
         assert_eq!(state.current_sync_dir(), stored_sync_dir(&state, &id));
         assert_eq!(
@@ -1411,7 +1715,7 @@ mod tests {
             stored_sync_dir(&reloaded, &id),
             stored_sync_dir(&state, &id)
         );
-        state.set_sync_dir(&id, None).unwrap();
+        state.set_sync_dir(&state.session().unwrap(), None).unwrap();
         assert_eq!(stored_sync_dir(&state, &id), None);
         assert_eq!(state.settings().sync_location, None);
     }
