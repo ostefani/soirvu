@@ -386,11 +386,11 @@ impl Vault {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let (old_id, name) = match uuid_prefix(&file_name) {
-                Some((uuid, rest)) => (Some(uuid), rest.to_string()),
+                Some((uuid, rest)) => (Some(uuid.to_ascii_lowercase()), rest.to_string()),
                 None => (None, file_name.clone()),
             };
-            let att_id = match &old_id {
-                Some(id) if !self.attachment_exists(id)? => id.to_string(),
+            let att_id = match old_id {
+                Some(id) if !self.attachment_exists(&id)? => id,
                 _ => Uuid::now_v7().to_string(),
             };
             let mime = sniff_mime(&bytes)
@@ -578,7 +578,8 @@ impl Vault {
             }
         }
         for att in &data.attachments {
-            let skip = self.attachment_exists(&att.id)?
+            let skip = !crate::storage::is_canonical_uuid(&att.id)
+                || self.attachment_exists(&att.id)?
                 || self.entry_exists(&att.entry_id).map(|e| !e).unwrap_or(true);
             if skip {
                 report.skipped_attachments += 1;
@@ -1678,6 +1679,53 @@ mod tests {
             vault.get_entry(good).unwrap().title.as_deref(),
             Some("Good")
         );
+    }
+
+    #[test]
+    fn json_import_skips_noncanonical_attachment_ids() {
+        let tmp = TempDir::new().unwrap();
+        let mut vault = new_vault(&tmp);
+        let entry = vault
+            .create_entry(
+                None,
+                &EntryDraft {
+                    entry_date: "2026-10-01".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let canonical = "01900000-0000-7000-8000-00000000000a";
+        let attachment = |id: &str, deleted_at: Option<i64>| {
+            serde_json::json!({
+                "id": id,
+                "entry_id": entry.id,
+                "name": "note.txt",
+                "mime": "text/plain",
+                "size": 4,
+                "sha256": data_encoding::HEXLOWER.encode(&Sha256::digest(b"note")),
+                "created_at": 1,
+                "deleted_at": deleted_at,
+                "data_base64": deleted_at.is_none().then(|| data_encoding::BASE64.encode(b"note")),
+            })
+        };
+        let file = tmp.path().join("attachment-ids.json");
+        let export = serde_json::json!({
+            "format": "soirvu-json-export",
+            "version": 2,
+            "entries": [],
+            "attachments": [
+                attachment(&canonical.to_ascii_uppercase(), None),
+                attachment("legacy-id", Some(2)),
+                attachment(canonical, None),
+            ],
+        });
+        fs::write(&file, serde_json::to_vec(&export).unwrap()).unwrap();
+
+        let report = vault.import_json(&file).unwrap();
+        assert_eq!(report.skipped_attachments, 2);
+        assert_eq!(report.attachments, 1);
+        assert!(!vault.attachment_exists("legacy-id").unwrap());
+        assert_eq!(vault.read_attachment(canonical).unwrap(), b"note");
     }
 
     /// P2: byte-offset slicing panicked on multibyte input. Every

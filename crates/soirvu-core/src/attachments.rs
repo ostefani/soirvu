@@ -86,6 +86,8 @@ pub struct AttachmentSweep {
     /// Ids of live rows whose blob file is not there. Reported, never deleted:
     /// the row is the only record that the attachment ever existed.
     pub missing: Vec<String>,
+    /// Live rows with invalid IDs. Blob cleanup is skipped when these exist.
+    pub invalid_ids: Vec<String>,
 }
 
 impl Vault {
@@ -176,6 +178,7 @@ impl Vault {
         deleted_at: Option<i64>,
         data: Option<&[u8]>,
     ) -> Result<()> {
+        validate_attachment_id(id)?;
         let name = validate_name(name)?;
         let mime = validate_mime(mime)?;
         if let Some(bytes) = data {
@@ -333,15 +336,21 @@ impl Vault {
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             rows.collect::<rusqlite::Result<HashSet<_>>>()?
         };
-        let mut sweep = AttachmentSweep {
-            missing: live
-                .iter()
-                .filter(|id| !blob_path(self.dir(), id).exists())
-                .cloned()
-                .collect(),
-            ..Default::default()
-        };
+        let mut sweep = AttachmentSweep::default();
+        for id in &live {
+            match blob_path(self.dir(), id) {
+                Ok(path) if !path.exists() => sweep.missing.push(id.clone()),
+                Err(_) => sweep.invalid_ids.push(id.clone()),
+                Ok(_) => {}
+            }
+        }
         sweep.missing.sort();
+        sweep.invalid_ids.sort();
+        // Preserve potentially recoverable files when a live row has an
+        // invalid ID. Verification reports the row without resolving it.
+        if !sweep.invalid_ids.is_empty() {
+            return Ok(sweep);
+        }
 
         let root = self.dir().join("attachments");
         if !root.exists() {
@@ -375,31 +384,37 @@ impl Vault {
 /// `attachments/ab/<id>` — sharded by the id's first two characters so no
 /// folder ever holds every blob. The file name is the id and nothing else:
 /// no original name or type leaks (§3).
-pub(crate) fn blob_path(dir: &Path, id: &str) -> PathBuf {
-    dir.join("attachments").join(&id[..2]).join(id)
+pub(crate) fn blob_path(dir: &Path, id: &str) -> Result<PathBuf> {
+    validate_attachment_id(id)?;
+    Ok(dir.join("attachments").join(&id[..2]).join(id))
 }
 
-fn tmp_path(dir: &Path, id: &str) -> PathBuf {
-    dir.join("attachments")
-        .join(&id[..2])
-        .join(format!(".{id}.tmp"))
+pub(crate) fn validate_attachment_id(id: &str) -> Result<()> {
+    if !crate::storage::is_canonical_uuid(id) {
+        return Err(Error::InvalidInput(
+            "attachment ID must be a canonical UUID".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Best-effort blob removal: a failure here is not fatal, because the row is
 /// already tombstoned (or was never committed) and the startup sweep removes
 /// whatever is left.
 pub(crate) fn remove_blob(dir: &Path, id: &str) {
-    let _ = fs::remove_file(blob_path(dir, id));
+    if let Ok(path) = blob_path(dir, id) {
+        let _ = fs::remove_file(path);
+    }
 }
 
 /// Encrypts everything from `reader` into the blob file for `id`.
 /// Returns the plaintext size and its SHA-256 (raw bytes).
 pub(crate) fn write_blob(dir: &Path, id: &str, key: &Key, reader: &mut impl Read) -> Result<(i64, [u8; 32])> {
-    let final_path = blob_path(dir, id);
+    let final_path = blob_path(dir, id)?;
     if let Some(parent) = final_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let tmp = tmp_path(dir, id);
+    let tmp = final_path.with_file_name(format!(".{id}.tmp"));
     let written = (|| -> Result<(i64, [u8; 32])> {
         let prefix: [u8; PREFIX_LEN] = random_bytes()?;
         let mut file = File::create(&tmp)?;
@@ -462,7 +477,7 @@ pub(crate) fn write_blob(dir: &Path, id: &str, key: &Key, reader: &mut impl Read
 /// size implies — the cheapest possible truncation/extension check.
 /// Returns the file (positioned at the first chunk) and the nonce prefix.
 fn open_blob(dir: &Path, att: &Attachment) -> Result<(File, [u8; PREFIX_LEN])> {
-    let path = blob_path(dir, &att.id);
+    let path = blob_path(dir, &att.id)?;
     let mut file = File::open(&path).map_err(|_| corrupt(&att.id, "blob file is missing"))?;
     if file.metadata()?.len() != expected_len(att.size) {
         return Err(corrupt(&att.id, "blob file has the wrong length"));
@@ -594,6 +609,7 @@ fn row_to_attachment(row: &rusqlite::Row) -> rusqlite::Result<Attachment> {
 
 /// Reads one live attachment and its internal row id.
 fn load_attachment(conn: &Connection, id: &str) -> Result<(i64, Attachment)> {
+    validate_attachment_id(id).map_err(|_| Error::AttachmentNotFound)?;
     let found = conn.query_row(
         "SELECT rid, id, entry_id, name, mime, size, sha256, created_at
            FROM attachment WHERE id = ?1 AND deleted_at IS NULL",
@@ -742,7 +758,7 @@ mod tests {
         assert_eq!(vault.read_attachment(&att.id).unwrap(), data);
         // The blob is a file named by id, in a shard folder named by its
         // first two characters — the original name appears nowhere on disk.
-        let path = blob_path(vault.dir(), &att.id);
+        let path = blob_path(vault.dir(), &att.id).unwrap();
         assert!(path.exists());
         assert_eq!(
             path.file_name().unwrap().to_string_lossy(),
@@ -840,7 +856,7 @@ mod tests {
         let att = vault
             .add_attachment(&entry_id, "note.txt", "text/plain", canary.as_bytes())
             .unwrap();
-        let on_disk = fs::read(blob_path(vault.dir(), &att.id)).unwrap();
+        let on_disk = fs::read(blob_path(vault.dir(), &att.id).unwrap()).unwrap();
         assert!(!on_disk
             .windows("секретное".len())
             .any(|w| w == "секретное".as_bytes()));
@@ -854,7 +870,7 @@ mod tests {
         let att = vault
             .add_attachment(&entry_id, "a.bin", "application/octet-stream", &data)
             .unwrap();
-        let path = blob_path(vault.dir(), &att.id);
+        let path = blob_path(vault.dir(), &att.id).unwrap();
         let mut bytes = fs::read(&path).unwrap();
         // Flip one byte inside the SECOND chunk.
         bytes[HEADER_LEN as usize + CHUNK_PLAIN + TAG_LEN + 10] ^= 0x01;
@@ -881,7 +897,7 @@ mod tests {
         let att = vault
             .add_attachment(&entry_id, "a.bin", "application/octet-stream", b"hello")
             .unwrap();
-        let path = blob_path(vault.dir(), &att.id);
+        let path = blob_path(vault.dir(), &att.id).unwrap();
         let bytes = fs::read(&path).unwrap();
 
         fs::write(&path, &bytes[..bytes.len() - 1]).unwrap();
@@ -908,8 +924,8 @@ mod tests {
         let b = vault
             .add_attachment(&entry_id, "b.bin", "application/octet-stream", b"same size?")
             .unwrap();
-        let pa = blob_path(vault.dir(), &a.id);
-        let pb = blob_path(vault.dir(), &b.id);
+        let pa = blob_path(vault.dir(), &a.id).unwrap();
+        let pb = blob_path(vault.dir(), &b.id).unwrap();
         let (ba, bb) = (fs::read(&pa).unwrap(), fs::read(&pb).unwrap());
         fs::write(&pa, &bb).unwrap();
         fs::write(&pb, &ba).unwrap();
@@ -956,7 +972,7 @@ mod tests {
         let att = vault
             .add_attachment(&entry_id, "a.bin", "application/octet-stream", b"gone soon")
             .unwrap();
-        let path = blob_path(vault.dir(), &att.id);
+        let path = blob_path(vault.dir(), &att.id).unwrap();
         vault.delete_attachment(&att.id).unwrap();
 
         assert!(matches!(
@@ -993,7 +1009,7 @@ mod tests {
         let att = vault
             .add_attachment(&entry_id, "a.bin", "application/octet-stream", b"with entry")
             .unwrap();
-        let path = blob_path(vault.dir(), &att.id);
+        let path = blob_path(vault.dir(), &att.id).unwrap();
         vault.delete_entry(&entry_id).unwrap();
 
         assert!(matches!(
@@ -1083,12 +1099,13 @@ mod tests {
             .add_attachment(&entry_id, "lost.bin", "application/octet-stream", b"lost")
             .unwrap();
         let shard = blob_path(vault.dir(), &keep.id)
+            .unwrap()
             .parent()
             .unwrap()
             .to_path_buf();
         fs::write(shard.join("orphan-file"), b"nobody points here").unwrap();
         fs::write(shard.join(".deadbeef.tmp"), b"half an upload").unwrap();
-        fs::remove_file(blob_path(vault.dir(), &lost.id)).unwrap();
+        fs::remove_file(blob_path(vault.dir(), &lost.id).unwrap()).unwrap();
 
         let sweep = vault.sweep_attachments().unwrap();
         assert_eq!(sweep.orphans_removed, 1);

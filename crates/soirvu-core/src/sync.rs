@@ -662,6 +662,10 @@ impl Vault {
         }
         let from_lseq = watermark + 1;
 
+        for record in &attachments {
+            crate::attachments::validate_attachment_id(&record.id)?;
+        }
+
         // Blobs first: a bundle must never reference a blob
         // that has not arrived next to it.
         let blobs_dir = sync_dir.join("blobs");
@@ -671,7 +675,7 @@ impl Vault {
             }
             let dest = blobs_dir.join(&record.id);
             if !dest.exists() {
-                let src = crate::attachments::blob_path(self.dir(), &record.id);
+                let src = crate::attachments::blob_path(self.dir(), &record.id)?;
                 if src.exists() {
                     fs::create_dir_all(&blobs_dir)?;
                     let tmp = blobs_dir.join(format!(".tmp-{}", record.id));
@@ -1903,7 +1907,7 @@ impl Vault {
                     ));
                     return Ok(());
                 }
-                let dest = crate::attachments::blob_path(self.dir(), &record.id);
+                let dest = crate::attachments::blob_path(self.dir(), &record.id)?;
                 if let Some(parent) = dest.parent() {
                     fs::create_dir_all(parent)?;
                 }

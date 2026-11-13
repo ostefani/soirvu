@@ -884,7 +884,7 @@ mod tests {
         let attachment = vault
             .add_attachment(&nested.id, "file.txt", "text/plain", b"private attachment")
             .unwrap();
-        let blob = crate::attachments::blob_path(vault.dir(), &attachment.id);
+        let blob = crate::attachments::blob_path(vault.dir(), &attachment.id).unwrap();
         assert!(blob.exists());
         let tomb = vault.delete_folder_tree(&root.id, root.rev).unwrap();
         assert_eq!(tomb.rev, root.rev + 1);
@@ -964,7 +964,11 @@ mod tests {
             vault.read_attachment(&attachment.id).unwrap(),
             b"kept attachment"
         );
-        assert!(crate::attachments::blob_path(vault.dir(), &attachment.id).exists());
+        assert!(
+            crate::attachments::blob_path(vault.dir(), &attachment.id)
+                .unwrap()
+                .exists()
+        );
     }
 
     /// Deleting a folder needs it empty and at the caller's revision;
