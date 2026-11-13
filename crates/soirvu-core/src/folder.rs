@@ -42,6 +42,7 @@ impl Vault {
     /// Creates a new vault in `dir` (which must be missing or empty).
     /// Returns the open vault and the recovery key to show to the user once.
     pub fn create(dir: &Path, passphrase: &str, kdf: KdfParams) -> Result<(Vault, RecoveryKey)> {
+        crate::crypto::validate_new_passphrase(passphrase)?;
         prepare_folder(dir)?;
         match create_files(dir, passphrase, kdf, None) {
             Ok(created) => Ok(created),
@@ -64,6 +65,7 @@ impl Vault {
         kdf: KdfParams,
         device_id: &str,
     ) -> Result<(Vault, RecoveryKey)> {
+        crate::crypto::validate_new_passphrase(passphrase)?;
         prepare_folder(dir)?;
         match create_files(dir, passphrase, kdf, Some(device_id)) {
             Ok(created) => Ok(created),

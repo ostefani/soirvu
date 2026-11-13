@@ -510,6 +510,8 @@ fn error_codes() {
     let lines = [
         format!("Unlock -> {}", code(Core::Unlock)),
         format!("EmptyPassphrase -> {}", code(Core::EmptyPassphrase)),
+        format!("PassphraseTooShort -> {}", code(Core::PassphraseTooShort)),
+        format!("PassphraseTooLong -> {}", code(Core::PassphraseTooLong)),
         format!(
             "InvalidRecoveryKey -> {}",
             code(Core::InvalidRecoveryKey("x".into()))

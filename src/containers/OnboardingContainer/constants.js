@@ -10,7 +10,6 @@ export const ONBOARDING_STEP = {
     SAVE_RECOVERY_KEY: 3,
 };
 
-export const MINIMUM_PASSPHRASE_LENGTH = 8;
 
 export function createModel() {
     return {

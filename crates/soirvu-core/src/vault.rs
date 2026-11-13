@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::crypto::{
     DeviceSecret, KdfParams, MasterKey, NONCE_LEN, RecoveryKey, SALT_LEN, WRAPPED_LEN, derive_kek,
-    random_bytes, unwrap_key, wrap_key,
+    random_bytes, unwrap_key, validate_new_passphrase, wrap_key,
 };
 use crate::error::{Error, Result};
 
@@ -94,11 +94,7 @@ impl VaultHeader {
     /// Returns the header (to save as a file), the recovery key (to show to the
     /// user ONCE) and the master key (to open the database right away).
     pub fn create(passphrase: &str, kdf: KdfParams) -> Result<(VaultHeader, RecoveryKey, MasterKey)> {
-        if passphrase.is_empty() {
-            return Err(Error::EmptyPassphrase);
-        }
-        kdf.check()?;
-
+        validate_new_passphrase(passphrase)?;
         let vault_id = HEXLOWER.encode(&random_bytes::<VAULT_ID_LEN>()?);
         Self::create_with_id(&vault_id, passphrase, kdf)
     }
@@ -106,7 +102,7 @@ impl VaultHeader {
     /// Like create(), but for a known vault id — master-key
     /// rotation keeps the diary's identity while everything
     /// else (master, slots, recovery key) is minted fresh.
-    pub fn create_with_id(
+    pub(crate) fn create_with_id(
         vault_id: &str,
         passphrase: &str,
         kdf: KdfParams,
@@ -174,9 +170,7 @@ impl VaultHeader {
         master: &MasterKey,
         kdf: KdfParams,
     ) -> Result<VaultHeader> {
-        if new_passphrase.is_empty() {
-            return Err(Error::EmptyPassphrase);
-        }
+        validate_new_passphrase(new_passphrase)?;
         kdf.check()?;
         let salt = random_bytes::<SALT_LEN>()?;
         let kek = derive_kek(new_passphrase, &salt, &kdf)?;
@@ -435,6 +429,25 @@ mod tests {
         let path = dir.path().join("header.json");
         std::fs::write(&path, vec![b' '; VaultHeader::MAX_HEADER_BYTES + 1]).unwrap();
         assert!(matches!(VaultHeader::read_file(&path), Err(Error::InvalidInput(_))));
+    }
+
+    #[test]
+    fn new_passphrase_policy_preserves_legacy_unlocks() {
+        let id = "00000000000000000000000000000000";
+        let (legacy, _, master) = VaultHeader::create_with_id(id, "old", fast()).unwrap();
+        assert!(legacy.unlock_with_passphrase("old").is_ok());
+        assert!(matches!(VaultHeader::create("old", fast()), Err(Error::PassphraseTooShort)));
+        assert!(matches!(
+            legacy.with_new_passphrase("short", &master, fast()),
+            Err(Error::PassphraseTooShort)
+        ));
+        assert!(matches!(
+            VaultHeader::create(&"x".repeat(crate::crypto::MAX_PASSPHRASE_BYTES + 1), fast()),
+            Err(Error::PassphraseTooLong)
+        ));
+        let changed = legacy.with_new_passphrase("  secret  ", &master, fast()).unwrap();
+        assert!(changed.unlock_with_passphrase("  secret  ").is_ok());
+        assert!(changed.unlock_with_passphrase("secret").is_err());
     }
 
     fn new_vault() -> (VaultHeader, RecoveryKey, MasterKey) {

@@ -73,6 +73,7 @@ export const FORK_SECRET_FIELD_CONFIGURATION = {
 // ---------------------------------------------------------------------------
 export const VAULT_ERROR_MESSAGES = {
     busy: 'Another vault operation is in progress. Try again when it finishes.',
+    passphrase_too_long: 'This passphrase exceeds the 64 KiB limit. Try unlocking with the recovery key.',
     bad_kdf: 'The vault’s passphrase settings are unsupported. Try unlocking with the recovery key.',
     not_a_vault: 'That folder does not hold a diary. Pick the folder with the diary files.',
     wrong_passphrase: 'Wrong passphrase or recovery key.',

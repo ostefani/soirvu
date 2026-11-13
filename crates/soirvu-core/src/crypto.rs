@@ -124,17 +124,36 @@ fn passphrase_bytes(passphrase: &str) -> Zeroizing<Vec<u8>> {
     Zeroizing::new(composed.into_bytes())
 }
 
+pub const MAX_PASSPHRASE_BYTES: usize = 64 * 1024;
+const MIN_NEW_PASSPHRASE_CHARS: usize = 8;
+
+pub fn validate_new_passphrase(passphrase: &str) -> Result<()> {
+    if passphrase.is_empty() {
+        return Err(Error::EmptyPassphrase);
+    }
+    if passphrase.len() > MAX_PASSPHRASE_BYTES {
+        return Err(Error::PassphraseTooLong);
+    }
+    // Count the same Unicode representation the existing KDF uses.
+    if passphrase.nfc().take(MIN_NEW_PASSPHRASE_CHARS).count() < MIN_NEW_PASSPHRASE_CHARS {
+        return Err(Error::PassphraseTooShort);
+    }
+    Ok(())
+}
+
 /// Passphrase + salt + settings -> a 32-byte key-encryption key (KEK).
 /// Deliberately slow: this is what makes password guessing expensive.
 pub fn derive_kek(passphrase: &str, salt: &[u8], params: &KdfParams) -> Result<Key> {
+    if passphrase.len() > MAX_PASSPHRASE_BYTES {
+        return Err(Error::PassphraseTooLong);
+    }
     params.check()?;
     // Preserve header compatibility and recovery-key access, while refusing
     // to allocate more than the maximum that SoirVu calibrates locally.
     if params.m_kib > 1024 * 1024
         || u64::from(params.m_kib) * u64::from(params.t) > 4 * 1024 * 1024
-        || passphrase.len() > 64 * 1024
     {
-        return Err(Error::BadKdfParams("passphrase or KDF exceeds the local work limit".into()));
+        return Err(Error::BadKdfParams("KDF exceeds the local work limit".into()));
     }
     #[cfg(not(test))]
     static DERIVATION: std::sync::Mutex<()> = std::sync::Mutex::new(());

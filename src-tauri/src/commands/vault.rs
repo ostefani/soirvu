@@ -15,7 +15,7 @@ use soirvu_core::vault::VaultHeader;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::oneshot;
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use crate::error::{AppError, ipc};
 use crate::lock_handshake::{FlushOutcome, LOCK_ACK_WAIT};
@@ -356,19 +356,14 @@ pub(super) static INTERACTIVE_KDF: tokio::sync::Semaphore = tokio::sync::Semapho
 pub async fn vault_create(
     app: AppHandle,
     state: State<'_, AppState>,
-    mut passphrase: String,
+    passphrase: String,
 ) -> Result<Created, String> {
+    let passphrase = Zeroizing::new(passphrase);
+    ipc(soirvu_core::crypto::validate_new_passphrase(&passphrase).map_err(AppError::from))?;
     let Ok(permit) = INTERACTIVE_KDF.try_acquire() else {
-        passphrase.zeroize();
         return Err("busy".into());
     };
-    let path = match state.take_pending_create() {
-        Ok(path) => path,
-        Err(e) => {
-            passphrase.zeroize();
-            return Err(e.to_ipc());
-        }
-    };
+    let path = ipc(state.take_pending_create())?;
     let name = folder_name(&path);
     // The device identity is assigned at birth: minted
     // here, kept in the registry (below), and handed
@@ -378,19 +373,16 @@ pub async fn vault_create(
     // it off the async runtime's threads.
     let task_path = path.clone();
     let task_device = device_id.clone();
-    let mut task_passphrase = passphrase.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
         let result = (|| {
             let kdf = KdfParams::calibrate(Duration::from_millis(750))?;
-            let pair = Vault::create_with_device(&task_path, &task_passphrase, kdf, &task_device)?;
+            let pair = Vault::create_with_device(&task_path, &passphrase, kdf, &task_device)?;
             Ok::<_, AppError>(pair)
         })();
-        task_passphrase.zeroize();
         result
     })
     .await;
-    passphrase.zeroize();
     let (vault, recovery) = match joined {
         Ok(Ok(pair)) => pair,
         Ok(Err(e)) => return Err(e.to_ipc()),
@@ -413,56 +405,52 @@ pub async fn vault_unlock(
     state: State<'_, AppState>,
     vault_id: String,
     kind: String,
-    mut secret: String,
+    secret: String,
 ) -> Result<(), String> {
+    let secret = Zeroizing::new(secret);
     if kind != "passphrase" && kind != "recovery" {
-        secret.zeroize();
         return Err("invalid_input".into());
     }
+    if secret.len() > soirvu_core::crypto::MAX_PASSPHRASE_BYTES {
+        return Err(AppError::from(soirvu_core::Error::PassphraseTooLong).to_ipc());
+    }
     let Ok(permit) = INTERACTIVE_KDF.try_acquire() else {
-        secret.zeroize();
         return Err("busy".into());
     };
     let path = match state.vault_path(&vault_id) {
         Ok(path) => path,
         Err(e) => {
-            secret.zeroize();
             return Err(e.to_ipc());
         }
     };
     if let Err(e) = state.begin_unlock(&vault_id) {
-        secret.zeroize();
         return Err(e.to_ipc());
     }
     let assignment = match state.assignment(&vault_id) {
         Ok(a) => a,
         Err(e) => {
-            secret.zeroize();
             state.unlock_aborted();
             return Err(e.to_ipc());
         }
     };
     // Opening runs Argon2id (~750 ms): keep it off the async
     // runtime's threads.
-    let mut task_secret = secret.clone();
     let task_assignment = assignment.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
         let opened = match (kind.as_str(), task_assignment.as_deref()) {
             ("passphrase", Some(device)) => {
-                Vault::open_with_passphrase_as(&path, &task_secret, device)
+                Vault::open_with_passphrase_as(&path, &secret, device)
             }
-            (_, Some(device)) => RecoveryKey::from_text(&task_secret)
+            (_, Some(device)) => RecoveryKey::from_text(&secret)
                 .and_then(|key| Vault::open_with_recovery_as(&path, &key, device)),
-            ("passphrase", None) => Vault::open_with_passphrase(&path, &task_secret),
-            (_, None) => RecoveryKey::from_text(&task_secret)
+            ("passphrase", None) => Vault::open_with_passphrase(&path, &secret),
+            (_, None) => RecoveryKey::from_text(&secret)
                 .and_then(|key| Vault::open_with_recovery(&path, &key)),
         };
-        task_secret.zeroize();
         opened
     })
     .await;
-    secret.zeroize();
     match joined {
         Ok(Ok(vault)) => adopt_unlocked_vault(&app, &state, &vault_id, assignment, vault),
         Ok(Err(e)) => {
@@ -777,7 +765,7 @@ pub async fn vault_unlock_touch_id(
     let task_assignment = assignment.clone();
     let keychain_id = vault_id.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        let bytes = crate::keychain::read(&keychain_id).map_err(TouchUnlockError::Keychain)?;
+        let bytes = Zeroizing::new(crate::keychain::read(&keychain_id).map_err(TouchUnlockError::Keychain)?);
         let secret = DeviceSecret::from_bytes(&bytes).map_err(TouchUnlockError::Core)?;
         match task_assignment.as_deref() {
             Some(device) => {
@@ -870,9 +858,9 @@ pub struct Forked {
 /// new id, next to the original. A wrong passphrase changes
 /// nothing; the pending copy stays pending.
 #[tauri::command]
-pub async fn vault_fork_import(app: AppHandle, mut passphrase: String) -> Result<Forked, String> {
+pub async fn vault_fork_import(app: AppHandle, passphrase: String) -> Result<Forked, String> {
+    let passphrase = Zeroizing::new(passphrase);
     let Ok(permit) = INTERACTIVE_KDF.try_acquire() else {
-        passphrase.zeroize();
         return Err("busy".into());
     };
     crate::commands::run_blocking_state(app, move |state| {
@@ -892,7 +880,6 @@ pub async fn vault_fork_import(app: AppHandle, mut passphrase: String) -> Result
                 recovery_key: recovery.to_text(),
             })
         })();
-        passphrase.zeroize();
         ipc(result)
     })
     .await
@@ -908,21 +895,18 @@ pub async fn vault_change_passphrase(
     current_passphrase: String,
     new_passphrase: String,
 ) -> Result<(), String> {
+    let current = Zeroizing::new(current_passphrase);
+    let new = Zeroizing::new(new_passphrase);
+    ipc(soirvu_core::crypto::validate_new_passphrase(&new).map_err(AppError::from))?;
     let Ok(permit) = INTERACTIVE_KDF.try_acquire() else {
-        drop(zeroize::Zeroizing::new(current_passphrase));
-        drop(zeroize::Zeroizing::new(new_passphrase));
         return Err("busy".into());
     };
     crate::commands::run_blocking_state(app, move |state| {
         let _permit = permit;
-        let mut current = current_passphrase;
-        let mut new = new_passphrase;
         let result = state.with_vault(|vault| {
             vault.change_passphrase(&current, &new)?;
             Ok(())
         });
-        current.zeroize();
-        new.zeroize();
         ipc(result)
     })
     .await
@@ -935,18 +919,16 @@ pub async fn vault_regenerate_recovery(
     app: AppHandle,
     current_passphrase: String,
 ) -> Result<String, String> {
+    let current = Zeroizing::new(current_passphrase);
     let Ok(permit) = INTERACTIVE_KDF.try_acquire() else {
-        drop(zeroize::Zeroizing::new(current_passphrase));
         return Err("busy".into());
     };
     crate::commands::run_blocking_state(app, move |state| {
         let _permit = permit;
-        let mut current = current_passphrase;
         let result = state.with_vault(|vault| {
             let recovery = vault.regenerate_recovery(&current)?;
             Ok(recovery.to_text())
         });
-        current.zeroize();
         ipc(result)
     })
     .await
@@ -1009,7 +991,7 @@ pub async fn vault_rotate_master_key(
     app: AppHandle,
     current_passphrase: String,
 ) -> Result<Option<String>, String> {
-    let passphrase = zeroize::Zeroizing::new(current_passphrase);
+    let passphrase = Zeroizing::new(current_passphrase);
     let session = ipc(app.state::<AppState>().session())?;
     if !confirm_rotate(&app).await {
         return Ok(None);

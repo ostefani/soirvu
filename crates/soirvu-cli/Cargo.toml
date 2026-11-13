@@ -7,5 +7,7 @@ publish = false
 [dependencies]
 soirvu-core = { path = "../soirvu-core", version = "1.1.0" }
 
+zeroize = "1"
+
 [dev-dependencies]
 tempfile = "3.27.0"

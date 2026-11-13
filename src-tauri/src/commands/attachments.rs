@@ -41,14 +41,7 @@ pub struct AttachmentInfo {
 /// The size cap (bytes) for a sniffed type, from the settings (§6.4:
 /// caps are settings). None when the type is outside the allowlist.
 fn cap_for(mime: &str, caps: &crate::state::Caps) -> Option<u64> {
-    let mb = |v: u64| v.saturating_mul(1024 * 1024);
-    match mime {
-        m if m.starts_with("image/") => Some(mb(caps.image_mb)),
-        "application/pdf" => Some(mb(caps.pdf_mb)),
-        m if m.starts_with("audio/") => Some(mb(caps.audio_mb)),
-        m if m.starts_with("video/") => Some(mb(caps.video_mb)),
-        _ => None,
-    }
+    caps.bytes_for(mime)
 }
 
 fn preview_cap(mime: &str, caps: &crate::state::Caps) -> Option<u64> {
@@ -733,7 +726,7 @@ mod tests {
         let vault_dir = dir.path().join("vault");
         let (vault, _recovery) = Vault::create(
             &vault_dir,
-            "pass",
+            "test passphrase",
             KdfParams {
                 m_kib: 64 * 1024,
                 t: 3,
@@ -895,7 +888,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        let mut peer = Vault::open_with_passphrase(&peer_dir, "pass").unwrap();
+        let mut peer = Vault::open_with_passphrase(&peer_dir, "test passphrase").unwrap();
         peer.restamp_device().unwrap();
         let synced = peer
             .add_attachment(&entry, "peer.command", "text/html", png)

@@ -63,12 +63,36 @@ pub struct VaultRef {
     pub device_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Caps {
     pub image_mb: u64,
     pub pdf_mb: u64,
     pub audio_mb: u64,
     pub video_mb: u64,
+}
+
+const MIN_LOCK_SECS: u64 = 60;
+const MAX_LOCK_SECS: u64 = 24 * 60 * 60;
+const MAX_ATTACHMENT_MIB: u64 = 1024;
+
+impl Caps {
+    fn values(&self) -> [u64; 4] {
+        [self.image_mb, self.pdf_mb, self.audio_mb, self.video_mb]
+    }
+
+    pub(crate) fn bytes_for(&self, mime: &str) -> Option<u64> {
+        let mib = match mime {
+            "application/pdf" => self.pdf_mb,
+            m if m.starts_with("image/") => self.image_mb,
+            m if m.starts_with("audio/") => self.audio_mb,
+            m if m.starts_with("video/") => self.video_mb,
+            _ => return None,
+        };
+        (1..=MAX_ATTACHMENT_MIB).contains(&mib)
+            .then(|| mib.checked_mul(1024 * 1024))
+            .flatten()
+    }
 }
 
 impl Default for Caps {
@@ -94,7 +118,8 @@ pub enum BackupSchedule {
     Weekly,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub lock_timeout_secs: u64,
     pub strip_exif: bool,
@@ -106,34 +131,25 @@ pub struct Settings {
     #[serde(default)]
     pub backup_schedule: BackupSchedule,
     pub caps: Caps,
-    /// Where backups go, as a full path. Derived from
-    /// AppConfig::backup_dir whenever settings are read; the
-    /// value sent back by settings_set is ignored. The full
-    /// path is shown on purpose, like the diary's own home:
-    /// the user should always know where the backups are.
-    /// Null until a folder is picked.
-    #[serde(default)]
+    /// The full backup path, derived from AppConfig on read.
+    #[serde(skip_deserializing)]
     pub backup_location: Option<String>,
-    /// Where the open diary lives, as a full path (derived like
-    /// backup_location; the value sent back by settings_set is
-    /// ignored). The diary's own home is shown in full, on
-    /// purpose: the user should always know where it is.
-    #[serde(default)]
+    /// The full path to the open diary, derived from its registry entry.
+    #[serde(skip_deserializing)]
     pub vault_location: Option<String>,
     /// The OS this build runs on ("macos", "linux",
     /// "windows" — std::env::consts::OS), derived on read
-    /// like the two locations above and ignored on set. The
+    /// like the two locations above. The
     /// UI uses it to offer only what the platform supports
     /// (the clipboard clear is macOS-only: it needs the
     /// NSPasteboard change counter).
-    #[serde(default)]
+    #[serde(skip_deserializing)]
     pub platform: String,
     /// Display name of the OPEN vault's sync folder (never
     /// a path). Derived from the vault's registry entry
-    /// whenever settings are read, like backup_location;
-    /// the value sent back by settings_set is ignored.
+    /// whenever settings are read, like backup_location.
     /// Null until a sync folder is picked for this vault.
-    #[serde(default)]
+    #[serde(skip_deserializing)]
     pub sync_location: Option<String>,
 }
 
@@ -150,6 +166,61 @@ impl Default for Settings {
             vault_location: None,
             sync_location: None,
         }
+    }
+}
+
+/// Writable IPC fields. Paths and platform data are derived by Rust.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsPatch {
+    pub lock_timeout_secs: Option<u64>,
+    pub strip_exif: Option<bool>,
+    pub clipboard_clear: Option<bool>,
+    pub backup_schedule: Option<BackupSchedule>,
+    pub caps: Option<Caps>,
+}
+
+impl Settings {
+    fn apply_patch(&self, patch: SettingsPatch) -> AppResult<Self> {
+        let next = Self {
+            lock_timeout_secs: patch.lock_timeout_secs.unwrap_or(self.lock_timeout_secs),
+            strip_exif: patch.strip_exif.unwrap_or(self.strip_exif),
+            clipboard_clear: patch.clipboard_clear.unwrap_or(self.clipboard_clear),
+            backup_schedule: patch.backup_schedule.unwrap_or(self.backup_schedule),
+            caps: patch.caps.unwrap_or_else(|| self.caps.clone()),
+            ..Self::default()
+        };
+        if !(MIN_LOCK_SECS..=MAX_LOCK_SECS).contains(&next.lock_timeout_secs)
+            || !next.caps.values().into_iter().all(|cap| (1..=MAX_ATTACHMENT_MIB).contains(&cap))
+        {
+            return Err(AppError::Code("invalid_input".into()));
+        }
+        Ok(next)
+    }
+
+    fn repair_loaded(&mut self) {
+        let defaults = Self::default();
+        if !(MIN_LOCK_SECS..=MAX_LOCK_SECS).contains(&self.lock_timeout_secs) {
+            self.lock_timeout_secs = defaults.lock_timeout_secs;
+        }
+        for (cap, default) in [
+            (&mut self.caps.image_mb, defaults.caps.image_mb),
+            (&mut self.caps.pdf_mb, defaults.caps.pdf_mb),
+            (&mut self.caps.audio_mb, defaults.caps.audio_mb),
+            (&mut self.caps.video_mb, defaults.caps.video_mb),
+        ] {
+            if !(1..=MAX_ATTACHMENT_MIB).contains(cap) {
+                *cap = default;
+            }
+        }
+    }
+
+    pub(crate) fn weakens_protection(&self, previous: &Self) -> bool {
+        self.lock_timeout_secs > previous.lock_timeout_secs
+            || (previous.strip_exif && !self.strip_exif)
+            || (previous.clipboard_clear && !self.clipboard_clear)
+            || self.caps.values().into_iter().zip(previous.caps.values())
+                .any(|(next, previous)| next > previous)
     }
 }
 
@@ -301,10 +372,11 @@ impl AppState {
     /// Loads (or starts) app.json in the app config folder (§3).
     pub fn load(app_config_dir: PathBuf) -> AppState {
         let config_file = app_config_dir.join("app.json");
-        let config = fs::read_to_string(&config_file)
+        let mut config: AppConfig = fs::read_to_string(&config_file)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default();
+        config.settings.repair_loaded();
         let state = AppState {
             inner: Mutex::new(Inner {
                 status: Status::Unavailable,
@@ -333,10 +405,14 @@ impl AppState {
     }
 
     fn save_config(&self, inner: &Inner) -> AppResult<()> {
+        self.persist_config(&inner.config)
+    }
+
+    fn persist_config(&self, config: &AppConfig) -> AppResult<()> {
         if let Some(parent) = self.config_file.parent() {
             fs::create_dir_all(parent)?;
         }
-        let text = serde_json::to_string_pretty(&inner.config)?;
+        let text = serde_json::to_string_pretty(config)?;
         let tmp = self
             .config_file
             .with_extension(format!("json.tmp.{}", std::process::id()));
@@ -346,9 +422,11 @@ impl AppState {
         file.sync_all()?;
         drop(file);
         fs::rename(&tmp, &self.config_file)?;
+        // The rename committed the update. Directory durability is best
+        // effort so a post-rename error cannot leave memory on the old value.
         #[cfg(unix)]
         if let Some(parent) = self.config_file.parent() {
-            fs::File::open(parent)?.sync_all()?;
+            let _ = fs::File::open(parent).and_then(|dir| dir.sync_all());
         }
         Ok(())
     }
@@ -403,12 +481,34 @@ impl AppState {
         self.inner.lock().unwrap().config.settings.clipboard_clear
     }
 
-    pub fn set_settings(&self, settings: Settings) -> AppResult<()> {
+    pub(crate) fn prepare_settings(&self, patch: SettingsPatch) -> AppResult<(Settings, Settings)> {
+        let previous = self.inner.lock().unwrap().config.settings.clone();
+        let next = previous.apply_patch(patch)?;
+        Ok((previous, next))
+    }
+
+    pub(crate) fn commit_settings(&self, previous: Settings, next: Settings) -> AppResult<()> {
         let mut inner = self.inner.lock().unwrap();
-        // backup_location in the DTO is read-only (see Settings):
-        // the stored path never comes from the webview.
-        inner.config.settings = settings;
-        self.save_config(&inner)
+        if inner.config.settings != previous {
+            return Err(AppError::Code("revision_conflict".into()));
+        }
+        let mut config = inner.config.clone();
+        config.settings = next;
+        self.persist_config(&config)?;
+        inner.config = config;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_settings(&self, settings: Settings) -> AppResult<()> {
+        let (previous, next) = self.prepare_settings(SettingsPatch {
+            lock_timeout_secs: Some(settings.lock_timeout_secs),
+            strip_exif: Some(settings.strip_exif),
+            clipboard_clear: Some(settings.clipboard_clear),
+            backup_schedule: Some(settings.backup_schedule),
+            caps: Some(settings.caps),
+        })?;
+        self.commit_settings(previous, next)
     }
 
     /// Stores (or clears) the backup folder chosen through the
@@ -1234,7 +1334,7 @@ mod tests {
     fn state_with_vault() -> (tempfile::TempDir, AppState, String) {
         let dir = tempfile::TempDir::new().unwrap();
         let vault_dir = dir.path().join("vault");
-        let (vault, _recovery) = Vault::create(&vault_dir, "pass", fast_legal_kdf()).unwrap();
+        let (vault, _recovery) = Vault::create(&vault_dir, "test passphrase", fast_legal_kdf()).unwrap();
         let vault_id = vault.header().vault_id.clone();
         let state = AppState::load(dir.path().join("config"));
         state
@@ -1251,7 +1351,7 @@ mod tests {
         state.lock().unwrap();
         assert!(state.session().is_err());
         state.begin_unlock(&id).unwrap();
-        let vault = Vault::open_with_passphrase(&dir.path().join("vault"), "pass").unwrap();
+        let vault = Vault::open_with_passphrase(&dir.path().join("vault"), "test passphrase").unwrap();
         state.unlock_ok(vault).unwrap();
 
         let current = state.session().unwrap();
@@ -1269,7 +1369,7 @@ mod tests {
         let (dir, state, id) = state_with_vault();
         state.lock().unwrap();
         state.begin_unlock(&id).unwrap();
-        let vault = Vault::open_with_passphrase(&dir.path().join("vault"), "pass").unwrap();
+        let vault = Vault::open_with_passphrase(&dir.path().join("vault"), "test passphrase").unwrap();
         assert!(state.session_to_lock().is_none());
         assert!(state.unlock_ok(vault).is_err());
         assert_eq!(state.status(), Status::Locked);
@@ -1280,9 +1380,9 @@ mod tests {
     fn background_reads_do_not_extend_idle_timeout() {
         let (_dir, state, _id) = state_with_vault();
         let mut settings = state.settings();
-        settings.lock_timeout_secs = 30;
+        settings.lock_timeout_secs = MIN_LOCK_SECS;
         state.set_settings(settings).unwrap();
-        state.inner.lock().unwrap().last_activity = Instant::now() - Duration::from_secs(60);
+        state.inner.lock().unwrap().last_activity = Instant::now() - Duration::from_secs(MIN_LOCK_SECS + 1);
         let session = state.session().unwrap();
         state.with_vault(|_| Ok(())).unwrap();
         state.with_session(&session, |_| Ok(())).unwrap();
@@ -1501,12 +1601,72 @@ mod tests {
     }
 
     #[test]
+    fn settings_reject_read_only_fields_and_invalid_ranges() {
+        assert!(serde_json::from_str::<SettingsPatch>(r#"{"backup_location":"elsewhere"}"#).is_err());
+        let (_dir, state, _) = state_with_vault();
+        assert!(state.prepare_settings(SettingsPatch {
+            lock_timeout_secs: Some(MAX_LOCK_SECS + 1),
+            ..Default::default()
+        }).is_err());
+        let mut caps = Caps::default();
+        caps.video_mb = u64::MAX;
+        assert!(caps.bytes_for("video/mp4").is_none());
+        assert!(state.prepare_settings(SettingsPatch {
+            caps: Some(caps),
+            ..Default::default()
+        }).is_err());
+    }
+
+    #[test]
+    fn persisted_settings_repair_only_invalid_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("app.json"), r#"{
+            "vaults": [], "last_opened": null,
+            "settings": {"lock_timeout_secs": 0, "strip_exif": false,
+                "caps": {"image_mb": 12, "pdf_mb": 0, "audio_mb": 200, "video_mb": 9999}}
+        }"#).unwrap();
+        let settings = AppState::load(dir.path().to_path_buf()).settings();
+        assert_eq!(settings.lock_timeout_secs, Settings::default().lock_timeout_secs);
+        assert_eq!(settings.caps.image_mb, 12);
+        assert_eq!(settings.caps.pdf_mb, Caps::default().pdf_mb);
+        assert_eq!(settings.caps.video_mb, Caps::default().video_mb);
+        assert!(!settings.strip_exif);
+    }
+
+    #[test]
+    fn settings_commit_rejects_stale_confirmation_and_keeps_memory_on_write_failure() {
+        let (_dir, state, _) = state_with_vault();
+        let (previous, next) = state.prepare_settings(SettingsPatch {
+            lock_timeout_secs: Some(MAX_LOCK_SECS),
+            ..Default::default()
+        }).unwrap();
+        assert!(next.weakens_protection(&previous));
+        let (base, unrelated) = state.prepare_settings(SettingsPatch {
+            clipboard_clear: Some(true),
+            ..Default::default()
+        }).unwrap();
+        state.commit_settings(base, unrelated).unwrap();
+        assert!(state.commit_settings(previous, next).is_err());
+
+        let (previous, next) = state.prepare_settings(SettingsPatch {
+            lock_timeout_secs: Some(MAX_LOCK_SECS),
+            ..Default::default()
+        }).unwrap();
+        std::fs::remove_file(&state.config_file).unwrap();
+        std::fs::create_dir(&state.config_file).unwrap();
+        assert!(state.commit_settings(previous.clone(), next).is_err());
+        assert_eq!(state.settings().lock_timeout_secs, previous.lock_timeout_secs);
+        assert!(state.settings().clipboard_clear);
+    }
+
+    #[test]
     fn idle_expiry_uses_the_settings_timeout() {
         let (_dir, state, _id) = state_with_vault();
         assert!(!state.idle_expired());
         let mut settings = state.settings();
-        settings.lock_timeout_secs = 0;
+        settings.lock_timeout_secs = MIN_LOCK_SECS;
         state.set_settings(settings).unwrap();
+        state.inner.lock().unwrap().last_activity = Instant::now() - Duration::from_secs(MIN_LOCK_SECS + 1);
         assert!(state.idle_expired());
         let _ = state.lock();
         assert!(

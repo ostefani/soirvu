@@ -135,6 +135,8 @@ import { scopeToWire } from "./lib/scope.js";
  * @typedef {object} Settings
  * @property {number} lock_timeout_secs
  * @property {boolean} strip_exif
+ * @property {boolean} clipboard_clear
+ * @property {"off" | "daily" | "weekly"} backup_schedule
  * @property {{ image_mb: number, pdf_mb: number, audio_mb: number, video_mb: number }} caps
  * @property {string | null} backup_location Full path of the backup
  *   folder. Read-only here: it changes only through
@@ -699,7 +701,7 @@ export function attachmentOpen(id) {
     return invoke('attachment_open', { id });
 }
 
-/** @param {Settings} settings */
+/** @param {Partial<Pick<Settings, "lock_timeout_secs" | "strip_exif" | "clipboard_clear" | "backup_schedule" | "caps">>} settings */
 export function settingsSet(settings) {
     return invoke("settings_set", { settings });
 }

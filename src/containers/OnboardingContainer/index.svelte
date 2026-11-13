@@ -8,7 +8,6 @@
     import {
         createModel,
         ONBOARDING_STEP,
-        MINIMUM_PASSPHRASE_LENGTH,
         PASSPHRASE_FIELD_CONFIGURATIONS,
     } from './constants.js';
     import { onboardingText } from './data.js';
@@ -45,10 +44,6 @@
     async function create() {
         if (model.busy) return;
         model.error = '';
-        if (model.passphrase.length < MINIMUM_PASSPHRASE_LENGTH) {
-            model.error = onboardingText.passphraseTooShortError;
-            return;
-        }
         if (model.passphrase !== model.confirm) {
             model.error = onboardingText.passphraseMismatchError;
             return;

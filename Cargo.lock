@@ -3409,6 +3409,7 @@ version = "1.1.0"
 dependencies = [
  "soirvu-core",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]

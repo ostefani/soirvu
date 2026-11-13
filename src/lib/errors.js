@@ -17,6 +17,8 @@ export const ERROR_SEVERITY = {
 
 /** Backend code → severity for every code the UI handles. */
 const ERROR_SEVERITY_BY_CODE = {
+    passphrase_too_short: ERROR_SEVERITY.VALIDATION,
+    passphrase_too_long: ERROR_SEVERITY.VALIDATION,
     invalid_input: ERROR_SEVERITY.VALIDATION,
     query_too_short: ERROR_SEVERITY.VALIDATION,
     too_large: ERROR_SEVERITY.VALIDATION,

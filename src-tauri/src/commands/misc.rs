@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 
 use crate::error::ipc;
 use crate::platform;
-use crate::state::{AppState, Settings};
+use crate::state::{AppState, Settings, SettingsPatch};
 
 /// Only https and mailto may leave the app (§6.1).
 fn scheme_allowed(url: &str) -> bool {
@@ -46,14 +46,26 @@ pub async fn settings_get(app: AppHandle) -> Result<Settings, String> {
 }
 
 #[tauri::command]
-pub async fn settings_set(app: AppHandle, settings: Settings) -> Result<(), String> {
-    crate::commands::run_blocking_state(app, move |state| ipc(state.set_settings(settings))).await
+pub async fn settings_set(app: AppHandle, settings: SettingsPatch) -> Result<(), String> {
+    let (previous, next) = ipc(app.state::<AppState>().prepare_settings(settings))?;
+    if next.weakens_protection(&previous) {
+        let (tx, rx) = oneshot::channel();
+        app.dialog()
+            .message("Allow this change to the diary’s lock, privacy, or attachment limits?")
+            .title("Change diary protection settings")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom("Allow change".into(), "Cancel".into()))
+            .show(move |confirmed| { let _ = tx.send(confirmed); });
+        if !rx.await.unwrap_or(false) {
+            return Err("cancelled".into());
+        }
+    }
+    crate::commands::run_blocking_state(app, move |state| ipc(state.commit_settings(previous, next))).await
 }
 
 /// Picks the backup folder with the native dialog and stores
 /// the PATH in Rust (app.json). The UI gets back the updated
-/// settings, whose backup_location is the full path (read-only:
-/// settings_set ignores the value it is sent back) — the user
+/// settings, whose backup_location is a read-only full path. The user
 /// should always know where the backups are.
 #[tauri::command]
 pub async fn settings_pick_backup_dir(app: AppHandle) -> Result<Option<Settings>, String> {

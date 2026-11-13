@@ -67,6 +67,8 @@ The Rust backend handles vault keys, cryptography and vault file operations. Enc
 
 Import and export dialogs expire when their vault session ends. Once an authenticated export starts, locking waits for it to finish. Background reads and media playback do not reset the inactivity timer.
 
+New passphrases require at least eight Unicode characters and at most 64 KiB. Existing shorter passphrases still unlock. If an old credential exceeds the byte limit, use the recovery key to open the vault. The inactivity timeout accepts 1 minute to 24 hours, and attachment size preferences accept 1 to 1024 MiB. The app asks for native confirmation before increasing those limits or disabling metadata stripping or clipboard clearing.
+
 ## Tech
 
 - Tauri v2
