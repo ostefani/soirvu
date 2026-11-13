@@ -11,7 +11,7 @@
 use std::io::Read;
 
 use serde::Serialize;
-use soirvu_core::attachments::sniff_mime;
+use soirvu_core::attachments::{sniff_mime, validate_attachment_id};
 use tauri::AppHandle;
 use zeroize::Zeroize;
 
@@ -40,7 +40,7 @@ pub struct AttachmentInfo {
 /// The size cap (bytes) for a sniffed type, from the settings (§6.4:
 /// caps are settings). None when the type is outside the allowlist.
 fn cap_for(mime: &str, caps: &crate::state::Caps) -> Option<u64> {
-    let mb = |v: u64| v * 1024 * 1024;
+    let mb = |v: u64| v.saturating_mul(1024 * 1024);
     match mime {
         m if m.starts_with("image/") => Some(mb(caps.image_mb)),
         "application/pdf" => Some(mb(caps.pdf_mb)),
@@ -310,7 +310,7 @@ async fn pick_file(app: &AppHandle) -> Option<std::path::PathBuf> {
 /// The webview never sees the path.
 #[tauri::command]
 pub async fn attachment_open(app: AppHandle, id: String) -> Result<bool, String> {
-    if !valid_attachment_id(&id) {
+    if validate_attachment_id(&id).is_err() {
         return Err("invalid_input".into());
     }
     crate::commands::run_blocking_state(app, move |state| {
@@ -324,10 +324,6 @@ pub async fn attachment_open(app: AppHandle, id: String) -> Result<bool, String>
         }))
     })
     .await
-}
-
-pub fn valid_attachment_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 fn materialize_open_copy_locked(
@@ -427,6 +423,7 @@ fn asset(status: u16, mime: &str, body: Vec<u8>, extra: &[(&str, String)]) -> As
 /// bytes (§6.4: only the needed chunks are decrypted).
 pub fn serve_asset(state: &AppState, id: &str, range_header: Option<&str>) -> AssetResponse {
     let text = |status: u16, msg: &str| asset(status, "text/plain", msg.as_bytes().to_vec(), &[]);
+    let caps = state.settings().caps;
     let response = state.with_vault(|vault| {
         let info = vault.get_attachment(id)?;
         let mime = sniff_stored_attachment(vault, id, info.size)?;
@@ -434,6 +431,12 @@ pub fn serve_asset(state: &AppState, id: &str, range_header: Option<&str>) -> As
             return Err(AppError::Code("unsupported_type".into()));
         }
         let total = info.size as u64;
+        let cap = cap_for(mime, &caps)
+            .unwrap_or(0)
+            .min(MAX_UPLOAD_HARD_CAP as u64);
+        if total > cap {
+            return Err(AppError::Code("too_large".into()));
+        }
         match range_header.and_then(|header| parse_range(header, total)) {
             Some((start, end)) if start > end => Ok(asset(
                 416,
@@ -459,6 +462,9 @@ pub fn serve_asset(state: &AppState, id: &str, range_header: Option<&str>) -> As
         Ok(response) => response,
         Err(AppError::Code(code)) if code == "locked" => text(403, "locked"),
         Err(AppError::Code(code)) if code == "unsupported_type" => text(415, "unsupported type"),
+        Err(AppError::Code(code)) if code == "too_large" => {
+            text(413, "preview exceeds attachment size limit")
+        }
         Err(_) => text(404, "not found"),
     }
 }
@@ -641,7 +647,7 @@ pub fn decode_base64(text: &str) -> Result<Vec<u8>, ()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{finish_upload, valid_attachment_id};
+    use super::finish_upload;
     use crate::error::AppError;
     use crate::state::AppState;
     use soirvu_core::Vault;
@@ -886,10 +892,24 @@ mod tests {
     }
 
     #[test]
-    fn attachment_ids_cannot_escape_the_opened_directory() {
-        assert!(valid_attachment_id("0190a1b2-1234-7abc-8def-0123456789ab"));
-        assert!(!valid_attachment_id("../outside"));
-        assert!(!valid_attachment_id(""));
-        assert!(!valid_attachment_id(&"a".repeat(65)));
+    fn asset_respects_the_type_cap_for_full_and_range_requests() {
+        let (_dir, state, entry) = state_with_entry();
+        let id = state
+            .with_vault(|vault| {
+                let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+                png.resize(1024 * 1024 + 1, 0);
+                Ok(vault
+                    .add_attachment(&entry, "note.png", "image/png", &png)?
+                    .id)
+            })
+            .unwrap();
+        let mut settings = state.settings();
+        settings.caps.image_mb = 1;
+        state.set_settings(settings).unwrap();
+        for range in [None, Some("bytes=0-")] {
+            assert_eq!(super::serve_asset(&state, &id, range).status, 413);
+        }
+        assert!(super::cap_for("video/3gpp", &state.settings().caps).is_some());
+        assert!(super::cap_for("video/3gpp2", &state.settings().caps).is_some());
     }
 }

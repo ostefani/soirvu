@@ -26,8 +26,25 @@ const MAX_JSON_IMPORT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ATTACHMENT_IMPORT_BYTES: u64 = 256 * 1024 * 1024;
 
 fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
-    let file = fs::File::open(path)?;
-    if file.metadata()?.len() <= limit {
+    let not_regular = || Error::InvalidInput("import input must be a regular file".into());
+    if !fs::metadata(path)?.is_file() {
+        return Err(not_regular());
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    // A path can become a FIFO between the check and open. Open without
+    // waiting for a writer, then check the opened file before reading it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(not_regular());
+    }
+    if metadata.len() <= limit {
         let mut bytes = Vec::new();
         file.take(limit + 1).read_to_end(&mut bytes)?;
         if bytes.len() as u64 <= limit {
@@ -158,7 +175,9 @@ impl Vault {
             std::collections::HashMap::new();
         let mut skipped = 0usize;
         for file in &files {
-            let text = match fs::read_to_string(file) {
+            let text = match read_bounded(file, MAX_JSON_IMPORT_BYTES)
+                .and_then(|bytes| String::from_utf8(bytes).map_err(|_| Error::InvalidInput("note must be UTF-8".into())))
+            {
                 Ok(text) => text,
                 Err(_) => {
                     skipped += 1;
@@ -474,9 +493,11 @@ impl Vault {
     /// Entry `entry:` links are never rewritten here: entry ids
     /// are never remapped, so bodies stay byte-identical.
     pub fn import_json(&mut self, file: &Path) -> Result<ImportReport> {
-        let text = read_bounded(file, MAX_JSON_IMPORT_BYTES)?;
-        let data: JsonImport = serde_json::from_slice(&text)
-            .map_err(|e| Error::InvalidInput(format!("not a SoirVu JSON export: {e}")))?;
+        let data: JsonImport = {
+            let text = read_bounded(file, MAX_JSON_IMPORT_BYTES)?;
+            serde_json::from_slice(&text)
+                .map_err(|e| Error::InvalidInput(format!("not a SoirVu JSON export: {e}")))?
+        };
         if data.format != "soirvu-json-export" || (data.version != 1 && data.version != 2) {
             return Err(Error::InvalidInput(
                 "not a SoirVu JSON export (bad format or version)".into(),
@@ -714,8 +735,8 @@ struct ManifestFolder {
 /// own export. Unknown versions are ignored (layout guessing
 /// takes over) rather than failing the whole import.
 fn load_manifest(dir: &Path) -> Option<Manifest> {
-    let text = fs::read_to_string(dir.join("soirvu-export.json")).ok()?;
-    let manifest: Manifest = serde_json::from_str(&text).ok()?;
+    let bytes = read_bounded(&dir.join("soirvu-export.json"), MAX_JSON_IMPORT_BYTES).ok()?;
+    let manifest: Manifest = serde_json::from_slice(&bytes).ok()?;
     if manifest.format != "soirvu-markdown-export" || manifest.version != 2 {
         return None;
     }
@@ -1783,6 +1804,20 @@ mod tests {
         fs::write(&path, b"1234").unwrap();
         assert_eq!(read_bounded(&path, 4).unwrap(), b"1234");
         assert!(matches!(read_bounded(&path, 3), Err(Error::InvalidInput(_))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_import_rejects_a_fifo_without_a_writer() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("pipe");
+        let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a valid, NUL-terminated path for this call.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert!(matches!(read_bounded(&path, 8), Err(Error::InvalidInput(_))));
     }
 
     /// P2: byte-offset slicing panicked on multibyte input. Every

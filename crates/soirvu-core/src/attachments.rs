@@ -444,7 +444,8 @@ pub(crate) fn blob_path(dir: &Path, id: &str) -> Result<PathBuf> {
     Ok(dir.join("attachments").join(&id[..2]).join(id))
 }
 
-pub(crate) fn validate_attachment_id(id: &str) -> Result<()> {
+/// Checks that an attachment ID is a canonical UUID.
+pub fn validate_attachment_id(id: &str) -> Result<()> {
     if !crate::storage::is_canonical_uuid(id) {
         return Err(Error::InvalidInput(
             "attachment ID must be a canonical UUID".into(),
@@ -763,6 +764,17 @@ mod tests {
     use crate::crypto::KdfParams;
     use crate::entries::{EntryDraft, ListQuery};
     use tempfile::TempDir;
+
+    #[test]
+    fn attachment_with_a_missing_blob_can_be_listed_and_deleted() {
+        let (_tmp, mut vault, entry) = new_vault_with_entry();
+        let attachment = vault.add_attachment(&entry, "note.txt", "text/plain", b"note").unwrap();
+        fs::remove_file(blob_path(vault.dir(), &attachment.id).unwrap()).unwrap();
+        assert!(vault.read_attachment(&attachment.id).is_err());
+        assert_eq!(vault.list_attachments(&entry).unwrap(), [attachment.clone()]);
+        vault.delete_attachment(&attachment.id).unwrap();
+        assert!(vault.list_attachments(&entry).unwrap().is_empty());
+    }
 
     #[test]
     fn sniff_requires_a_supported_signature_and_brand() {

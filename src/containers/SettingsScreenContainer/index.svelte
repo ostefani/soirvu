@@ -172,10 +172,10 @@
                 let message = `Imported ${outcome.entries} entries and ${outcome.attachments} attachments.`;
                 if (outcome.folders > 0) message += ` ${outcome.folders} folders.`;
                 if (outcome.skippedEntries > 0 || outcome.skippedAttachments > 0) {
-                    message += ` Skipped ${outcome.skippedEntries} entries and ${outcome.skippedAttachments} attachments (already present or unreadable).`;
+                    message += ` Skipped ${outcome.skippedEntries} entries and ${outcome.skippedAttachments} attachments (already present, invalid, unreadable or over the size limit).`;
                 }
                 if (outcome.exportOnlyAttachments > 0) {
-                    message += ' Attachments available through export only: ' + outcome.exportOnlyAttachments + '.';
+                    message += ` Attachments available through export only: ${outcome.exportOnlyAttachments}.`;
                 }
                 notify(EVENT_TYPE.SAVED, message);
             }

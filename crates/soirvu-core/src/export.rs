@@ -518,26 +518,48 @@ fn yaml_string(text: &str) -> String {
     out
 }
 
-/// A file-name version of the title: letters and digits (any alphabet) are
-/// kept and lowered, everything else becomes one dash. At most 40 chars.
-// Stored names can come from older or foreign clients.
+// Stored names can come from older or foreign clients. Reserve space for a
+// conventional extension and keep the UUID-prefixed filename under 255 bytes.
 fn export_attachment_name(name: &str) -> String {
-    let mut safe = String::new();
-    for c in name.chars() {
-        let c = if c.is_alphanumeric() || matches!(c, '.' | '-' | '_') {
-            c
-        } else {
-            '_'
-        };
-        if safe.len() + c.len_utf8() > 200 {
-            break;
+    use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
+
+    fn sanitize(text: &str, limit: usize) -> String {
+        let mut safe = String::new();
+        for c in text.nfc() {
+            let c = if c.is_alphanumeric() || is_combining_mark(c) || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            };
+            if safe.len() + c.len_utf8() > limit {
+                break;
+            }
+            safe.push(c);
         }
-        safe.push(c);
+        safe.trim_matches('.').into()
     }
-    let safe = safe.trim_matches('.');
-    if safe.is_empty() { "attachment".into() } else { safe.into() }
+
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty()
+            && !ext.is_empty()
+            && ext.len() <= 32
+            && ext.bytes().all(|b| b.is_ascii_alphanumeric()) => (stem, ext),
+        _ => (name, ""),
+    };
+    let extension_len = extension.len() + usize::from(!extension.is_empty());
+    let mut safe = sanitize(stem, 200 - extension_len);
+    if safe.is_empty() {
+        safe.push_str("attachment");
+    }
+    if !extension.is_empty() {
+        safe.push('.');
+        safe.push_str(extension);
+    }
+    safe
 }
 
+/// A file-name version of the title: letters and digits (any alphabet) are
+/// kept and lowered, everything else becomes one dash. At most 40 chars.
 fn slug(title: Option<&str>) -> String {
     let mut out = String::new();
     let mut last_was_dash = true; // also trims a leading dash
@@ -629,6 +651,15 @@ mod tests {
         assert_eq!(iso_utc(951_782_400_000), "2000-02-29T00:00:00Z"); // leap day
         assert_eq!(iso_utc(1_762_000_000_000), "2025-11-01T12:26:40Z");
         assert_eq!(iso_utc(-1), "1969-12-31T23:59:59Z");
+    }
+
+    #[test]
+    fn attachment_export_names_are_safe_and_keep_extensions() {
+        assert_eq!(export_attachment_name("re\u{301}sume\u{301}.pdf"), "résumé.pdf");
+        assert_eq!(export_attachment_name("../folder\\note: draft.txt"), "_folder_note__draft.txt");
+        let name = export_attachment_name(&format!("{}.png", "é".repeat(150)));
+        assert!(name.len() <= 200);
+        assert!(name.ends_with(".png"));
     }
 
     #[test]

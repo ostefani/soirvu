@@ -66,7 +66,7 @@ pub fn run() {
                 .map(|v| v.to_string());
             tauri::async_runtime::spawn(async move {
                 let answer = tauri::async_runtime::spawn_blocking(move || {
-                    if !crate::commands::attachments::valid_attachment_id(&id) {
+                    if soirvu_core::attachments::validate_attachment_id(&id).is_err() {
                         crate::commands::attachments::AssetResponse {
                             status: 400,
                             headers: vec![("Content-Length".into(), "0".into())],

@@ -30,6 +30,9 @@ export async function renderAttachment(el, id, attachments) {
         el.title = TEXT.doubleClickToOpen;
         el.ondblclick = () => attachments.open(meta.id);
     } catch {
-        el.textContent = TEXT.attachmentUnavailable;
+        const label = el.textContent;
+        el.textContent = label ? `${label} — ${TEXT.attachmentUnavailable}` : TEXT.attachmentUnavailable;
+        el.title = TEXT.attachmentUnavailable;
+        el.ondblclick = null;
     }
 }
