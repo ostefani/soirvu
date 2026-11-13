@@ -7,8 +7,8 @@
 //!   ├── soirvu.db           encrypted SQLite database (plus -wal / -shm while open)
 //!   └── attachments/ab/<id> encrypted attachment blobs, sharded by id prefix
 
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use crate::crypto::{DeviceSecret, KdfParams, Key, MasterKey, RecoveryKey};
@@ -557,6 +557,7 @@ impl Read for AttachmentReader<'_> {
 /// the indexer holds it open (§12); five tries over half a
 /// second cover the realistic holds. Elsewhere the first
 /// result stands.
+#[cfg(not(unix))]
 pub(crate) fn rename_retry(from: &Path, to: &Path) -> std::io::Result<()> {
     let mut result = fs::rename(from, to);
     if cfg!(windows) {
@@ -572,18 +573,9 @@ pub(crate) fn rename_retry(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("json.tmp");
-    let mut file = File::create(&tmp)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    rename_retry(&tmp, path)?;
-    // Also force the rename itself to disk (directories can be opened on Unix only).
-    #[cfg(unix)]
-    if let Some(parent) = path.parent() {
-        File::open(parent)?.sync_all()?;
-    }
-    Ok(())
+    let parent = path.parent().ok_or_else(|| Error::InvalidInput("missing vault directory".into()))?;
+    let name = path.file_name().ok_or_else(|| Error::InvalidInput("missing vault filename".into()))?;
+    crate::fs_boundary::Directory::open(parent)?.replace(Path::new(name), bytes)
 }
 
 #[cfg(test)]

@@ -74,22 +74,54 @@ const SEM_FAILCRITICALERRORS: u32 = 0x0001;
 #[cfg(target_os = "windows")]
 const SEM_NOGPFAULTERRORBOX: u32 = 0x0002;
 
-/// Rename, retrying briefly (mirrors the core helper): on
-/// Windows a just-closed file or folder can stay
-/// unrenamable while an antivirus or the indexer holds it
-/// (§12). Used for the backup and rotation swaps.
-pub fn rename_retry(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
-    let mut result = std::fs::rename(from, to);
-    if cfg!(windows) {
-        for _ in 0..4 {
-            if result.is_ok() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            result = std::fs::rename(from, to);
+/// Publish a directory or move it aside only if the destination is vacant.
+pub fn rename_new(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let from = std::ffi::CString::new(from.as_os_str().as_bytes())?;
+        let to = std::ffi::CString::new(to.as_os_str().as_bytes())?;
+        // SAFETY: both paths are valid NUL-terminated strings.
+        #[cfg(target_os = "macos")]
+        let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+        // SAFETY: both paths are valid NUL-terminated strings.
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::renameat2(libc::AT_FDCWD, from.as_ptr(), libc::AT_FDCWD, to.as_ptr(), libc::RENAME_NOREPLACE)
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error());
         }
+        Ok(())
     }
-    result
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
+        }
+        let encode = |path: &std::path::Path| -> std::io::Result<Vec<u16>> {
+            let mut path: Vec<u16> = path.as_os_str().encode_wide().collect();
+            if path.contains(&0) {
+                return Err(std::io::ErrorKind::InvalidInput.into());
+            }
+            path.push(0);
+            Ok(path)
+        };
+        let from = encode(from)?;
+        let to = encode(to)?;
+        // SAFETY: both paths are NUL-terminated. No replace flag is set.
+        if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = (from, to);
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
 }
 
 /// Release-build process hardening (§9): no debugger may
@@ -328,6 +360,17 @@ impl LockEvents for NoLockEvents {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rename_new_preserves_existing_empty_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let src = root.path().join("src");
+        let dest = root.path().join("dest");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::create_dir(&dest).unwrap();
+        assert!(super::rename_new(&src, &dest).is_err());
+        assert!(src.is_dir() && dest.is_dir());
+    }
+
     use super::*;
 
     #[test]

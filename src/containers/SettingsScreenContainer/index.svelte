@@ -454,7 +454,7 @@
         saveSetting(
             { strip_exif: strip },
             strip
-                ? 'Location metadata will be removed from imported photos.'
+                ? 'The app will try to strip location metadata from supported photo attachments.'
                 : 'Location metadata will be kept in imported photos.',
         );
     const saveClipboard = (clear) =>

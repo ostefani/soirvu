@@ -64,7 +64,7 @@ use crate::crypto::{NONCE_LEN, random_bytes};
 use crate::entries::next_lseq;
 use crate::error::{Error, Result};
 use crate::attachments::MAX_BLOB_PLAINTEXT_BYTES;
-use crate::folder::{Vault, rename_retry};
+use crate::folder::Vault;
 
 /// Bundle format 2 adds folder records and entry membership
 /// (format 1 has neither). A v2 client still READS v1 bundles —
@@ -767,9 +767,7 @@ impl Vault {
                         // removing the file, not restamp.
                         return Err(Error::SyncUnreadable(file_name.clone()));
                     }
-                    let tmp = sync_dir.join(format!(".tmp-{file_name}"));
-                    fs::write(&tmp, &bytes)?;
-                    rename_retry(&tmp, &dest)?;
+                    sync_root.replace(Path::new(&file_name), &bytes)?;
                 }
             }
         } else {
@@ -1448,10 +1446,10 @@ impl Vault {
                 }
             }
         }
-        fs::create_dir_all(&acks_dir)?;
-        let tmp = acks_dir.join(format!(".tmp-{}", self.device_id));
-        fs::write(&tmp, &bytes)?;
-        rename_retry(&tmp, &dest)?;
+        let root = crate::fs_boundary::Directory::open(sync_dir)?;
+        let acks = root.directory(Path::new("acks"), true)?;
+        let name = dest.file_name().ok_or_else(|| Error::InvalidInput("missing sync ack name".into()))?;
+        acks.replace(Path::new(name), &bytes)?;
         Ok(AckPublish {
             ahead: warning,
             warning: note,

@@ -1014,21 +1014,26 @@ pub async fn vault_rotate_master_key(
                 &session,
                 &src,
                 |vault| {
-                    if staging.exists() {
+                    if !matches!(old.symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound) {
+                        return Err(AppError::Code("rotation_recovery_needed".into()));
+                    }
+                    std::fs::create_dir(&staging)
+                        .map_err(|_| AppError::Code("rotation_recovery_needed".into()))?;
+                    let result = KdfParams::calibrate(Duration::from_millis(750))
+                        .and_then(|kdf| vault.rotate_master_key(&staging, &passphrase, kdf));
+                    if result.is_err() {
                         let _ = std::fs::remove_dir_all(&staging);
                     }
-                    let kdf = KdfParams::calibrate(Duration::from_millis(750))?;
-                    let recovery = vault.rotate_master_key(&staging, &passphrase, kdf)?;
-                    Ok(recovery.to_text())
+                    Ok(result?.to_text())
                 },
                 || {
-                    if old.exists() {
-                        let _ = std::fs::remove_dir_all(&old);
+                    if !matches!(old.symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound) {
+                        return Err(AppError::Code("rotation_recovery_needed".into()));
                     }
-                    crate::platform::rename_retry(&src, &old)
+                    crate::platform::rename_new(&src, &old)
                         .map_err(|_| AppError::Code("storage".into()))?;
-                    if crate::platform::rename_retry(&staging, &src).is_err() {
-                        let _ = crate::platform::rename_retry(&old, &src);
+                    if crate::platform::rename_new(&staging, &src).is_err() {
+                        let _ = crate::platform::rename_new(&old, &src);
                         return Err(AppError::Code("storage".into()));
                     }
                     let _ = std::fs::remove_dir_all(&old);

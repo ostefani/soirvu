@@ -10,7 +10,7 @@ export const settingsText = {
     backupNotes: [
         'A backup is an encrypted copy of this vault (the newest 7 are kept). To restore one, choose its folder from the lock screen.',
     ],
-    stripExif: 'Strip location metadata (EXIF) from photos on import',
+    stripExif: 'Try to strip location metadata (EXIF) from supported attachments',
     clipboardClear: 'Clear the clipboard 30 seconds after copying from the diary',
     securityTitle: 'Passphrase and recovery key',
     securityNotes: [

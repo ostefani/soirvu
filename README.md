@@ -73,6 +73,8 @@ External links require confirmation and support HTTPS or a single mail recipient
 
 The vault schema checks entry and folder revisions, attachment sizes, and digest lengths on write. Upgrading a valid vault creates an encrypted pre-upgrade backup. If the upgrade finds invalid legacy metadata, it stops and preserves the existing rows for recovery. Older app builds cannot open the upgraded schema.
 
+Photo metadata stripping is best effort for JPEG, PNG, and WebP attachments. Unsupported or malformed files can retain metadata. Diary interchange imports preserve their attachment bytes. Opening an attachment externally creates a plaintext copy that SoirVu clears on lock or startup. An external app may keep its own copy.
+
 ## Tech
 
 - Tauri v2

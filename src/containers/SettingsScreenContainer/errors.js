@@ -8,6 +8,7 @@
 // IPC codes never reach settings.
 
 export const SETTINGS_SECURITY_ERRORS = {
+    rotation_recovery_needed: "The rotation folders are unavailable or already exist. Check the vault’s sibling folders before retrying.",
     passphrase_too_short: "Use at least 8 characters for the new passphrase.",
     passphrase_too_long: "The passphrase exceeds the 64 KiB limit.",
     wrong_passphrase: "Wrong current passphrase.",

@@ -38,6 +38,7 @@ const ERROR_SEVERITY_BY_CODE = {
     sync_shared_identity: ERROR_SEVERITY.CONFLICT,
     locked: ERROR_SEVERITY.UNAVAILABLE,
     storage: ERROR_SEVERITY.UNAVAILABLE,
+    rotation_recovery_needed: ERROR_SEVERITY.UNAVAILABLE,
     corrupt: ERROR_SEVERITY.UNAVAILABLE,
     vault_not_found: ERROR_SEVERITY.UNAVAILABLE,
     touch_id_unavailable: ERROR_SEVERITY.UNAVAILABLE,

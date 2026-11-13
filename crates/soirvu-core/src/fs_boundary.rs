@@ -158,6 +158,23 @@ impl Directory {
         relative: &Path,
         write: impl FnOnce(&mut File) -> crate::error::Result<T>,
     ) -> crate::error::Result<T> {
+        self.stage(relative, write, false)
+    }
+
+    /// Replace an app-owned file with a complete, synced sibling.
+    pub(crate) fn replace(&self, relative: &Path, bytes: &[u8]) -> crate::error::Result<()> {
+        self.stage(relative, |file| {
+            file.write_all(bytes)?;
+            Ok(())
+        }, true)
+    }
+
+    fn stage<T>(
+        &self,
+        relative: &Path,
+        write: impl FnOnce(&mut File) -> crate::error::Result<T>,
+        replace: bool,
+    ) -> crate::error::Result<T> {
         let (parent, name) = split(relative)?;
         let dir = self.directory(parent, false)?;
         let temp = format!(".soirvu-{}.tmp", uuid::Uuid::now_v7());
@@ -177,10 +194,16 @@ impl Directory {
             let output = write(&mut file)?;
             file.sync_all()?;
             drop(file);
-            dir.link(temp, name)?;
+            if replace {
+                dir.rename(temp, name)?;
+            } else {
+                dir.link(temp, name)?;
+            }
             #[cfg(unix)]
             if let Err(error) = dir.handle.sync_all() {
-                let _ = dir.unlink(name);
+                if !replace {
+                    let _ = dir.unlink(name);
+                }
                 return Err(error.into());
             }
             Ok(output)
@@ -222,6 +245,23 @@ impl Directory {
         }
         // SAFETY: openat returned a new owned descriptor.
         Ok(unsafe { File::from_raw_fd(fd) })
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let from = c_name(from)?;
+            let to = c_name(to)?;
+            let fd = self.handle.as_raw_fd();
+            // SAFETY: both names and the directory descriptor are valid.
+            if unsafe { libc::renameat(fd, from.as_ptr(), fd, to.as_ptr()) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        crate::folder::rename_retry(&self.path.join(from), &self.path.join(to))
     }
 
     fn link(&self, from: &Path, to: &Path) -> io::Result<()> {
@@ -318,6 +358,21 @@ fn windows_directory(path: &Path) -> io::Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn replacing_metadata_does_not_write_through_a_destination_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("other");
+        fs::write(&target, b"untouched").unwrap();
+        let name = Path::new("header.json");
+        std::os::unix::fs::symlink(&target, tmp.path().join(name)).unwrap();
+
+        let root = Directory::open(tmp.path()).unwrap();
+        root.replace(name, b"new header").unwrap();
+        assert_eq!(fs::read(target).unwrap(), b"untouched");
+        assert_eq!(fs::read(tmp.path().join(name)).unwrap(), b"new header");
+    }
 
     #[test]
     fn publication_does_not_replace_existing_files_or_publish_failed_writes() {

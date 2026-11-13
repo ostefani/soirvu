@@ -148,22 +148,27 @@ pub(crate) fn make_backup(state: &AppState, session: &crate::state::VaultSession
         // Checkpoint and copy form one operation: no write or key change can
         // slip between them and produce a mixed-time backup.
         vault.checkpoint()?;
-        fs::create_dir_all(&per_vault).map_err(|_| unavailable())?;
-
-        let stamp = stamp_name(SystemTime::now());
-        let tmp = per_vault.join(format!(".{stamp}.tmp"));
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).map_err(|_| unavailable())?;
-        let copied = (|| -> AppResult<()> {
-            soirvu_core::folder::copy_vault_files(&src, &tmp).map_err(|_| unavailable())
-        })();
-        if copied.is_err() {
-            let _ = fs::remove_dir_all(&tmp);
+        match fs::create_dir(&per_vault) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err(unavailable()),
+        }
+        let metadata = per_vault.symlink_metadata().map_err(|_| unavailable())?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err(unavailable());
         }
+
+        let stamp = stamp_name(SystemTime::now());
         let dest = per_vault.join(&stamp);
-        let _ = fs::remove_dir_all(&dest);
-        crate::platform::rename_retry(&tmp, &dest).map_err(|_| unavailable())?;
+        if !matches!(dest.symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound) {
+            return Err(unavailable());
+        }
+        let staging = tempfile::Builder::new()
+            .prefix(".soirvu-backup-")
+            .tempdir_in(&per_vault)
+            .map_err(|_| unavailable())?;
+        soirvu_core::folder::copy_vault_files(&src, staging.path()).map_err(|_| unavailable())?;
+        crate::platform::rename_new(staging.path(), &dest).map_err(|_| unavailable())?;
         prune(&per_vault, &src);
 
         let display = per_vault

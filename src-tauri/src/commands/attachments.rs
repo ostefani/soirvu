@@ -628,10 +628,10 @@ fn strip_png(bytes: &[u8]) -> Option<Vec<u8>> {
         }
         i += total;
         if kind == b"IEND" {
-            break;
+            return (len == 0 && i == bytes.len()).then_some(out);
         }
     }
-    Some(out)
+    None
 }
 
 fn strip_webp(bytes: &[u8]) -> Option<Vec<u8>> {
@@ -657,6 +657,9 @@ fn strip_webp(bytes: &[u8]) -> Option<Vec<u8>> {
             out.extend_from_slice(&bytes[i..i + total]);
         }
         i += total;
+    }
+    if i != bytes.len() {
+        return None;
     }
     if let Some(at) = vp8x_at {
         // VP8X feature byte: clear the EXIF (0x08) and XMP (0x04) bits.
@@ -764,6 +767,13 @@ mod tests {
     /// post-commit rev. The editor saves against the rev it opened;
     /// without the reported rev every autosave after an attachment
     /// fails sticky with `revision_conflict`.
+    #[test]
+    fn stripping_unknown_or_malformed_metadata_preserves_the_input() {
+        let malformed_png = b"\x89PNG\r\n\x1a\n\0\0\0";
+        assert_eq!(super::strip_metadata(malformed_png, "image/png"), malformed_png);
+        assert_eq!(super::strip_metadata(b"unchanged", "image/heic"), b"unchanged");
+    }
+
     #[test]
     fn finish_reports_the_post_commit_rev() {
         let (_dir, state, entry_id) = state_with_entry();
