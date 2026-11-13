@@ -596,6 +596,17 @@ fn ipc_surface_lists_agree() {
 
     let capabilities_src = std::fs::read_to_string(root.join("capabilities/default.json")).unwrap();
     let capabilities: serde_json::Value = serde_json::from_str(&capabilities_src).unwrap();
+    let core_grants: BTreeSet<&str> = capabilities["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str())
+        .filter(|name| name.starts_with("core:"))
+        .collect();
+    assert_eq!(
+        core_grants,
+        BTreeSet::from(["core:event:allow-listen", "core:event:allow-unlisten"])
+    );
     let capabilities: BTreeSet<String> = capabilities["permissions"]
         .as_array()
         .unwrap()

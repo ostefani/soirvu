@@ -10,7 +10,7 @@
         "frontendDist": "../dist"
     },
     "app": {
-        "withGlobalTauri": true,
+        "withGlobalTauri": false,
         "windows": [],
         "security": {
             "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' soirvu-asset:; media-src soirvu-asset:; connect-src ipc: http://ipc.localhost",

@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use data_encoding::HEXLOWER;
+use rusqlite::config::DbConfig;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -301,6 +302,7 @@ pub(crate) fn create_with(
     silence_sqlite_log();
     let mut conn = Connection::open_with_flags(path, flags)?;
     apply_key(&conn, key)?;
+    harden(&conn)?;
     configure(&conn)?;
 
     migrate(&mut conn, migrations, 0)?;
@@ -327,6 +329,7 @@ pub(crate) fn open_with(
     silence_sqlite_log();
     let mut conn = Connection::open_with_flags(path, flags)?;
     apply_key(&conn, key)?;
+    harden(&conn)?;
 
     // SQLite does not check the key when it is set; the first real read does.
     // With a wrong key this fails with "file is not a database".
@@ -440,9 +443,6 @@ fn silence_sqlite_log() {
     });
 }
 
-/// `PRAGMA key` must be the first statement on a connection.
-/// The `x'...'` form hands SQLCipher the raw 32-byte key, so it does not run its
-/// own (slower) password-to-key step; Argon2id already did the slow part.
 impl Database {
     /// Copies this whole database into a new file encrypted
     /// under `key`, via SQLCipher's export: schema and data —
@@ -454,44 +454,53 @@ impl Database {
         // and SQLite will not let such a connection create the
         // attached file. Materialize the destination first, with
         // its own short-lived connection under the new key.
+        let path = dest.to_str()
+            .ok_or_else(|| Error::InvalidInput("database export path must be UTF-8".into()))?;
+        fs::OpenOptions::new().write(true).create_new(true).open(dest)?;
         {
             let pre = Connection::open_with_flags(
                 dest,
-                OpenFlags::SQLITE_OPEN_READ_WRITE
-                    | OpenFlags::SQLITE_OPEN_CREATE
-                    | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
             )?;
             apply_key(&pre, key)?;
+            harden(&pre)?;
             pre.execute_batch(
-                "CREATE TABLE IF NOT EXISTS _soirvu_export (x); DROP TABLE _soirvu_export;",
+                "CREATE TABLE _soirvu_export (x); DROP TABLE _soirvu_export;",
             )?;
         }
         let hex = Zeroizing::new(HEXLOWER.encode(&key[..]));
-        let path = dest.to_string_lossy().replace('\'', "''");
-        let sql = Zeroizing::new(format!(
-            "ATTACH DATABASE '{path}' AS rotated KEY \"x'{}'\"; SELECT sqlcipher_export('rotated'); DETACH DATABASE rotated;",
-            hex.as_str()
-        ));
-        // The export carries schema and data but not the
-        // user_version stamp; copy it across or the result
-        // reads as a database with no schema.
-        let version: i64 =
-            self.connection().query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        self.connection().execute_batch(&sql)?;
+        let raw_key = Zeroizing::new(format!("x'{}'", hex.as_str()));
+        // The export carries schema and data but not the user_version stamp.
+        let conn = self.connection();
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        conn.execute("ATTACH DATABASE ?1 AS rotated KEY ?2", params![path, raw_key.as_str()])?;
+        let exported = conn.query_row("SELECT sqlcipher_export('rotated')", [], |_| Ok(()));
+        let detached = conn.execute_batch("DETACH DATABASE rotated");
+        exported?;
+        detached?;
         let dest_conn = Connection::open_with_flags(
             dest,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         apply_key(&dest_conn, key)?;
+        harden(&dest_conn)?;
         dest_conn.execute_batch(&format!("PRAGMA user_version = {version};"))?;
         Ok(())
     }
 }
 
+/// Set the raw key before any SQL reads. Argon2id already derived it.
 fn apply_key(conn: &Connection, key: &Key) -> Result<()> {
     let hex = Zeroizing::new(HEXLOWER.encode(&key[..]));
     let sql = Zeroizing::new(format!("PRAGMA key = \"x'{}'\";", hex.as_str()));
     conn.execute_batch(&sql)?;
+    Ok(())
+}
+
+fn harden(conn: &Connection) -> Result<()> {
+    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
+    conn.execute_batch("PRAGMA cipher_log_level = 'NONE';")?;
     Ok(())
 }
 
@@ -501,8 +510,7 @@ fn configure(conn: &Connection) -> Result<()> {
          PRAGMA synchronous = FULL;
          PRAGMA foreign_keys = ON;
          PRAGMA temp_store = MEMORY;
-         PRAGMA cipher_memory_security = ON;
-         PRAGMA cipher_log_level = 'NONE';",
+         PRAGMA cipher_memory_security = ON;",
     )?;
     Ok(())
 }
@@ -514,6 +522,21 @@ mod tests {
 
     fn key() -> Key {
         Zeroizing::new([7u8; 32])
+    }
+
+    #[test]
+    fn production_connections_harden_schema_access() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("vault.db");
+        let db = Database::create(&path, &key(), "vault").unwrap();
+        let conn = db.connection();
+        assert!(conn.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE).unwrap());
+        assert!(!conn.db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA).unwrap());
+        assert!(conn.execute("UPDATE sqlite_schema SET sql = NULL", []).is_err());
+        drop(db);
+        let db = Database::open(&path, &key(), tmp.path()).unwrap();
+        assert!(db.connection().db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE).unwrap());
+        assert!(!db.connection().db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA).unwrap());
     }
 
     fn user_version(db: &Database) -> i64 {

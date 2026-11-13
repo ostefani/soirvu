@@ -10,20 +10,78 @@ use crate::error::ipc;
 use crate::platform;
 use crate::state::{AppState, Settings, SettingsPatch};
 
-/// Only https and mailto may leave the app (§6.1).
-fn scheme_allowed(url: &str) -> bool {
-    url.starts_with("https://") || url.starts_with("mailto:")
+const MAX_OUTBOUND_URL_BYTES: usize = 4096;
+
+fn contains_unsafe_url_text(text: &str) -> bool {
+    text.chars().any(|c| c.is_control()
+        || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+}
+
+fn parse_outbound_url(input: &str) -> Option<tauri::Url> {
+    if input.len() > MAX_OUTBOUND_URL_BYTES
+        || input.chars().any(char::is_whitespace)
+        || input.contains('\\')
+        || contains_unsafe_url_text(input)
+        || contains_unsafe_url_text(&percent_encoding::percent_decode_str(input).decode_utf8().ok()?)
+    {
+        return None;
+    }
+    let url = tauri::Url::parse(input).ok()?;
+    let (_, rest) = input.split_once(':')?;
+    match url.scheme() {
+        "https" => {
+            let authority = rest.strip_prefix("//")?.split(['/', '?', '#']).next()?;
+            if authority.is_empty() || authority.contains('@') || url.host().is_none() {
+                return None;
+            }
+        }
+        // Allow one address and optional subject/body. Adding recipients,
+        // attachments or arbitrary mail headers is outside this command.
+        "mailto" => {
+            if !url.cannot_be_a_base() || url.fragment().is_some() {
+                return None;
+            }
+            let recipient = percent_encoding::percent_decode_str(url.path()).decode_utf8().ok()?;
+            let (local, domain) = recipient.split_once('@')?;
+            if local.is_empty() || domain.is_empty()
+                || !local.bytes().all(|b| b.is_ascii_alphanumeric() || b".!#$&'*+-=_~".contains(&b))
+                || !domain.split('.').all(|label| {
+                    !label.is_empty() && !label.starts_with('-') && !label.ends_with('-')
+                        && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                })
+            {
+                return None;
+            }
+            let (mut subject, mut body) = (false, false);
+            for field in url.query().into_iter().flat_map(|query| query.split('&')) {
+                let (key, _) = field.split_once('=')?;
+                let seen = match key {
+                    "subject" => &mut subject,
+                    "body" => &mut body,
+                    _ => return None,
+                };
+                if std::mem::replace(seen, true) {
+                    return None;
+                }
+            }
+        }
+        _ => return None,
+    }
+    (url.as_str().len() <= MAX_OUTBOUND_URL_BYTES).then_some(url)
 }
 
 #[tauri::command]
 pub async fn open_link(app: AppHandle, url: String) -> Result<bool, String> {
-    if !scheme_allowed(&url) {
-        return Err("invalid_input".into());
-    }
+    let url = parse_outbound_url(&url).ok_or_else(|| "invalid_input".to_string())?;
+    let destination = if url.scheme() == "https" {
+        url.origin().ascii_serialization()
+    } else {
+        url.path().to_owned()
+    };
     // A native confirmation, from Rust: the webview cannot skip it.
     let (tx, rx) = oneshot::channel();
     app.dialog()
-        .message(format!("Open this link in your browser?\n\n{url}"))
+        .message(format!("Open this link?\n\nDestination: {destination}\n\n{url}"))
         .title("SoirVu")
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::OkCancelCustom(
@@ -36,7 +94,7 @@ pub async fn open_link(app: AppHandle, url: String) -> Result<bool, String> {
     if !rx.await.unwrap_or(false) {
         return Ok(false);
     }
-    ipc(platform::open_external(&url).map_err(Into::into))?;
+    ipc(platform::open_external(std::ffi::OsStr::new(url.as_str())).map_err(Into::into))?;
     Ok(true)
 }
 
@@ -289,4 +347,36 @@ pub async fn import_json(app: AppHandle) -> Result<Option<ImportOutcome>, String
     })
     .await?;
     Ok(Some(report.into()))
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::*;
+
+    #[test]
+    fn outbound_urls_require_an_explicit_destination_and_safe_mail_fields() {
+        let https = parse_outbound_url("HTTPS://Example.COM:443/help?q=a%20b").unwrap();
+        assert_eq!(https.as_str(), "https://example.com/help?q=a%20b");
+        let mail = "mailto:note+diary@example.com?subject=Diary%20note&body=Hello";
+        assert_eq!(parse_outbound_url(mail).unwrap().as_str(), mail);
+
+        for invalid in [
+            "http://example.com",
+            "file:///notes",
+            "https:///example.com",
+            "https://user@example.com",
+            "https://@example.com",
+            "https://example.com/\n",
+            "https://example.com/%00",
+            "https://example.com/%E2%80%AE",
+            "mailto:a@example.com,b@example.com",
+            "mailto:a@example.com?bcc=b@example.com",
+            "mailto:a@example.com?subject=one&subject=two",
+            "mailto:a@example.com?body=hello%0D%0Aworld",
+            "mailto:a@example.com#fragment",
+        ] {
+            assert!(parse_outbound_url(invalid).is_none(), "{invalid:?}");
+        }
+        assert!(parse_outbound_url(&format!("https://example.com/{}", "a".repeat(MAX_OUTBOUND_URL_BYTES))).is_none());
+    }
 }

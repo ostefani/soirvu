@@ -5,29 +5,53 @@
 
 use std::process::Command;
 
-/// Opens a URL in the user's default browser/mail client. Used only
-/// by the open_link command, after its scheme check and the user's
-/// confirmation — the webview itself has no opener (§6.3).
-pub fn open_external(url: &str) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
-    let mut cmd = {
-        let mut c = Command::new("open");
-        c.arg(url);
-        c
-    };
-    #[cfg(target_os = "linux")]
-    let mut cmd = {
-        let mut c = Command::new("xdg-open");
-        c.arg(url);
-        c
-    };
+/// Pass a validated URL or app-managed file path to the default OS handler.
+pub fn open_external(target: &std::ffi::OsStr) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
-    let mut cmd = {
-        let mut c = Command::new("cmd");
-        c.args(["/C", "start", "", url]);
-        c
-    };
-    cmd.spawn().map(|_| ())
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "shell32")]
+        unsafe extern "system" {
+            fn ShellExecuteW(
+                window: *mut std::ffi::c_void,
+                operation: *const u16,
+                file: *const u16,
+                parameters: *const u16,
+                directory: *const u16,
+                show: i32,
+            ) -> isize;
+        }
+        let mut target: Vec<u16> = target.encode_wide().collect();
+        if target.contains(&0) {
+            return Err(std::io::ErrorKind::InvalidInput.into());
+        }
+        target.push(0);
+        // SAFETY: the target is NUL-terminated and the optional pointers are null.
+        let result = unsafe {
+            ShellExecuteW(std::ptr::null_mut(), std::ptr::null(), target.as_ptr(),
+                std::ptr::null(), std::ptr::null(), 1)
+        };
+        if result <= 32 {
+            return Err(std::io::Error::other("could not open the destination"));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_os = "macos")]
+        let program = "open";
+        #[cfg(not(target_os = "macos"))]
+        let program = "xdg-open";
+        Command::new(program).arg(target).spawn().map(|_| ())
+    }
+}
+
+pub(crate) fn packaged_webview_origin() -> &'static str {
+    if cfg!(any(target_os = "windows", target_os = "android")) {
+        "http://tauri.localhost"
+    } else {
+        "tauri://localhost"
+    }
 }
 
 // WER (Windows Error Reporting) exclusion: tells Windows

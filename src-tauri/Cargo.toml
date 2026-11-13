@@ -38,6 +38,7 @@ libc = "0.2"
 
 soirvu-core = { path = "../crates/soirvu-core", version = "1.1.0" }
 tauri-plugin-dialog = "2"
+percent-encoding = "2"
 tempfile = "3"
 
 [dev-dependencies]

@@ -39,6 +39,14 @@ const CONFIG_DIR_NAME: &str = if cfg!(debug_assertions) {
     "SoirVu"
 };
 
+fn matches_app_origin(url: &tauri::Url, expected: &tauri::Url) -> bool {
+    url.scheme() == expected.scheme()
+        && url.host() == expected.host()
+        && url.port_or_known_default() == expected.port_or_known_default()
+        && url.username().is_empty()
+        && url.password().is_none()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // §9 release hardening first, before anything opens.
@@ -135,6 +143,9 @@ pub fn run() {
             // tauri.conf.json: the navigation guard attaches here,
             // and this is where the non-persistent data store will
             // be set once spike 5 confirms the option (§6.3).
+            let packaged = tauri::Url::parse(platform::packaged_webview_origin())
+                .expect("valid packaged origin");
+            let dev = tauri::is_dev().then(|| app.config().build.dev_url.clone()).flatten();
             let builder = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -143,21 +154,10 @@ pub fn run() {
             .title("SoirVu")
             .inner_size(1100.0, 760.0)
             .min_inner_size(720.0, 480.0)
-            .on_navigation(|url| {
-                // Only the app's own pages may load. Anything else
-                // is blocked; content links go through open_link.
-                // The plain localhost allowance is the dev server
-                // only: in a release build the webview must not
-                // be able to navigate to any local service.
-                let is_app_origin = url.scheme() == "tauri"
-                    || (cfg!(target_os = "windows")
-                        && matches!(url.scheme(), "http" | "https")
-                        && url.host_str() == Some("tauri.localhost"));
-                let is_dev_server = cfg!(debug_assertions)
-                    && url.scheme() == "http"
-                    && matches!(url.host_str(), Some("localhost" | "127.0.0.1"));
-                is_app_origin || is_dev_server
-            });
+            .on_navigation(move |url| {
+                matches_app_origin(url, dev.as_ref().unwrap_or(&packaged))
+            })
+            .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny);
             // The editor handles drops itself (files, block
             // drags) through the page's own events; Tauri's
             // native handler replaces WebView2's and would
@@ -323,4 +323,24 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running SoirVu");
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::*;
+
+    #[test]
+    fn webview_navigation_matches_scheme_host_and_port() {
+        let url = |s: &str| tauri::Url::parse(s).unwrap();
+        let dev = url("http://localhost:5173");
+        assert!(matches_app_origin(&url("http://localhost:5173/index.html"), &dev));
+        for wrong in ["http://localhost:5174", "http://127.0.0.1:5173", "https://localhost:5173"] {
+            assert!(!matches_app_origin(&url(wrong), &dev));
+        }
+        let packaged = url("tauri://localhost");
+        assert!(matches_app_origin(&url("tauri://localhost/index.html"), &packaged));
+        for wrong in ["tauri://other", "tauri://localhost:99", "tauri://user@localhost"] {
+            assert!(!matches_app_origin(&url(wrong), &packaged));
+        }
+    }
 }

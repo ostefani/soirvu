@@ -1,12 +1,13 @@
 {
     "$schema": "../gen/schemas/desktop-schema.json",
-    "description": "The main window gets Tauri core defaults plus the app's own commands (the allow-* permissions generated from the AppManifest in build.rs). No plugin permissions: no fs, no shell, no http, no opener, no dialog.",
+    "description": "The main window gets only event subscription plus the app's own commands (the allow-* permissions generated from the AppManifest in build.rs). No plugin permissions: no fs, no shell, no http, no opener, no dialog.",
     "identifier": "default",
     "windows": [
         "main"
     ],
     "permissions": [
-        "core:default",
+        "core:event:allow-listen",
+        "core:event:allow-unlisten",
         "allow-vault-list",
         "allow-vault-pick-folder",
         "allow-vault-create",

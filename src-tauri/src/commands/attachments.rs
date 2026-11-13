@@ -383,7 +383,7 @@ pub async fn attachment_open(app: AppHandle, id: String) -> Result<bool, String>
     crate::commands::run_blocking_state(app, move |state| {
         ipc(state.with_session(&session, |vault| {
             let path = materialize_open_copy_locked(vault, state, &id)?;
-            if crate::platform::open_external(&path.to_string_lossy()).is_err() {
+            if crate::platform::open_external(path.as_os_str()).is_err() {
                 let _ = std::fs::remove_file(path);
                 return Ok(false);
             }
