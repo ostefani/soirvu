@@ -53,6 +53,11 @@ Open SoirVu, choose a location for your vault and create a passphrase. Save the 
 - [x] **Auto-lock** — the vault locks on idle, sleep, screen lock or manual shortcut, and the keys are wiped from memory.
 - [x] **Key management** — change your passphrase, regenerate your recovery key or rotate the vault's master key in the app.
 
+Diary import retains unrecognized attachment formats for export and reports them separately.
+JSON imports are limited to 512 MiB per file and 256 MiB per decoded attachment.
+Markdown import reads up to 256 MiB of linked attachments per note. Attachments over
+these limits are skipped, and a JSON file over the file limit is rejected before import.
+
 ## Security model
 
 The Rust backend handles vault keys, cryptography and vault file operations. Encryption protects your diary at rest — it cannot protect text while you are reading it, so auto-lock exists to shrink that window. Keyloggers, screen recorders and a compromised OS are explicitly out of scope.

@@ -100,7 +100,7 @@ impl Vault {
             let prefix = "../".repeat(dir_rel.components().count());
             let mut body = entry.body_md.clone();
             for att in &attachments {
-                let file_name = format!("{}-{}", att.id, att.name);
+                let file_name = format!("{}-{}", att.id, export_attachment_name(&att.name));
                 let assets = out_dir.join("assets");
                 fs::create_dir_all(&assets)?;
                 fs::write(assets.join(&file_name), self.read_attachment(&att.id)?)?;
@@ -520,6 +520,24 @@ fn yaml_string(text: &str) -> String {
 
 /// A file-name version of the title: letters and digits (any alphabet) are
 /// kept and lowered, everything else becomes one dash. At most 40 chars.
+// Stored names can come from older or foreign clients.
+fn export_attachment_name(name: &str) -> String {
+    let mut safe = String::new();
+    for c in name.chars() {
+        let c = if c.is_alphanumeric() || matches!(c, '.' | '-' | '_') {
+            c
+        } else {
+            '_'
+        };
+        if safe.len() + c.len_utf8() > 200 {
+            break;
+        }
+        safe.push(c);
+    }
+    let safe = safe.trim_matches('.');
+    if safe.is_empty() { "attachment".into() } else { safe.into() }
+}
+
 fn slug(title: Option<&str>) -> String {
     let mut out = String::new();
     let mut last_was_dash = true; // also trims a leading dash

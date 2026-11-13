@@ -67,7 +67,7 @@ pub struct Attachment {
     pub entry_id: String,
     /// Original file name. Safe to store: the database is encrypted.
     pub name: String,
-    /// Sniffed by the caller in Rust, never taken from the UI (§6.1).
+    /// Stored MIME hint. Preview and opening classify the authenticated bytes.
     pub mime: String,
     /// Plaintext size in bytes.
     pub size: i64,
@@ -122,9 +122,12 @@ pub fn sniff_mime(bytes: &[u8]) -> Option<&'static str> {
             b"M4A " | b"M4B " => Some("audio/x-m4a"),
             b"heic" | b"heix" | b"hevc" | b"mif1" | b"msf1" => Some("image/heic"),
             b"qt  " => Some("video/quicktime"),
-            b"isom" | b"iso2" | b"mp41" | b"mp42" | b"avc1" | b"M4V " | b"dash" => {
+            b"isom" | b"iso2" | b"iso5" | b"iso6" | b"mp41" | b"mp42" | b"mp71" | b"avc1"
+            | b"M4V " | b"dash" => {
                 Some("video/mp4")
             }
+            b"3gp4" => Some("video/3gpp"),
+            b"3g2a" => Some("video/3gpp2"),
             _ => None,
         };
     }
@@ -201,8 +204,7 @@ impl Vault {
 
     /// Inserts an attachment with a caller-chosen id, size,
     /// hash and timestamps — the import path (§8). The caller
-    /// has checked the id is free and, for live attachments,
-    /// that `data` really hashes to `sha256`. `data` is None
+    /// has checked the id is free. Live data is validated here. `data` is None
     /// for tombstones (their blobs are gone). The entry's own
     /// timestamps are the caller's business here — importing
     /// restores the entry as it was, so nothing is bumped.
@@ -221,8 +223,14 @@ impl Vault {
     ) -> Result<()> {
         validate_attachment_id(id)?;
         let name = validate_name(name)?;
+        if deleted_at.is_none() != data.is_some() || size < 0 || sha256.len() != 32 {
+            return Err(Error::InvalidInput("invalid attachment record".into()));
+        }
         let mime = match data {
             Some(bytes) if i64::try_from(bytes.len()).ok() == Some(size) => {
+                if &Sha256::digest(bytes)[..] != sha256 {
+                    return Err(Error::InvalidInput("attachment hash mismatch".into()));
+                }
                 sniff_mime(bytes).unwrap_or("application/octet-stream").to_owned()
             }
             Some(_) => return Err(Error::InvalidInput("attachment size mismatch".into())),
@@ -755,6 +763,19 @@ mod tests {
     use crate::crypto::KdfParams;
     use crate::entries::{EntryDraft, ListQuery};
     use tempfile::TempDir;
+
+    #[test]
+    fn sniff_requires_a_supported_signature_and_brand() {
+        for input in [b"".as_slice(), b"GIF8", b"ftypisom", b"\0\0\0\x14ftyp????"] {
+            assert_eq!(sniff_mime(input), None);
+        }
+        assert_eq!(sniff_mime(b"GIF89a"), Some("image/gif"));
+        for brand in [b"iso5", b"iso6", b"mp71", b"3gp4", b"3g2a"] {
+            let bytes = [b"\0\0\0\x14ftyp".as_slice(), brand].concat();
+            assert!(sniff_mime(&bytes[..11]).is_none());
+            assert!(sniff_mime(&bytes).unwrap().starts_with("video/"));
+        }
+    }
 
     fn fast() -> KdfParams {
         KdfParams {

@@ -181,9 +181,14 @@ pub async fn attachment_info(app: AppHandle, id: String) -> Result<AttachmentInf
     crate::commands::run_blocking_state(app, move |state| {
         ipc(state.with_vault(|vault| {
             let a = vault.get_attachment(&id)?;
-            let mime = sniff_stored_attachment(vault, &id, a.size)
-                .unwrap_or("application/octet-stream")
-                .to_owned();
+            let mime = match sniff_stored_attachment(vault, &id, a.size) {
+                Ok(mime) => mime,
+                Err(AppError::Code(code)) if code == "unsupported_type" => {
+                    "application/octet-stream"
+                }
+                Err(error) => return Err(error),
+            }
+            .to_owned();
             Ok(AttachmentInfo {
                 id: a.id,
                 name: a.name,
@@ -345,6 +350,8 @@ fn materialize_open_copy_locked(
         "audio/wav" => ".wav",
         "audio/x-m4a" => ".m4a",
         "video/mp4" => ".mp4",
+        "video/3gpp" => ".3gp",
+        "video/3gpp2" => ".3g2",
         "video/quicktime" => ".mov",
         "application/pdf" => ".pdf",
         _ => return Err(AppError::Code("unsupported_type".into())),
@@ -784,16 +791,62 @@ mod tests {
 
     #[test]
     fn preview_and_open_use_attachment_bytes_instead_of_metadata() {
-        let (_dir, state, entry) = state_with_entry();
+        let (dir, state, entry) = state_with_entry();
         let png = b"\x89PNG\r\n\x1a\n";
-        let (known, unknown) = state
+        let (known, unknown, pdf) = state
             .with_vault(|vault| {
                 Ok((
-                    vault.add_attachment(&entry, "note.txt", "text/plain", png)?,
+                    vault.add_attachment(&entry, "note.command", "text/html", png)?,
                     vault.add_attachment(&entry, "other.png", "image/png", b"plain text")?,
+                    vault.add_attachment(&entry, "note.txt", "text/plain", b"%PDF-1.7")?,
                 ))
             })
             .unwrap();
+
+        let peer_dir = dir.path().join("peer");
+        let sync_dir = dir.path().join("sync");
+        state
+            .with_vault(|vault| {
+                vault.checkpoint()?;
+                soirvu_core::folder::copy_vault_files(vault.dir(), &peer_dir)?;
+                Ok(())
+            })
+            .unwrap();
+        let mut peer = Vault::open_with_passphrase(&peer_dir, "pass").unwrap();
+        peer.restamp_device().unwrap();
+        let synced = peer
+            .add_attachment(&entry, "peer.command", "text/html", png)
+            .unwrap();
+        peer.sync_emit(&sync_dir).unwrap();
+        state
+            .with_vault(|vault| {
+                let report = vault.sync_apply(&sync_dir)?;
+                assert_eq!(report.attachments_applied, 1);
+                Ok(())
+            })
+            .unwrap();
+
+        let response = super::serve_asset(&state, &synced.id, Some("bytes=0-999999"));
+        assert_eq!(response.status, 206);
+        assert_eq!(response.body, png);
+        for (name, value) in [
+            ("Content-Type", "image/png"),
+            ("Content-Range", "bytes 0-7/8"),
+            ("Cache-Control", "no-store"),
+            ("Content-Security-Policy", "default-src 'none'; sandbox"),
+        ] {
+            assert!(
+                response
+                    .headers
+                    .iter()
+                    .any(|(n, v)| n == name && v == value)
+            );
+        }
+        assert_eq!(
+            super::serve_asset(&state, &known.id, Some("bytes=999-")).status,
+            416
+        );
+        assert_eq!(super::serve_asset(&state, &pdf.id, None).status, 415);
 
         let response = super::serve_asset(&state, &known.id, Some("bytes=1-3"));
         assert_eq!(response.status, 206);
@@ -813,9 +866,20 @@ mod tests {
                     Err(AppError::Code(code)) if code == "unsupported_type"
                 ));
                 assert!(!state.opened_dir().exists());
-                let path = super::materialize_open_copy_locked(vault, &state, &known.id)?;
-                assert_eq!(path.extension().unwrap(), "png");
-                assert_eq!(std::fs::read(path).unwrap(), png);
+                for id in [&known.id, &synced.id] {
+                    let path = super::materialize_open_copy_locked(vault, &state, id)?;
+                    assert_eq!(path.extension().unwrap(), "png");
+                    assert!(
+                        path.file_name()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .starts_with("attachment-")
+                    );
+                    assert_eq!(std::fs::read(path).unwrap(), png);
+                }
+                let path = super::materialize_open_copy_locked(vault, &state, &pdf.id)?;
+                assert_eq!(path.extension().unwrap(), "pdf");
                 Ok(())
             })
             .unwrap();

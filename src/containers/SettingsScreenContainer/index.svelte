@@ -174,6 +174,9 @@
                 if (outcome.skippedEntries > 0 || outcome.skippedAttachments > 0) {
                     message += ` Skipped ${outcome.skippedEntries} entries and ${outcome.skippedAttachments} attachments (already present or unreadable).`;
                 }
+                if (outcome.exportOnlyAttachments > 0) {
+                    message += ' Attachments available through export only: ' + outcome.exportOnlyAttachments + '.';
+                }
                 notify(EVENT_TYPE.SAVED, message);
             }
         } catch (e) {

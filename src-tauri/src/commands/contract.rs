@@ -212,6 +212,7 @@ fn import_outcome_shape() {
             attachments: 3,
             skipped_entries: 1,
             skipped_attachments: 2,
+            export_only_attachments: 1,
             folders: 2,
             skipped_folders: 0,
         },

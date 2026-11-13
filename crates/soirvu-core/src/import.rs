@@ -10,6 +10,7 @@
 //! fresh id. Nothing is merged and nothing is deleted.
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -21,6 +22,21 @@ use crate::error::{Error, Result};
 use crate::export::civil_from_days;
 use crate::folder::Vault;
 
+const MAX_JSON_IMPORT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_ATTACHMENT_IMPORT_BYTES: u64 = 256 * 1024 * 1024;
+
+fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
+    let file = fs::File::open(path)?;
+    if file.metadata()?.len() <= limit {
+        let mut bytes = Vec::new();
+        file.take(limit + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 <= limit {
+            return Ok(bytes);
+        }
+    }
+    Err(Error::InvalidInput("import file exceeds its size limit".into()))
+}
+
 /// What an import did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportReport {
@@ -28,6 +44,7 @@ pub struct ImportReport {
     pub attachments: usize,
     pub skipped_entries: usize,
     pub skipped_attachments: usize,
+    pub export_only_attachments: usize,
     pub skipped_folders: usize,
     /// Folders created (or adopted) by this import.
     pub folders: usize,
@@ -188,6 +205,7 @@ impl Vault {
             attachments: 0,
             skipped_entries: skipped,
             skipped_attachments: 0,
+            export_only_attachments: 0,
             skipped_folders: 0,
             folders: folder_ids.len() + manifest_folders.len(),
             links_remapped: 0,
@@ -217,10 +235,11 @@ impl Vault {
                 }
             }
             match self.insert_planned_markdown(dir, &plan) {
-                Ok((a, sa)) => {
+                Ok((a, sa, export_only)) => {
                     report.entries += 1;
                     report.attachments += a;
                     report.skipped_attachments += sa;
+                    report.export_only_attachments += export_only;
                 }
                 Err(_) => report.skipped_entries += 1,
             }
@@ -330,7 +349,7 @@ impl Vault {
         &mut self,
         root: &Path,
         plan: &PlannedFile,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<(usize, usize, usize)> {
         let file = &plan.file;
         let fm = &plan.fm;
         let mut body = plan.body.clone();
@@ -365,6 +384,7 @@ impl Vault {
         // the entry itself.
         let mut skipped_attachments = 0;
         let mut attachments: Vec<(String, String, Vec<u8>)> = Vec::new();
+        let mut remaining = MAX_ATTACHMENT_IMPORT_BYTES;
         for rel in asset_refs(&body) {
             // No blanket `..` rejection: nested exports legitimately
             // climb to the root `assets/` dir, and `contained_file`
@@ -377,10 +397,11 @@ impl Vault {
                 skipped_attachments += 1;
                 continue;
             };
-            let Ok(bytes) = fs::read(&path) else {
+            let Ok(bytes) = read_bounded(&path, remaining) else {
                 skipped_attachments += 1;
                 continue;
             };
+            remaining -= bytes.len() as u64;
             let file_name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -418,6 +439,7 @@ impl Vault {
         let folder = plan.folder.as_deref().filter(|id| self.folder_is_live(id));
         self.insert_entry_exact(entry_id, &draft, created, updated, None, folder)?;
         let mut imported = 0;
+        let mut export_only = 0;
         for (att_id, name, bytes) in &attachments {
             let sha = Sha256::digest(bytes);
             match self.insert_attachment_exact(
@@ -431,11 +453,14 @@ impl Vault {
                 None,
                 Some(bytes),
             ) {
-                Ok(()) => imported += 1,
+                Ok(()) => {
+                    imported += 1;
+                    export_only += usize::from(crate::attachments::sniff_mime(bytes).is_none());
+                }
                 Err(_) => skipped_attachments += 1,
             }
         }
-        Ok((imported, skipped_attachments))
+        Ok((imported, skipped_attachments, export_only))
     }
 
     /// Imports a SoirVu JSON export (see `export_json`).
@@ -449,8 +474,8 @@ impl Vault {
     /// Entry `entry:` links are never rewritten here: entry ids
     /// are never remapped, so bodies stay byte-identical.
     pub fn import_json(&mut self, file: &Path) -> Result<ImportReport> {
-        let text = fs::read_to_string(file)?;
-        let data: JsonImport = serde_json::from_str(&text)
+        let text = read_bounded(file, MAX_JSON_IMPORT_BYTES)?;
+        let data: JsonImport = serde_json::from_slice(&text)
             .map_err(|e| Error::InvalidInput(format!("not a SoirVu JSON export: {e}")))?;
         if data.format != "soirvu-json-export" || (data.version != 1 && data.version != 2) {
             return Err(Error::InvalidInput(
@@ -462,6 +487,7 @@ impl Vault {
             attachments: 0,
             skipped_entries: 0,
             skipped_attachments: 0,
+            export_only_attachments: 0,
             skipped_folders: 0,
             folders: 0,
             links_remapped: 0,
@@ -588,14 +614,10 @@ impl Vault {
                 match att
                     .data_base64
                     .as_deref()
+                    .filter(|b| b.len() as u64 <= MAX_ATTACHMENT_IMPORT_BYTES.div_ceil(3) * 4)
                     .and_then(|b| data_encoding::BASE64.decode(b.as_bytes()).ok())
                 {
-                    Some(bytes)
-                        if data_encoding::HEXLOWER.encode(&Sha256::digest(&bytes))
-                            == att.sha256 =>
-                    {
-                        Some(bytes)
-                    }
+                    Some(bytes) if bytes.len() as u64 <= MAX_ATTACHMENT_IMPORT_BYTES => Some(bytes),
                     _ => {
                         report.skipped_attachments += 1;
                         continue;
@@ -616,7 +638,13 @@ impl Vault {
                 att.deleted_at,
                 data_bytes.as_deref(),
             ) {
-                Ok(()) => report.attachments += 1,
+                Ok(()) => {
+                    report.attachments += 1;
+                    if let Some(bytes) = &data_bytes {
+                        report.export_only_attachments +=
+                            usize::from(crate::attachments::sniff_mime(bytes).is_none());
+                    }
+                }
                 Err(_) => report.skipped_attachments += 1,
             }
         }
@@ -1690,12 +1718,22 @@ mod tests {
         let wrong_size = source
             .add_attachment(&entry.id, "wrong.txt", "text/plain", b"wrong")
             .unwrap();
+        let wrong_hash = source
+            .add_attachment(&entry.id, "hash.txt", "text/plain", b"hash")
+            .unwrap();
+        let missing_data = source
+            .add_attachment(&entry.id, "missing.txt", "text/plain", b"missing")
+            .unwrap();
         let file = source_dir.path().join("metadata.json");
         source.export_json(&file).unwrap();
         let mut export: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
         for record in export["attachments"].as_array_mut().unwrap() {
             if record["id"] == wrong_size.id.as_str() {
                 record["size"] = 1.into();
+            } else if record["id"] == wrong_hash.id.as_str() {
+                record["sha256"] = "00".repeat(32).into();
+            } else if record["id"] == missing_data.id.as_str() {
+                record["data_base64"] = serde_json::Value::Null;
             }
         }
         fs::write(&file, serde_json::to_vec(&export).unwrap()).unwrap();
@@ -1704,12 +1742,47 @@ mod tests {
         let mut target = new_vault(&target_dir);
         let report = target.import_json(&file).unwrap();
         assert_eq!(report.attachments, 2);
-        assert_eq!(report.skipped_attachments, 1);
-        assert!(!target.attachment_exists(&wrong_size.id).unwrap());
-        assert!(!crate::attachments::blob_path(target.dir(), &wrong_size.id).unwrap().exists());
+        assert_eq!(report.skipped_attachments, 3);
+        assert_eq!(report.export_only_attachments, 1);
+        for id in [&wrong_size.id, &wrong_hash.id, &missing_data.id] {
+            assert!(!target.attachment_exists(id).unwrap());
+            assert!(!crate::attachments::blob_path(target.dir(), id).unwrap().exists());
+        }
         assert_eq!(target.get_attachment(&image.id).unwrap().mime, "image/png");
         assert_eq!(target.get_attachment(&unknown.id).unwrap().mime, "application/octet-stream");
         assert_eq!(target.read_attachment(&unknown.id).unwrap(), b"note");
+    }
+
+    #[test]
+    fn markdown_keeps_unrecognized_text_for_export() {
+        let tmp = TempDir::new().unwrap();
+        let mut vault = new_vault(&tmp);
+        let input = tmp.path().join("input");
+        fs::create_dir_all(input.join("assets")).unwrap();
+        fs::write(input.join("2026-10-01-note.md"), "[Note](assets/note.txt)").unwrap();
+        fs::write(input.join("assets/note.txt"), b"note bytes").unwrap();
+
+        let report = vault.import_markdown(&input).unwrap();
+        assert_eq!(report.attachments, 1);
+        assert_eq!(report.export_only_attachments, 1);
+        let entry = all_entries(&vault).pop().unwrap();
+        let attachment = vault.list_attachments(&entry.id).unwrap().pop().unwrap();
+        assert_eq!(attachment.mime, "application/octet-stream");
+        let output = tmp.path().join("output");
+        vault.export_markdown(&output).unwrap();
+        assert_eq!(
+            fs::read(output.join("assets").join(format!("{}-note.txt", attachment.id))).unwrap(),
+            b"note bytes"
+        );
+    }
+
+    #[test]
+    fn bounded_import_reads_enforce_the_limit() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("data");
+        fs::write(&path, b"1234").unwrap();
+        assert_eq!(read_bounded(&path, 4).unwrap(), b"1234");
+        assert!(matches!(read_bounded(&path, 3), Err(Error::InvalidInput(_))));
     }
 
     /// P2: byte-offset slicing panicked on multibyte input. Every

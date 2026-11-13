@@ -323,7 +323,7 @@ export function exportJson(passphrase) {
 
 /**
  * §8 imports. Both resolve with { entries, attachments,
- * skippedEntries, skippedAttachments }, or null when the
+ * skippedEntries, skippedAttachments, exportOnlyAttachments }, or null when the
  * user cancels the pick.
  */
 export function importMarkdown() {
