@@ -31,6 +31,10 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.8
+exceptions = [
+    # sqlcipher-src declares these for its bundled SQLite and LibTomCrypt sources.
+    { crate = "sqlcipher-src@=420.0.0", allow = ["blessing", "WTFPL"] },
+]
 
 [bans]
 multiple-versions = "warn"
