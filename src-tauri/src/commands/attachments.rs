@@ -35,6 +35,7 @@ pub struct AttachmentInfo {
     pub name: String,
     pub mime: String,
     pub size: i64,
+    pub previewable: bool,
 }
 
 /// The size cap (bytes) for a sniffed type, from the settings (§6.4:
@@ -48,6 +49,13 @@ fn cap_for(mime: &str, caps: &crate::state::Caps) -> Option<u64> {
         m if m.starts_with("video/") => Some(mb(caps.video_mb)),
         _ => None,
     }
+}
+
+fn preview_cap(mime: &str, caps: &crate::state::Caps) -> Option<u64> {
+    if mime == "application/pdf" {
+        return None;
+    }
+    cap_for(mime, caps).map(|cap| cap.min(MAX_UPLOAD_HARD_CAP as u64))
 }
 
 /// Hard ceiling for one in-flight upload, whatever the settings say:
@@ -179,6 +187,7 @@ fn finish_upload(
 #[tauri::command]
 pub async fn attachment_info(app: AppHandle, id: String) -> Result<AttachmentInfo, String> {
     crate::commands::run_blocking_state(app, move |state| {
+        let caps = state.settings().caps;
         ipc(state.with_vault(|vault| {
             let a = vault.get_attachment(&id)?;
             let mime = match sniff_stored_attachment(vault, &id, a.size) {
@@ -189,11 +198,13 @@ pub async fn attachment_info(app: AppHandle, id: String) -> Result<AttachmentInf
                 Err(error) => return Err(error),
             }
             .to_owned();
+            let previewable = preview_cap(&mime, &caps).is_some_and(|cap| a.size as u64 <= cap);
             Ok(AttachmentInfo {
                 id: a.id,
                 name: a.name,
                 mime,
                 size: a.size,
+                previewable,
             })
         }))
     })
@@ -427,13 +438,9 @@ pub fn serve_asset(state: &AppState, id: &str, range_header: Option<&str>) -> As
     let response = state.with_vault(|vault| {
         let info = vault.get_attachment(id)?;
         let mime = sniff_stored_attachment(vault, id, info.size)?;
-        if mime == "application/pdf" {
-            return Err(AppError::Code("unsupported_type".into()));
-        }
         let total = info.size as u64;
-        let cap = cap_for(mime, &caps)
-            .unwrap_or(0)
-            .min(MAX_UPLOAD_HARD_CAP as u64);
+        let cap =
+            preview_cap(mime, &caps).ok_or_else(|| AppError::Code("unsupported_type".into()))?;
         if total > cap {
             return Err(AppError::Code("too_large".into()));
         }

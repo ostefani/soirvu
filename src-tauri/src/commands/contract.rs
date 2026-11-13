@@ -248,6 +248,7 @@ fn attachment_shapes() {
             name: "photo.png".into(),
             mime: "image/png".into(),
             size: 12345,
+            previewable: true,
         },
     );
 }

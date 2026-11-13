@@ -573,6 +573,7 @@ export function settingsGet() {
 
 /**
  * @typedef {object} AttachmentInfo
+ * @property {boolean} previewable
  * @property {string} id
  * @property {string} name
  * @property {string} mime

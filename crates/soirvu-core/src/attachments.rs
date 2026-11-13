@@ -777,6 +777,16 @@ mod tests {
     }
 
     #[test]
+    fn attachment_ids_must_be_canonical_uuids() {
+        let id = "0190a1b2-1234-7abc-8def-0123456789ab";
+        assert!(validate_attachment_id(id).is_ok());
+        for invalid in ["".into(), "../x".into(), id.to_ascii_uppercase(),
+            format!("{id}0"), format!("{id}\n"), id.replace('-', "\0")] {
+            assert!(validate_attachment_id(&invalid).is_err());
+        }
+    }
+
+    #[test]
     fn sniff_requires_a_supported_signature_and_brand() {
         for input in [b"".as_slice(), b"GIF8", b"ftypisom", b"\0\0\0\x14ftyp????"] {
             assert_eq!(sniff_mime(input), None);

@@ -15,22 +15,25 @@ function media(tag, src) {
     return element;
 }
 
-function preview(meta, url) {
-    if (meta.mime.startsWith('video/')) return media('video', url);
-    if (meta.mime.startsWith('audio/')) return media('audio', url);
+function preview(meta, urlFor) {
+    if (meta.previewable) {
+        if (meta.mime.startsWith('video/')) return media('video', urlFor(meta.id));
+        if (meta.mime.startsWith('audio/')) return media('audio', urlFor(meta.id));
+    }
     const label = document.createElement('span');
     label.textContent = attachmentLabel(meta.name, meta.size);
     return label;
 }
 
 export async function renderAttachment(el, id, attachments) {
+    el.dataset.attachmentLabel ??= el.textContent;
     try {
         const meta = await attachments.info(id);
-        el.replaceChildren(preview(meta, attachments.url(meta.id)));
+        el.replaceChildren(preview(meta, attachments.url));
         el.title = TEXT.doubleClickToOpen;
         el.ondblclick = () => attachments.open(meta.id);
     } catch {
-        const label = el.textContent;
+        const label = el.dataset.attachmentLabel;
         el.textContent = label ? `${label} — ${TEXT.attachmentUnavailable}` : TEXT.attachmentUnavailable;
         el.title = TEXT.attachmentUnavailable;
         el.ondblclick = null;

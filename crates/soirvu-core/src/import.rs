@@ -22,12 +22,13 @@ use crate::error::{Error, Result};
 use crate::export::civil_from_days;
 use crate::folder::Vault;
 
+const MAX_MARKDOWN_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_JSON_IMPORT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ATTACHMENT_IMPORT_BYTES: u64 = 256 * 1024 * 1024;
 
 fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let not_regular = || Error::InvalidInput("import input must be a regular file".into());
-    if !fs::metadata(path)?.is_file() {
+    if !fs::symlink_metadata(path)?.is_file() {
         return Err(not_regular());
     }
     let mut options = fs::OpenOptions::new();
@@ -37,7 +38,7 @@ fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK);
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
     }
     let file = options.open(path)?;
     let metadata = file.metadata()?;
@@ -735,7 +736,7 @@ struct ManifestFolder {
 /// own export. Unknown versions are ignored (layout guessing
 /// takes over) rather than failing the whole import.
 fn load_manifest(dir: &Path) -> Option<Manifest> {
-    let bytes = read_bounded(&dir.join("soirvu-export.json"), MAX_JSON_IMPORT_BYTES).ok()?;
+    let bytes = read_bounded(&dir.join("soirvu-export.json"), MAX_MARKDOWN_MANIFEST_BYTES).ok()?;
     let manifest: Manifest = serde_json::from_slice(&bytes).ok()?;
     if manifest.format != "soirvu-markdown-export" || manifest.version != 2 {
         return None;
@@ -1736,6 +1737,10 @@ mod tests {
         let unknown = source
             .add_attachment(&entry.id, "note.txt", "text/plain", b"note")
             .unwrap();
+        let video = source
+            .add_attachment(&entry.id, "clip.mp4", "application/octet-stream",
+                b"\0\0\0\x14ftypiso5\0\0\0\0iso5")
+            .unwrap();
         let wrong_size = source
             .add_attachment(&entry.id, "wrong.txt", "text/plain", b"wrong")
             .unwrap();
@@ -1762,7 +1767,8 @@ mod tests {
         let target_dir = TempDir::new().unwrap();
         let mut target = new_vault(&target_dir);
         let report = target.import_json(&file).unwrap();
-        assert_eq!(report.attachments, 2);
+        assert_eq!(report.attachments, 3);
+        assert_eq!(target.get_attachment(&video.id).unwrap().mime, "video/mp4");
         assert_eq!(report.skipped_attachments, 3);
         assert_eq!(report.export_only_attachments, 1);
         for id in [&wrong_size.id, &wrong_hash.id, &missing_data.id] {
@@ -1804,6 +1810,17 @@ mod tests {
         fs::write(&path, b"1234").unwrap();
         assert_eq!(read_bounded(&path, 4).unwrap(), b"1234");
         assert!(matches!(read_bounded(&path, 3), Err(Error::InvalidInput(_))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_import_rejects_symlinked_files() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("data");
+        let link = tmp.path().join("link");
+        fs::write(&file, b"data").unwrap();
+        std::os::unix::fs::symlink(file, &link).unwrap();
+        assert!(matches!(read_bounded(&link, 8), Err(Error::InvalidInput(_))));
     }
 
     #[cfg(unix)]

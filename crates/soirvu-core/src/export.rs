@@ -655,6 +655,9 @@ mod tests {
 
     #[test]
     fn attachment_export_names_are_safe_and_keep_extensions() {
+        assert_eq!(export_attachment_name(""), "attachment");
+        assert_eq!(export_attachment_name("meeting notes"), "meeting_notes");
+        assert_eq!(export_attachment_name("CON.txt"), "CON.txt");
         assert_eq!(export_attachment_name("re\u{301}sume\u{301}.pdf"), "résumé.pdf");
         assert_eq!(export_attachment_name("../folder\\note: draft.txt"), "_folder_note__draft.txt");
         let name = export_attachment_name(&format!("{}.png", "é".repeat(150)));
