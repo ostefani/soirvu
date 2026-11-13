@@ -50,7 +50,7 @@ impl Vault {
     /// rewrites them with that parser; the CLI documents the
     /// limitation instead of corrupting samples).
     pub fn export_markdown(&self, out_dir: &Path) -> Result<ExportReport> {
-        prepare_out_dir(out_dir)?;
+        let output = prepare_out_dir(out_dir)?;
         let mut report = ExportReport {
             entries: 0,
             attachments: 0,
@@ -65,7 +65,7 @@ impl Vault {
         let placed = self.export_folder_paths()?;
         for folder in placed.values() {
             if !folder.segments.is_empty() {
-                fs::create_dir_all(out_dir.join(folder.segments.join("/")))?;
+                output.directory(Path::new(&folder.segments.join("/")), true)?;
                 report.folders += 1;
             }
         }
@@ -101,9 +101,8 @@ impl Vault {
             let mut body = entry.body_md.clone();
             for att in &attachments {
                 let file_name = format!("{}-{}", att.id, export_attachment_name(&att.name));
-                let assets = out_dir.join("assets");
-                fs::create_dir_all(&assets)?;
-                fs::write(assets.join(&file_name), self.read_attachment(&att.id)?)?;
+                let assets = output.directory(Path::new("assets"), true)?;
+                assets.write(Path::new(&file_name), self.read_attachment(&att.id)?)?;
                 body = body.replace(
                     &format!("attachment:{}", att.id),
                     &format!("{prefix}assets/{file_name}"),
@@ -111,19 +110,14 @@ impl Vault {
                 report.attachments += 1;
             }
 
-            let dir = if dir_rel.as_os_str().is_empty() {
-                out_dir.to_path_buf()
-            } else {
-                fs::create_dir_all(out_dir.join(&dir_rel))?;
-                out_dir.join(&dir_rel)
-            };
+            let dir = output.directory(&dir_rel, true)?;
             let short_id = &entry.id[..8];
             let file_name = format!(
                 "{}-{}-{short_id}.md",
                 entry.entry_date,
                 slug(entry.title.as_deref())
             );
-            fs::write(dir.join(&file_name), render_entry(&entry, &body))?;
+            dir.write(Path::new(&file_name), render_entry(&entry, &body))?;
             manifest_entries.push(ManifestEntry {
                 id: entry.id.clone(),
                 path: dir_rel
@@ -152,8 +146,8 @@ impl Vault {
                 .collect(),
             entries: manifest_entries,
         };
-        fs::write(
-            out_dir.join("soirvu-export.json"),
+        output.write(
+            Path::new("soirvu-export.json"),
             serde_json::to_string_pretty(&manifest)
                 .map_err(|e| Error::InvalidInput(e.to_string()))?,
         )?;
@@ -477,7 +471,9 @@ impl Vault {
         };
         let text = serde_json::to_string_pretty(&export)
             .map_err(|e| Error::InvalidInput(e.to_string()))?;
-        fs::write(out_file, text)?;
+        let parent = out_file.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let name = out_file.file_name().ok_or_else(|| Error::InvalidInput("missing export filename".into()))?;
+        crate::fs_boundary::Directory::open(parent)?.write(Path::new(name), text)?;
         Ok(ExportReport {
             entries: export.entries.len(),
             attachments: export.attachments.len(),
@@ -487,18 +483,13 @@ impl Vault {
     }
 }
 
-fn prepare_out_dir(dir: &Path) -> Result<()> {
-    if dir.exists() {
-        let has_content = fs::read_dir(dir)?
-            .filter_map(|entry| entry.ok())
-            .any(|entry| entry.file_name() != ".DS_Store");
-        if has_content {
-            return Err(Error::FolderNotEmpty);
-        }
-    } else {
-        fs::create_dir_all(dir)?;
+fn prepare_out_dir(dir: &Path) -> Result<crate::fs_boundary::Directory> {
+    fs::create_dir_all(dir)?;
+    let output = crate::fs_boundary::Directory::open(dir)?;
+    if fs::read_dir(dir)?.any(|entry| entry.is_err() || entry.is_ok_and(|e| e.file_name() != ".DS_Store")) {
+        return Err(Error::FolderNotEmpty);
     }
-    Ok(())
+    Ok(output)
 }
 
 /// A YAML double-quoted string: backslash and quote are escaped, control

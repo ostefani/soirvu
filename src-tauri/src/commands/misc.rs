@@ -167,10 +167,11 @@ async fn run_export(
             let vault = Vault::open_with_passphrase(&src, &pass)?;
             if json {
                 let file = dir.join("soirvu-export.json");
-                if file.exists() {
-                    return Err(crate::error::AppError::Code("export_target_exists".into()));
-                }
-                let report = vault.export_json(&file)?;
+                let report = vault.export_json(&file).map_err(|error| match error {
+                    soirvu_core::Error::Io(ref io) if io.kind() == std::io::ErrorKind::AlreadyExists =>
+                        crate::error::AppError::Code("export_target_exists".into()),
+                    error => crate::error::AppError::from(error),
+                })?;
                 let folder = dir
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())

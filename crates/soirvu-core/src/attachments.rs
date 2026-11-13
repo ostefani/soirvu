@@ -411,19 +411,24 @@ impl Vault {
         if !root.exists() {
             return Ok(sweep);
         }
+        let directory = crate::fs_boundary::Directory::open(&root)?;
         for shard in fs::read_dir(&root)? {
-            let shard = shard?.path();
-            if !shard.is_dir() {
+            let shard = shard?;
+            if !shard.file_type()?.is_dir() {
                 continue;
             }
-            for file in fs::read_dir(&shard)? {
+            let pinned = directory.directory(Path::new(&shard.file_name()), false)?;
+            for file in fs::read_dir(shard.path())? {
                 let file = file?;
+                if !file.file_type()?.is_file() {
+                    continue;
+                }
                 let name = file.file_name().to_string_lossy().into_owned();
                 if name.starts_with('.') && name.ends_with(".tmp") {
-                    fs::remove_file(file.path())?;
+                    pinned.remove_file(Path::new(&file.file_name()))?;
                     sweep.incomplete_removed += 1;
                 } else if !live.contains(&name) {
-                    fs::remove_file(file.path())?;
+                    pinned.remove_file(Path::new(&file.file_name()))?;
                     sweep.orphans_removed += 1;
                 }
             }
@@ -458,22 +463,22 @@ pub fn validate_attachment_id(id: &str) -> Result<()> {
 /// already tombstoned (or was never committed) and the startup sweep removes
 /// whatever is left.
 pub(crate) fn remove_blob(dir: &Path, id: &str) {
-    if let Ok(path) = blob_path(dir, id) {
-        let _ = fs::remove_file(path);
+    if let (Ok(root), Ok(path)) = (
+        crate::fs_boundary::Directory::open(dir),
+        blob_path(Path::new(""), id),
+    ) {
+        let _ = root.remove_file(&path);
     }
 }
 
 /// Encrypts everything from `reader` into the blob file for `id`.
 /// Returns the plaintext size and its SHA-256 (raw bytes).
 pub(crate) fn write_blob(dir: &Path, id: &str, key: &Key, reader: &mut impl Read) -> Result<(i64, [u8; 32])> {
-    let final_path = blob_path(dir, id)?;
-    if let Some(parent) = final_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp = final_path.with_file_name(format!(".{id}.tmp"));
-    let written = (|| -> Result<(i64, [u8; 32])> {
+    let relative = blob_path(Path::new(""), id)?;
+    let root = crate::fs_boundary::Directory::open(dir)?;
+    root.directory(relative.parent().expect("blob has a parent"), true)?;
+    root.publish(&relative, |file| {
         let prefix: [u8; PREFIX_LEN] = random_bytes()?;
-        let mut file = File::create(&tmp)?;
         file.write_all(MAGIC)?;
         file.write_all(&[BLOB_VERSION])?;
         file.write_all(&prefix)?;
@@ -510,22 +515,11 @@ pub(crate) fn write_blob(dir: &Path, id: &str, key: &Key, reader: &mut impl Read
                 .checked_add(1)
                 .ok_or_else(|| Error::InvalidInput("attachment is too large".into()))?;
         }
-        file.sync_all()?;
-        drop(file);
-        crate::folder::rename_retry(&tmp, &final_path)?;
-        #[cfg(unix)]
-        if let Some(parent) = final_path.parent() {
-            File::open(parent)?.sync_all()?;
-        }
         let digest = hasher.finalize();
         let mut sha256 = [0u8; 32];
         sha256.copy_from_slice(&digest);
         Ok((size, sha256))
-    })();
-    if written.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    written
+    })
 }
 
 /// Opens a blob and checks it against its row before any chunk is read: the
@@ -533,8 +527,10 @@ pub(crate) fn write_blob(dir: &Path, id: &str, key: &Key, reader: &mut impl Read
 /// size implies — the cheapest possible truncation/extension check.
 /// Returns the file (positioned at the first chunk) and the nonce prefix.
 fn open_blob(dir: &Path, att: &Attachment) -> Result<(File, [u8; PREFIX_LEN])> {
-    let path = blob_path(dir, &att.id)?;
-    let mut file = File::open(&path).map_err(|_| corrupt(&att.id, "blob file is missing"))?;
+    let path = blob_path(Path::new(""), &att.id)?;
+    let mut file = crate::fs_boundary::Directory::open(dir)
+        .and_then(|root| root.open_regular(&path))
+        .map_err(|_| corrupt(&att.id, "blob file is missing or unsafe"))?;
     if file.metadata()?.len() != expected_len(att.size) {
         return Err(corrupt(&att.id, "blob file has the wrong length"));
     }

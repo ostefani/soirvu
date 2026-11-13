@@ -7,6 +7,7 @@ pub mod error;
 pub mod export;
 pub mod folder;
 pub mod folders;
+mod fs_boundary;
 pub mod import;
 pub mod storage;
 pub mod sync;

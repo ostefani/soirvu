@@ -389,14 +389,23 @@ fn create_files(
 /// unfinished `.tmp` uploads and dotfiles are skipped, like the sweep does.
 pub fn copy_vault_files(from: &Path, to: &Path) -> Result<()> {
     fs::create_dir_all(to)?;
-    fs::copy(from.join(DB_FILE), to.join(DB_FILE))?;
-    fs::copy(from.join(HEADER_FILE), to.join(HEADER_FILE))?;
-    copy_attachments(from, to)?;
+    let input = crate::fs_boundary::Directory::open(from)?;
+    let output = crate::fs_boundary::Directory::open(to)?;
+    for name in [DB_FILE, HEADER_FILE] {
+        let path = Path::new(name);
+        let mut source = input.open_regular(path)?;
+        output.publish(path, |file| Ok(io::copy(&mut source, file)?))?;
+    }
+    copy_attachments(from, &input, &output)?;
     Ok(())
 }
 
 /// Copies finished attachment blobs, preserving the id sharding.
-fn copy_attachments(from: &Path, to: &Path) -> Result<()> {
+fn copy_attachments(
+    from: &Path,
+    input: &crate::fs_boundary::Directory,
+    output: &crate::fs_boundary::Directory,
+) -> Result<()> {
     let src = from.join("attachments");
     if !src.exists() {
         return Ok(());
@@ -416,9 +425,11 @@ fn copy_attachments(from: &Path, to: &Path) -> Result<()> {
             if name.starts_with('.') {
                 continue;
             }
-            let dest_dir = to.join("attachments").join(shard.file_name());
-            fs::create_dir_all(&dest_dir)?;
-            fs::copy(file.path(), dest_dir.join(name.as_ref()))?;
+            let relative = Path::new("attachments").join(shard.file_name());
+            let path = relative.join(name.as_ref());
+            let mut source = input.open_regular(&path)?;
+            let dest_dir = output.directory(&relative, true)?;
+            dest_dir.publish(Path::new(name.as_ref()), |file| Ok(io::copy(&mut source, file)?))?;
         }
     }
     Ok(())

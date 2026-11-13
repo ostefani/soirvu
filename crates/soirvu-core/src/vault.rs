@@ -396,20 +396,9 @@ impl VaultHeader {
     /// Reads a regular header file without trusting its reported length.
     pub fn read_file(path: &std::path::Path) -> Result<Self> {
         use std::io::Read;
-        if !std::fs::metadata(path)?.is_file() {
-            return Err(Error::InvalidInput("vault header must be a regular file".into()));
-        }
-        let mut options = std::fs::OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NONBLOCK);
-        }
-        let file = options.open(path)?;
-        if !file.metadata()?.is_file() {
-            return Err(Error::InvalidInput("vault header must be a regular file".into()));
-        }
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+        let name = path.file_name().ok_or_else(|| Error::InvalidInput("missing vault header filename".into()))?;
+        let file = crate::fs_boundary::Directory::open(parent)?.open_regular(std::path::Path::new(name))?;
         let mut bytes = Vec::new();
         file.take(Self::MAX_HEADER_BYTES as u64 + 1).read_to_end(&mut bytes)?;
         Self::from_json(&bytes)

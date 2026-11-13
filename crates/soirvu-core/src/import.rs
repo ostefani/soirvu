@@ -21,6 +21,7 @@ use crate::entries::EntryDraft;
 use crate::error::{Error, Result};
 use crate::export::civil_from_days;
 use crate::folder::Vault;
+use crate::fs_boundary::Directory;
 
 const MAX_MARKDOWN_DEPTH: usize = 32;
 const MAX_MARKDOWN_TREE_ITEMS: usize = 20_000;
@@ -33,24 +34,13 @@ const MAX_JSON_IMPORT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ATTACHMENT_IMPORT_BYTES: u64 = 256 * 1024 * 1024;
 
 fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
-    let not_regular = || Error::InvalidInput("import input must be a regular file".into());
-    if !fs::symlink_metadata(path)?.is_file() {
-        return Err(not_regular());
-    }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    // A path can become a FIFO between the check and open. Open without
-    // waiting for a writer, then check the opened file before reading it.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
-    }
-    let file = options.open(path)?;
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let name = path.file_name().ok_or_else(|| Error::InvalidInput("missing import filename".into()))?;
+    read_bounded_file(Directory::open(parent)?.open_regular(Path::new(name))?, limit)
+}
+
+fn read_bounded_file(file: fs::File, limit: u64) -> Result<Vec<u8>> {
     let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Err(not_regular());
-    }
     if metadata.len() <= limit {
         let mut bytes = Vec::new();
         file.take(limit + 1).read_to_end(&mut bytes)?;
@@ -98,7 +88,8 @@ impl Vault {
     /// planning belongs to the desktop bridge, which shares the
     /// editor's Markdown parser.
     pub fn import_markdown(&mut self, dir: &Path) -> Result<ImportReport> {
-        let manifest = load_manifest(dir);
+        let root = Directory::open(dir)?;
+        let manifest = load_manifest(&root);
         let mut files = Vec::new();
         let mut tree_items = MAX_MARKDOWN_TREE_ITEMS;
         collect_markdown(dir, &mut files, 0, &mut tree_items)?;
@@ -184,8 +175,14 @@ impl Vault {
         let mut skipped = 0usize;
         let mut remaining = MAX_MARKDOWN_PLAN_BYTES;
         for file in &files {
-            let text = match read_bounded(file, remaining.min(MAX_MARKDOWN_NOTE_BYTES))
-                .and_then(|bytes| String::from_utf8(bytes).map_err(|_| Error::InvalidInput("note must be UTF-8".into())))
+            let relative = file.strip_prefix(dir).map_err(|_| Error::InvalidInput("note outside import root".into()))?;
+            let (text, modified) = match (|| {
+                let handle = root.open_regular(relative)?;
+                let modified = handle.metadata().ok().and_then(|meta| meta.modified().ok());
+                let bytes = read_bounded_file(handle, remaining.min(MAX_MARKDOWN_NOTE_BYTES))?;
+                let text = String::from_utf8(bytes).map_err(|_| Error::InvalidInput("note must be UTF-8".into()))?;
+                Ok::<_, Error>((text, modified))
+            })()
             {
                 Ok(text) => text,
                 Err(_) => {
@@ -222,7 +219,8 @@ impl Vault {
                 }
             };
             plans.push(PlannedFile {
-                file: file.clone(),
+                file: relative.to_path_buf(),
+                modified,
                 fm,
                 body,
                 folder,
@@ -267,7 +265,7 @@ impl Vault {
                     report.links_unresolved += 1;
                 }
             }
-            match self.insert_planned_markdown(dir, &plan) {
+            match self.insert_planned_markdown(&root, &plan) {
                 Ok((a, sa, export_only)) => {
                     report.entries += 1;
                     report.attachments += a;
@@ -380,7 +378,7 @@ impl Vault {
     /// folder. The body already carries remapped entry links.
     fn insert_planned_markdown(
         &mut self,
-        root: &Path,
+        root: &Directory,
         plan: &PlannedFile,
     ) -> Result<(usize, usize, usize)> {
         let file = &plan.file;
@@ -397,10 +395,7 @@ impl Vault {
         let entry_date = date_prefix(&stem)
             .or_else(|| fm.created.map(|ms| date_of_ms(ms)))
             .or_else(|| {
-                fs::metadata(file)
-                    .ok()?
-                    .modified()
-                    .ok()?
+                plan.modified?
                     .duration_since(std::time::UNIX_EPOCH)
                     .ok()
                     .map(|d| date_of_ms(d.as_millis() as i64))
@@ -421,18 +416,17 @@ impl Vault {
         let (refs, extra_refs) = asset_refs(&body);
         skipped_attachments += extra_refs;
         for rel in refs {
-            // No blanket `..` rejection: nested exports legitimately
-            // climb to the root `assets/` dir, and `contained_file`
-            // already refuses anything that resolves outside it.
-            let md_dir = file.parent().unwrap_or(root);
-            let path = [md_dir.join(&rel), root.join(&rel)]
+            // Nested notes can refer back to the root assets directory.
+            let note_dir = file.parent().unwrap_or(Path::new(""));
+            let source = [note_dir.join(&rel), PathBuf::from(&rel)]
                 .into_iter()
-                .find(|p| contained_file(root, p));
-            let Some(path) = path else {
+                .filter_map(|path| normalize_relative(&path))
+                .find_map(|path| root.open_regular(&path).ok().map(|file| (path, file)));
+            let Some((path, file)) = source else {
                 skipped_attachments += 1;
                 continue;
             };
-            let Ok(bytes) = read_bounded(&path, remaining) else {
+            let Ok(bytes) = read_bounded_file(file, remaining) else {
                 skipped_attachments += 1;
                 continue;
             };
@@ -721,6 +715,7 @@ fn now_ms() -> i64 {
 /// entry id and resolved live folder (or `None` for root).
 struct PlannedFile {
     file: PathBuf,
+    modified: Option<std::time::SystemTime>,
     fm: FrontMatter,
     body: String,
     folder: Option<String>,
@@ -753,8 +748,9 @@ struct ManifestFolder {
 /// Reads the export manifest when the imported directory is our
 /// own export. Unknown versions are ignored (layout guessing
 /// takes over) rather than failing the whole import.
-fn load_manifest(dir: &Path) -> Option<Manifest> {
-    let bytes = read_bounded(&dir.join("soirvu-export.json"), MAX_MARKDOWN_MANIFEST_BYTES).ok()?;
+fn load_manifest(dir: &Directory) -> Option<Manifest> {
+    let file = dir.open_regular(Path::new("soirvu-export.json")).ok()?;
+    let bytes = read_bounded_file(file, MAX_MARKDOWN_MANIFEST_BYTES).ok()?;
     let manifest: Manifest = serde_json::from_slice(&bytes).ok()?;
     if manifest.folders.len() > MAX_IMPORT_RECORDS {
         return None;
@@ -829,31 +825,18 @@ fn entry_link_targets(body: &str) -> Vec<String> {
     out
 }
 
-/// A path is usable when it is a real file under `root`: the final
-/// component must not be a symlink, no intermediate component may
-/// be one either (a symlinked directory would otherwise redirect
-/// resolution outside `root` while a lexical check still passes),
-/// and the resolved parent must stay inside the resolved root.
-/// Both sides resolve, so a symlinked root (macOS `/tmp`)
-/// compares like with like. Anything unresolvable is unusable.
-fn contained_file(root: &Path, path: &Path) -> bool {
-    if path
-        .symlink_metadata()
-        .is_ok_and(|m| m.file_type().is_symlink())
-    {
-        return false;
+fn normalize_relative(path: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir if normalized.pop() => {}
+            _ => return None,
+        }
     }
-    if !path.is_file() {
-        return false;
-    }
-    let Some(parent) = path.parent() else {
-        return false;
-    };
-    let (Ok(canonical_root), Ok(canonical_parent)) = (root.canonicalize(), parent.canonicalize())
-    else {
-        return false;
-    };
-    canonical_parent.starts_with(canonical_root)
+    Some(normalized)
 }
 
 fn collect_markdown(
@@ -1866,7 +1849,7 @@ mod tests {
         let link = tmp.path().join("link");
         fs::write(&file, b"data").unwrap();
         std::os::unix::fs::symlink(file, &link).unwrap();
-        assert!(matches!(read_bounded(&link, 8), Err(Error::InvalidInput(_))));
+        assert!(read_bounded(&link, 8).is_err());
     }
 
     #[cfg(unix)]
@@ -1880,7 +1863,7 @@ mod tests {
         let name = CString::new(path.as_os_str().as_bytes()).unwrap();
         // SAFETY: name is a valid, NUL-terminated path for this call.
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
-        assert!(matches!(read_bounded(&path, 8), Err(Error::InvalidInput(_))));
+        assert!(read_bounded(&path, 8).is_err());
     }
 
     /// P2: byte-offset slicing panicked on multibyte input. Every
