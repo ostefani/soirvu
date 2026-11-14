@@ -224,12 +224,16 @@ test('Enter renders a literal link already present at the caret', () => {
 
 test('typed links keep outer emphasis and Backspace restores the complete literal', () => {
     const literal = '[x](https://example.com)';
-    for (const [delimiter, mark] of [['**', 'strong'], ['*', 'em']]) {
+    for (const [delimiter, marks] of [
+        ['**', ['strong']],
+        ['*', ['em']],
+        ['***', ['em', 'strong']],
+    ]) {
         const doc = parseMarkdown(delimiter + literal.slice(0, -1) + delimiter);
         let state = EditorState.create({ doc, plugins: [inputRulesPlugin()] });
         state = state.apply(state.tr().setSelection(new TextSelection(literal.length)));
         state = state.apply(applyInputRules(state, literal.length, literal.length, ')'));
-        assert.deepEqual(state.doc.firstChild.firstChild.marks.map((m) => m.type.name), [mark, 'link']);
+        assert.deepEqual(state.doc.firstChild.firstChild.marks.map((m) => m.type.name), [...marks, 'link']);
         assert(undoInputRule(state, (tr) => { state = state.apply(tr); }));
         assert.equal(state.doc.textContent, literal);
         assert.equal(state.selection.from, literal.length + 1);
@@ -267,6 +271,7 @@ test('Backspace restores the literal link in paragraphs, headings, and table cel
         '# before ' + partial + ' after',
         '| Header |\n| --- |\n| before ' + partial + ' after |',
         '*before* ' + partial + ' after',
+        '`before` ' + partial + ' after',
     ]) {
         const doc = parseMarkdown(source);
         let pos;
@@ -292,7 +297,15 @@ test('rendering a link exposes only its actual destination in the tooltip', (t) 
             this.children = [];
         }
         setAttribute(name, value) { this.attributes.set(name, String(value)); }
-        appendChild(node) { this.children.push(node); }
+        getAttribute(name) { return this.attributes.get(name) ?? null; }
+        appendChild(node) {
+            node.parent = this;
+            this.children.push(node);
+        }
+        closest(selector) {
+            if (selector === 'a[data-href]' && this.tag === 'a' && this.attributes.has('data-href')) return this;
+            return this.parent?.closest(selector) ?? null;
+        }
     }
     const globals = { document: globalThis.document, Node: globalThis.Node };
     globalThis.Node = TestNode;
@@ -319,6 +332,15 @@ test('rendering a link exposes only its actual destination in the tooltip', (t) 
         assert.equal(rendered.attributes.get('title'), destination === href ? href : undefined);
         assert.equal(rendered.attributes.get('data-href'), destination === href ? href : undefined);
         assert.equal(rendered.attributes.has('href'), false);
+        assert.equal(rendered.children[0].tag, 'label');
+        const opened = [];
+        const view = Object.assign(Object.create(EditorView.prototype), {
+            dom: { contains: (node) => node === rendered },
+            readDOMSelection: () => null,
+            handleClickOn: (url) => opened.push(url),
+        });
+        view.onClick({ target: rendered, button: 0, detail: 1, preventDefault() {} });
+        assert.deepEqual(opened, destination === href ? [href] : []);
         assert.equal(serializeMarkdown(doc), source);
     }
 });

@@ -161,7 +161,7 @@ const marks = {
         inclusive: false,
         toDOM(node) {
             const { href } = node.attrs;
-            if (!isWithinLinkLimit(href)) return ["span", 0];
+            if (!isWithinLinkLimit(href)) return ["span"];
             return ["a", {
                 "data-href": href,
                 // Authored titles are preserved in Markdown. The tooltip

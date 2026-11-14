@@ -381,6 +381,9 @@ mod url_tests {
         ] {
             assert!(parse_outbound_url(invalid).is_none(), "{invalid:?}");
         }
-        assert!(parse_outbound_url(&format!("https://example.com/{}", "a".repeat(MAX_OUTBOUND_URL_BYTES))).is_none());
+        let prefix = "https://example.com/";
+        let at_limit = format!("{prefix}{}", "a".repeat(4096 - prefix.len()));
+        assert!(parse_outbound_url(&at_limit).is_some());
+        assert!(parse_outbound_url(&(at_limit + "a")).is_none());
     }
 }

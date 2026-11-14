@@ -42,7 +42,10 @@ test('web destinations are normalized and bounded before opening', () => {
     assert.equal(normalizeWebHref('https://münich.example/help'), 'https://xn--mnich-kva.example/help');
     assert.equal(normalizeWebHref('https://example.com/%E2%80%8B'), null);
     assert.equal(normalizeWebHref('https://example.com/%E2%80%AE'), null);
-    assert.equal(normalizeWebHref('https://example.com/' + 'a'.repeat(4096)), null);
+    const prefix = 'https://example.com/';
+    const atLimit = prefix + 'a'.repeat(4096 - prefix.length);
+    assert.equal(normalizeWebHref(atLimit), atLimit);
+    assert.equal(normalizeWebHref(atLimit + 'a'), null);
     assert.equal(normalizeWebHref('https://user@example.com'), null);
 });
 
