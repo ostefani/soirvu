@@ -664,9 +664,6 @@ export class EditorView {
             auxclick: (e) => {
                 if (this.linkAtEvent(e)) e.preventDefault();
             },
-            dragstart: (e) => {
-                if (this.linkAtEvent(e)) e.preventDefault();
-            },
             drop: (e) => this.onDrop(e),
             dragover: (e) => e.preventDefault(),
         };

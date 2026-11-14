@@ -22,7 +22,7 @@ import { MarkdownParser } from "./markdown-adapter/parser.js";
 import { MarkdownSerializer, commonNodes, commonMarks } from "./markdown-adapter/serializer.js";
 
 import { schema } from "./schema.js";
-import { classifyHref } from "../lib/entry-target.js";
+import { classifyHref, isWithinLinkLimit } from "../lib/entry-target.js";
 
 const RAW_INFO = "soirvu-raw";
 // Distinct encodings let Markdown carry empty blocks and breaks in positions
@@ -297,9 +297,10 @@ parser.tokenHandlers.fence = (state, tok) => {
 // close token then removes a mark that was never opened — a no-op.)
 parser.tokenHandlers.link_open = (state, tok) => {
     const href = tok.attrGet("href");
-    if (!allowedHref(href)) return;
+    if (!allowedHref(href) || !isWithinLinkLimit(href)) return;
+    const title = tok.attrGet("title");
     state.openMark(
-        schema.marks.link.create({ href, title: tok.attrGet("title") || null }),
+        schema.marks.link.create({ href, title: title && isWithinLinkLimit(title) ? title : null }),
     );
 };
 

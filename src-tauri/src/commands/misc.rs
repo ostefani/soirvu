@@ -370,6 +370,7 @@ mod url_tests {
             "https://@example.com",
             "https://example.com/\n",
             "https://example.com/%00",
+            "https://example.com/caf%E9",
             "https://example.com/%E2%80%AE",
             "https://example.com/%E2%80%8B",
             "mailto:a@example.com,b@example.com",

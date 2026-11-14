@@ -62,7 +62,7 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
             }
             from = sel.from;
             to = sel.to;
-            label = target.linkLabel?.trim() || (from === to ? defaultLinkLabel(target) : editor.readText(from, to));
+            label = target.linkLabel?.trim() || editor.readText(from, to).trim() || defaultLinkLabel(target);
         }
         if (!label.trim()) {
             return false;

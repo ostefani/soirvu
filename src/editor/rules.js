@@ -88,11 +88,11 @@ function cutBlockStart(count) {
     };
 }
 
-function finishRule(state, tr) {
+function finishRule(state, tr, selectionBefore = state.selection, inverses = tr?.inverses) {
     if (!tr) return null;
     tr.setMeta(rulesKey, {
-        inverses: tr.inverses,
-        selectionBefore: state.selection,
+        inverses,
+        selectionBefore,
         selectionAfter: tr.selection,
     });
     tr.setMeta("addToHistory", false);
@@ -245,8 +245,10 @@ const MARK_RULES = [
 function linkRule(state, $from, text, closing = text.charAt(text.length - 1)) {
     if (closing !== ")" && closing !== ">") return null;
     const before = $from.parent.childBefore($from.parentOffset);
-    if (before.node && (!before.node.isText || before.node.marks.some((mark) =>
-        mark.type === state.schema.marks.code || mark.type === state.schema.marks.link))) return null;
+    if (before.node && !before.node.isText) return null;
+    const outerMarks = before.node?.marks ?? cursorMarks(state);
+    if (outerMarks.some((mark) =>
+        mark.type === state.schema.marks.code || mark.type === state.schema.marks.link)) return null;
     const prefix = before.node?.text.slice(0, $from.parentOffset - before.offset) ?? "";
     const combined = prefix + text;
     const separator = closing === ")" ? combined.lastIndexOf("](") : -1;
@@ -256,17 +258,29 @@ function linkRule(state, $from, text, closing = text.charAt(text.length - 1)) {
     if (closing === ">" && /\]\(\s*$/.test(combined.slice(0, start))) return null;
     const source = combined.slice(start);
     if (closing === ">" && !/^<(?:https?:\/\/|mailto:)/i.test(source)) return null;
-    const parsed = parseInlineMarkdown(source);
+    let parsed;
+    try {
+        parsed = parseInlineMarkdown(source);
+    } catch {
+        return null;
+    }
     const paragraph = parsed.firstChild;
     if (parsed.childCount !== 1 || paragraph.type !== state.schema.nodes.paragraph
         || !paragraph.childCount || !paragraph.content.content.every((node) =>
             node.isText && state.schema.marks.link.isInSet(node.marks))) return null;
     const tr = state.tr();
     const from = $from.pos - (prefix.length - start);
-    tr.replaceRange(from, $from.pos, inlineSlice(paragraph.content));
+    const linked = [];
+    paragraph.forEach((node) => {
+        const marks = outerMarks.reduce((set, mark) => mark.addToSet(set), node.marks);
+        linked.push(node.mark(marks));
+    });
+    const literalEnd = $from.pos + text.length;
+    if (text) tr.insert($from.pos, [state.schema.text(text, outerMarks)]);
+    tr.replaceRange(from, literalEnd, inlineSlice(Fragment.fromArray(linked)));
     tr.setSelection(new TextSelection(from + paragraph.content.size));
-    tr.setStoredMarks(before.node?.marks ?? cursorMarks(state));
-    return finishRule(state, tr);
+    tr.setStoredMarks(outerMarks);
+    return finishRule(state, tr, new TextSelection(literalEnd), tr.inverses.slice(-1));
 }
 
 /** Converts a complete literal Markdown link immediately before the caret. */
@@ -292,7 +306,9 @@ function markRule(state, $from, blockText) {
         const m = blockText.match(rule.pattern);
         if (!m) continue;
         // Markdown delimiters within a URL belong to its address.
-        if (/https?:\/\/\S*$/i.test(blockText.slice(0, m.index))) continue;
+        let start = m.index;
+        while (start > 0 && !/\s/.test(blockText[start - 1])) start--;
+        if (/https?:\/\//i.test(blockText.slice(start, m.index))) continue;
         if (rule.guard && !rule.guard(blockText, m)) continue;
         const inner = m[1];
         const matchStart = blockText.length - m[0].length;

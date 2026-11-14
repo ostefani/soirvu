@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makePasteHandler, parseMarkdown, serializeMarkdown } from '../index.js';
 import { EditorState, TextSelection } from '../state.js';
-import { applyInputRules, inputRulesPlugin, keymapPlugin } from '../rules.js';
+import { applyInputRules, inputRulesPlugin, keymapPlugin, undoInputRule } from '../rules.js';
 import { insertTextIn } from '../commands.js';
 import { EditorView } from '../view.js';
 
@@ -220,4 +220,41 @@ test('Enter renders a literal link already present at the caret', () => {
     assert.equal(view.state.doc.firstChild.textContent, 'test');
     assert.equal(view.state.doc.firstChild.firstChild.marks[0].attrs.href, 'https://example.com');
     assert.equal(view.state.doc.childCount, 2);
+});
+
+test('typed links keep outer emphasis and Backspace restores the complete literal', () => {
+    const literal = '[x](https://example.com)';
+    for (const [delimiter, mark] of [['**', 'strong'], ['*', 'em']]) {
+        const doc = parseMarkdown(delimiter + literal.slice(0, -1) + delimiter);
+        let state = EditorState.create({ doc, plugins: [inputRulesPlugin()] });
+        state = state.apply(state.tr().setSelection(new TextSelection(literal.length)));
+        state = state.apply(applyInputRules(state, literal.length, literal.length, ')'));
+        assert.deepEqual(state.doc.firstChild.firstChild.marks.map((m) => m.type.name), [mark, 'link']);
+        assert(undoInputRule(state, (tr) => { state = state.apply(tr); }));
+        assert.equal(state.doc.textContent, literal);
+        assert.equal(state.selection.from, literal.length + 1);
+    }
+});
+
+test('legacy HTTP and inline attachment links round trip', () => {
+    const source = '[x](http://example.com) and [f](attachment:01900000-0000-7000-8000-000000000001)';
+    const doc = parseMarkdown(source);
+    const links = doc.firstChild.content.content.flatMap((node) => node.marks.map((mark) => mark.attrs.href));
+    assert.deepEqual(links, ['http://example.com', 'attachment:01900000-0000-7000-8000-000000000001']);
+    assert(doc.eq(parseMarkdown(serializeMarkdown(doc))));
+});
+
+test('link input leaves invalid destinations and literal syntax alone', () => {
+    for (const source of [
+        '\\[x](https://example.com)',
+        '![x](https://example.com)',
+        '[x](javascript:alert)',
+        '[x](data:text/plain,hello)',
+        '[x](https://example.com/' + 'a'.repeat(4096) + ')',
+    ]) {
+        const state = EditorState.create({ doc: parseMarkdown('') });
+        assert.equal(applyInputRules(state, 1, 1, source), null);
+    }
+    const doc = parseMarkdown('[x](https://example.com "' + 'a'.repeat(4097) + '")');
+    assert.equal(doc.firstChild.firstChild.marks[0].attrs.title, null);
 });

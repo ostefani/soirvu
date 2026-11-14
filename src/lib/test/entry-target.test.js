@@ -50,3 +50,7 @@ test('a literal percent is allowed while encoded format characters stay blocked'
     assert.equal(normalizeWebHref('https://example.com/50%off'), 'https://example.com/50%off');
     assert.equal(normalizeWebHref('https://example.com/50%off/%E2%80%8D'), null);
 });
+
+test('legacy percent escapes with invalid UTF-8 fail closed', () => {
+    assert.equal(normalizeWebHref('https://example.com/caf%E9'), null);
+});
