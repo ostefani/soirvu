@@ -66,6 +66,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       # SQLCipher/OpenSSL are built from source (rusqlite's
       # bundled-sqlcipher-vendored-openssl): the VC-WIN64A build needs
       # a full perl plus nasm, and Git's own crippled MSYS perl
@@ -82,6 +84,8 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
       - name: Check the bridge compiles
         run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: Lint the platform bridge
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets
       - name: Check the Touch ID variant compiles (macOS)
         if: runner.os == 'macOS'
         run: cargo check --manifest-path src-tauri/Cargo.toml --features touch-id

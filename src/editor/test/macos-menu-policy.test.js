@@ -23,4 +23,14 @@ test('the macOS policy suppresses stock menus and immediate actions on plain tex
         });
         assert.equal(canceled, true, type);
     }
+
+    for (const [ctrlKey, metaKey, code, expected] of [
+        [true, true, 'KeyD', true],
+        [false, true, 'KeyD', false],
+        [true, true, 'KeyC', false],
+    ]) {
+        let canceled = false;
+        handlers.get('keydown')({ ctrlKey, metaKey, code, preventDefault() { canceled = true; } });
+        assert.equal(canceled, expected);
+    }
 });

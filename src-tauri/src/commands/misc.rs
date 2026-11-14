@@ -73,6 +73,8 @@ fn parse_outbound_url(input: &str) -> Option<tauri::Url> {
 
 #[tauri::command]
 pub async fn open_link(app: AppHandle, url: String) -> Result<bool, String> {
+    let state = app.state::<AppState>();
+    let session = ipc(state.session())?;
     let url = parse_outbound_url(&url).ok_or_else(|| "invalid_input".to_string())?;
     let (question, destination) = match url.scheme() {
         "https" => ("Open this link in your browser?", url.origin().ascii_serialization()),
@@ -95,8 +97,14 @@ pub async fn open_link(app: AppHandle, url: String) -> Result<bool, String> {
     if !rx.await.unwrap_or(false) {
         return Ok(false);
     }
-    ipc(platform::open_external(std::ffi::OsStr::new(url.as_str())).map_err(Into::into))?;
-    Ok(true)
+    let mut result = Err("locked".to_owned());
+    state.deliver_session(&session, |current| {
+        if current {
+            result = ipc(platform::open_external(std::ffi::OsStr::new(url.as_str())).map_err(Into::into))
+                .map(|()| true);
+        }
+    });
+    result
 }
 
 #[tauri::command]

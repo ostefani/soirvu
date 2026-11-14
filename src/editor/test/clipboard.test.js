@@ -32,6 +32,7 @@ test('copy preserves markup in a backward selection and pastes it as Markdown', 
     let pasted;
     EditorView.prototype.onPaste.call({
         state: destination,
+        editable: () => true,
         onPasteText: makePasteHandler(),
         dispatch(transaction) { pasted = destination.apply(transaction); },
     }, event);
@@ -42,6 +43,7 @@ test('copy preserves markup in a backward selection and pastes it as Markdown', 
 test('cut writes Markdown and removes the live selection in a transaction', () => {
     const view = Object.assign(Object.create(EditorView.prototype), {
         state: EditorState.create({ doc: parseMarkdown('Before *italic* after') }),
+        editable: () => true,
         readDOMSelection: () => ({ anchor: 14, head: 8 }),
         dispatch(tr) { this.state = this.state.apply(tr); },
     });
@@ -54,6 +56,18 @@ test('cut writes Markdown and removes the live selection in a transaction', () =
     assert.equal(prevented, true);
     assert.equal(flavors.get('text/x-soirvu-markdown'), '*italic*');
     assert.equal(serializeMarkdown(view.state.doc), 'Before  after');
+});
+
+test('cut cancels the browser default while composing or read-only', () => {
+    for (const [composing, editable] of [[true, true], [false, false]]) {
+        let canceled = false;
+        EditorView.prototype.onCut.call({ composing, editable: () => editable }, {
+            clipboardData: { setData: () => assert.fail('clipboard changed') },
+            preventDefault() { canceled = true; },
+            stopPropagation() {},
+        });
+        assert.equal(canceled, true);
+    }
 });
 
 test('pasting a standalone HTTPS URL keeps it plain', () => {
@@ -213,6 +227,7 @@ test('editor input renders complete link markup delivered in one event', () => {
     const doc = parseMarkdown('');
     const view = Object.assign(Object.create(EditorView.prototype), {
         state: EditorState.create({ doc, plugins: [inputRulesPlugin()] }),
+        editable: () => true,
         dispatchTransaction(tr) { this.state = this.state.apply(tr); },
     });
     view.onBeforeInput({
@@ -313,6 +328,7 @@ test('rendering a link exposes only its actual destination in the tooltip', (t) 
             this.tag = tag;
             this.attributes = new Map();
             this.children = [];
+            this.dataset = {};
         }
         setAttribute(name, value) { this.attributes.set(name, String(value)); }
         getAttribute(name) { return this.attributes.get(name) ?? null; }
@@ -360,6 +376,21 @@ test('rendering a link exposes only its actual destination in the tooltip', (t) 
         view.onClick({ target: rendered, button: 0, detail: 1, preventDefault() {} });
         assert.deepEqual(opened, destination === href ? [href] : []);
         assert.equal(serializeMarkdown(doc), source);
+    }
+
+    const untrusted = `[label](${href}) ![tracking](https://remote.example/pixel.png) <iframe src="https://remote.example/"></iframe>`;
+    let pasted = EditorState.create({ doc: parseMarkdown('') });
+    makePasteHandler()(untrusted, pasted, (tr) => { pasted = pasted.apply(tr); }, true);
+    for (const doc of [parseMarkdown(untrusted), pasted.doc]) {
+        const container = new TestNode('p');
+        EditorView.prototype.renderContent(doc.firstChild, container, 1);
+        function assertInert(node) {
+            assert.notEqual(node.tag, 'iframe');
+            assert.equal(node.attributes.has('href'), false);
+            assert.equal(node.attributes.has('src'), false);
+            node.children.forEach(assertInert);
+        }
+        assertInert(container);
     }
 });
 

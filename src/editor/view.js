@@ -737,6 +737,10 @@ export class EditorView {
     }
 
     onBeforeInput(e) {
+        if (!this.editable()) {
+            e.preventDefault();
+            return;
+        }
         if (this.composing) return;
         const state = this.state;
         const sel = state.selection;
@@ -809,6 +813,7 @@ export class EditorView {
 
     onDrop(e) {
         e.preventDefault();
+        if (!this.editable()) return;
         const files = e.dataTransfer ? e.dataTransfer.files : null;
         if (files && files.length && this.onAttachFile) {
             for (const file of files) this.onAttachFile(file);
@@ -833,6 +838,11 @@ export class EditorView {
     }
 
     onCut(e) {
+        if (this.composing || !this.editable() || !e.clipboardData) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
         const selection = this.writeClipboardSelection(e);
         if (!selection) return;
         const { from, to } = selection;
@@ -843,7 +853,7 @@ export class EditorView {
 
     onPaste(e) {
         e.preventDefault();
-        if (this.composing) return;
+        if (this.composing || !this.editable()) return;
         const files = e.clipboardData ? e.clipboardData.files : null;
         if (files && files.length && this.onAttachFile) {
             for (const file of files) this.onAttachFile(file);

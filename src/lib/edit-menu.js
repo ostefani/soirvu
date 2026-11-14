@@ -9,7 +9,10 @@ export function editMenuRequest(event, activeElement, selection) {
         ? field === activeElement && !field.disabled && !field.readOnly
         : Boolean(target?.isContentEditable && activeElement?.contains(target));
     const copy = isTextField
-        ? field === activeElement && field.type !== 'password' && field.selectionEnd > field.selectionStart
+        ? field === activeElement && !field.disabled && field.type !== 'password' &&
+            (field.type === 'email'
+                ? Boolean(selection?.containsNode(field, true) && selection.toString())
+                : field.selectionEnd > field.selectionStart)
         : Boolean(target && selection && !selection.isCollapsed && selection.containsNode(target, true));
     if (!copy && !editable) return null;
 

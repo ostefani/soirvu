@@ -25,4 +25,14 @@ test('the edit menu distinguishes selected text, editable fields and password fi
     assert.deepEqual(editMenuRequest(event, field, selection),
         { x: 20, y: 40, copy: false, cut: false, paste: true });
     assert.equal(editMenuRequest(event, null, selection), null);
+    field.type = 'email';
+    field.selectionStart = field.selectionEnd = null;
+    const emailSelection = { ...selection, toString: () => 'name@example.test' };
+    assert.deepEqual(editMenuRequest(event, field, emailSelection),
+        { x: 20, y: 40, copy: true, cut: true, paste: true });
+    field.readOnly = true;
+    assert.deepEqual(editMenuRequest(event, field, emailSelection),
+        { x: 20, y: 40, copy: true, cut: false, paste: false });
+    field.disabled = true;
+    assert.equal(editMenuRequest(event, field, emailSelection), null);
 });

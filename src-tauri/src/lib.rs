@@ -153,16 +153,18 @@ pub fn run() {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .title("SoirVu")
+            .visible(false)
             .inner_size(1100.0, 760.0)
             .min_inner_size(720.0, 480.0)
             .on_navigation(move |url| {
                 matches_app_origin(url, dev.as_ref().unwrap_or(&packaged))
             })
             .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny);
-            // platform-ok: WKWebView's recognizer dispatches the cancellable force event.
+            // platform-ok: configure WKWebView before creation and cancel stock menus at document start.
             #[cfg(target_os = "macos")]
             let builder = builder
-                .allow_link_preview(true)
+                .allow_link_preview(false)
+                .with_webview_configuration(context_menu::macos_configuration()?)
                 .initialization_script(context_menu::MACOS_POLICY);
             // The editor handles drops itself (files, block
             // drags) through the page's own events; Tauri's
@@ -182,6 +184,7 @@ pub fn run() {
             let builder = builder.incognito(true);
             let window = builder.build()?;
             context_menu::install(&window)?;
+            window.show()?;
             let _ = window.set_focus();
 
             // OS lock signals (§9): system sleep, screen lock and

@@ -84,7 +84,7 @@
     }
 
     function handleContextMenu(event) {
-        if (!window.isTauri || !navigator.platform.includes('Mac') || !event.isTrusted) return;
+        if (!window.soirvuNativeEditMenu || !event.isTrusted) return;
         event.preventDefault();
         const request = editMenuRequest(event, document.activeElement, window.getSelection());
         if (request) api.showEditMenu(request).catch(() => {});

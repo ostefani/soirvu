@@ -554,7 +554,7 @@ fn error_codes() {
     insta::assert_snapshot!("error_codes", lines.join("\n"));
 }
 
-/// The IPC surface is declared in three places that must agree:
+/// The IPC surface is declared in four places that must agree:
 /// the build.rs manifest (what Rust exposes), the capability
 /// allow-list (what the window may call), and the isolation
 /// frame's allow-list (what the sandbox passes through). A new
@@ -618,4 +618,20 @@ fn ipc_surface_lists_agree() {
 
     assert_eq!(manifest, isolation, "build.rs manifest vs isolation frame");
     assert_eq!(manifest, capabilities, "build.rs manifest vs capabilities");
+    let registered: BTreeSet<String> = include_str!("../lib.rs")
+        .split_once(".invoke_handler(tauri::generate_handler![")
+        .unwrap()
+        .1
+        .split_once("])")
+        .unwrap()
+        .0
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .trim_end_matches(',')
+                .rsplit_once("::")
+                .map(|(_, name)| name.to_owned())
+        })
+        .collect();
+    assert_eq!(manifest, registered, "build.rs manifest vs invoke handler");
 }
