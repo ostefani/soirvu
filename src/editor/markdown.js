@@ -297,7 +297,7 @@ parser.tokenHandlers.fence = (state, tok) => {
 // close token then removes a mark that was never opened — a no-op.)
 parser.tokenHandlers.link_open = (state, tok) => {
     const href = tok.attrGet("href");
-    if (!allowedHref(href) || !isWithinLinkLimit(href)) return;
+    if (!allowedHref(href)) return;
     const title = tok.attrGet("title");
     state.openMark(
         schema.marks.link.create({ href, title: title && isWithinLinkLimit(title) ? title : null }),

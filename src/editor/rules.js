@@ -18,6 +18,7 @@ import { Fragment } from "prosemirror-model";
 import { inlineSlice } from "./transform.js";
 import { TextSelection, createPlugin, cursorMarks } from "./state.js";
 import { parseInlineMarkdown } from "./markdown.js";
+import { isWithinLinkLimit } from "../lib/entry-target.js";
 import {
     chainCommands,
     createParagraphNear,
@@ -266,8 +267,10 @@ function linkRule(state, $from, text, closing = text.charAt(text.length - 1)) {
     }
     const paragraph = parsed.firstChild;
     if (parsed.childCount !== 1 || paragraph.type !== state.schema.nodes.paragraph
-        || !paragraph.childCount || !paragraph.content.content.every((node) =>
-            node.isText && state.schema.marks.link.isInSet(node.marks))) return null;
+        || !paragraph.childCount || !paragraph.content.content.every((node) => {
+            const link = state.schema.marks.link.isInSet(node.marks);
+            return node.isText && link && isWithinLinkLimit(link.attrs.href);
+        })) return null;
     const tr = state.tr();
     const from = $from.pos - (prefix.length - start);
     const linked = [];
@@ -277,10 +280,11 @@ function linkRule(state, $from, text, closing = text.charAt(text.length - 1)) {
     });
     const literalEnd = $from.pos + text.length;
     if (text) tr.insert($from.pos, [state.schema.text(text, outerMarks)]);
+    const conversionStart = tr.inverses.length;
     tr.replaceRange(from, literalEnd, inlineSlice(Fragment.fromArray(linked)));
     tr.setSelection(new TextSelection(from + paragraph.content.size));
     tr.setStoredMarks(outerMarks);
-    return finishRule(state, tr, new TextSelection(literalEnd), tr.inverses.slice(-1));
+    return finishRule(state, tr, new TextSelection(literalEnd), tr.inverses.slice(conversionStart));
 }
 
 /** Converts a complete literal Markdown link immediately before the caret. */

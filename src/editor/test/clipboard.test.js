@@ -258,3 +258,67 @@ test('link input leaves invalid destinations and literal syntax alone', () => {
     const doc = parseMarkdown('[x](https://example.com "' + 'a'.repeat(4097) + '")');
     assert.equal(doc.firstChild.firstChild.marks[0].attrs.title, null);
 });
+
+test('Backspace restores the literal link in paragraphs, headings, and table cells', () => {
+    const literal = '[x](https://example.com)';
+    const partial = literal.slice(0, -1);
+    for (const source of [
+        'before ' + partial + ' after',
+        '# before ' + partial + ' after',
+        '| Header |\n| --- |\n| before ' + partial + ' after |',
+        '*before* ' + partial + ' after',
+    ]) {
+        const doc = parseMarkdown(source);
+        let pos;
+        doc.descendants((node, start) => {
+            const index = node.isText ? node.text.indexOf(partial) : -1;
+            if (index >= 0) pos = start + index + partial.length;
+        });
+        let state = EditorState.create({ doc, plugins: [inputRulesPlugin()] });
+        state = state.apply(state.tr().setSelection(new TextSelection(pos)));
+        const literalState = state.apply(state.tr().insert(pos, [state.schema.text(')')]));
+        state = state.apply(applyInputRules(state, pos, pos, ')'));
+        assert(undoInputRule(state, (tr) => { state = state.apply(tr); }));
+        assert(state.doc.eq(literalState.doc), source);
+        assert.equal(state.selection.from, pos + 1, source);
+    }
+});
+
+test('rendering a link exposes only its actual destination in the tooltip', (t) => {
+    class TestNode {
+        constructor(tag) {
+            this.tag = tag;
+            this.attributes = new Map();
+            this.children = [];
+        }
+        setAttribute(name, value) { this.attributes.set(name, String(value)); }
+        appendChild(node) { this.children.push(node); }
+    }
+    const globals = { document: globalThis.document, Node: globalThis.Node };
+    globalThis.Node = TestNode;
+    globalThis.document = {
+        createElement: (tag) => new TestNode(tag),
+        createTextNode: (value) => new TestNode(value),
+    };
+    t.after(() => {
+        for (const [name, value] of Object.entries(globals)) {
+            if (value === undefined) delete globalThis[name];
+            else globalThis[name] = value;
+        }
+    });
+
+    const href = 'https://actual.example/';
+    const oversized = 'https://actual.example/' + 'a'.repeat(4096);
+    for (const destination of [href, oversized]) {
+        const source = `[label](${destination} "https://different.example/")`;
+        const doc = parseMarkdown(source);
+        const container = new TestNode('p');
+        EditorView.prototype.renderContent(doc.firstChild, container, 1);
+        const rendered = container.children[0];
+        assert.equal(rendered.tag, destination === href ? 'a' : 'span');
+        assert.equal(rendered.attributes.get('title'), destination === href ? href : undefined);
+        assert.equal(rendered.attributes.get('data-href'), destination === href ? href : undefined);
+        assert.equal(rendered.attributes.has('href'), false);
+        assert.equal(serializeMarkdown(doc), source);
+    }
+});

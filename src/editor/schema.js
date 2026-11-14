@@ -8,6 +8,7 @@
 // (see markdown.js for the parser side).
 
 import { Schema } from "prosemirror-model";
+import { isWithinLinkLimit } from "../lib/entry-target.js";
 
 // CommonMark specs adapted from prosemirror-markdown 1.13.8.
 // See markdown-adapter/LICENSE.
@@ -159,9 +160,13 @@ const marks = {
         },
         inclusive: false,
         toDOM(node) {
+            const { href } = node.attrs;
+            if (!isWithinLinkLimit(href)) return ["span", 0];
             return ["a", {
-                "data-href": node.attrs.href,
-                title: node.attrs.title,
+                "data-href": href,
+                // Authored titles are preserved in Markdown. The tooltip
+                // only displays the actual destination.
+                title: href,
                 role: "link",
                 tabindex: 0,
             }];

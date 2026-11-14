@@ -620,7 +620,7 @@ test('external link opening reports failures and coalesces clicks while the dial
     pending.reject(new Error('native opener failed'));
     await opening;
     assert.deepEqual(notified, [SESSION_TEXT.linkOpenFailed]);
-    await session.prepareLock();
+    assert.equal(await session.prepareLock(), true);
     await session.links.openHref('https://example.org', false);
     assert.equal(calls.length, 1);
     session.dispose();
