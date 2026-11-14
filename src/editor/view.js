@@ -366,8 +366,12 @@ export class EditorView {
         const editorRect = this.dom.getBoundingClientRect();
         this.dragBlock = { el: blockEl, pos: blockEl._pos, node: blockEl._node };
         this.dragHandle.style.left = Math.max(0, editorRect.left - 22) + "px";
-        this.dragHandle.style.top = rect.top + "px";
         this.dragHandle.style.display = "block";
+        // Keep the grip beside the pointer in tall blocks. From a
+        // lower code line, the pointer can cross the gutter directly.
+        const height = this.dragHandle.offsetHeight;
+        const top = Math.max(rect.top, Math.min(e.clientY - height / 2, rect.bottom - height));
+        this.dragHandle.style.top = top + "px";
     }
 
     hideDragHandle() {
