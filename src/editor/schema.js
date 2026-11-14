@@ -81,7 +81,8 @@ const nodes = {
         },
         group: "inline",
         draggable: true,
-        toDOM(node) { return ["img", node.attrs]; }
+        // The view sets src after validating the attachment destination.
+        toDOM(node) { return ["img", { alt: node.attrs.alt, title: node.attrs.title }]; }
     },
     hard_break: {
         inline: true,

@@ -167,12 +167,9 @@ export class EditorView {
             contentEl = parent;
         });
         if (node.type.name === "image") {
-            // §6.5: only attachment: images ever load, through the
-            // asset protocol. A remote URL renders as a placeholder
-            // and causes no network request.
-            const src = node.attrs.src || "";
-            if (src.startsWith("attachment:")) {
-                el.setAttribute("src", assetUrl(src.slice("attachment:".length)));
+            // Match Rust's canonical lowercase attachment UUID format.
+            const attachment = /^attachment:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(node.attrs.src);
+            if (attachment) {
                 // An image this engine cannot decode (HEIC on
                 // WebKitGTK or WebView2, say) fires error: mark
                 // it, and the stylesheet shows a labelled
@@ -186,8 +183,8 @@ export class EditorView {
                         `${el.getAttribute("alt") || "Image"} — cannot be shown here; double-click to open the file.`,
                     );
                 });
+                el.setAttribute("src", assetUrl(attachment[1]));
             } else {
-                el.removeAttribute("src");
                 el.setAttribute("data-blocked-image", "");
             }
         }
@@ -786,16 +783,15 @@ export class EditorView {
     }
 
     onPaste(e) {
+        e.preventDefault();
         if (this.composing) return;
         const files = e.clipboardData ? e.clipboardData.files : null;
         if (files && files.length && this.onAttachFile) {
-            e.preventDefault();
             for (const file of files) this.onAttachFile(file);
             return;
         }
         const text = e.clipboardData ? e.clipboardData.getData("text/plain") : null;
         if (text != null && this.onPasteText) {
-            e.preventDefault();
             this.lastHandledInputAt = performance.now();
             this.onPasteText(text, this.state, (tr) => this.dispatch(tr));
         }
