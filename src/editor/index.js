@@ -39,9 +39,9 @@ function looksLikeMarkdown(text) {
 /** Paste policy (§6.5): plain text goes in as text (newlines as
  *  hard breaks, blank lines as paragraph splits); text that looks
  *  like Markdown is parsed as Markdown. Foreign HTML never enters
- *  the schema — only the clipboard's text/plain is ever read. */
+ *  the schema. Editor copies explicitly identify their Markdown. */
 export function makePasteHandler() {
-    return (text, state, dispatch) => {
+    return (text, state, dispatch, isMarkdown = false) => {
         // Inside a code or raw block the clipboard is literal
         // text: no Markdown parsing, no block surgery — the
         // block holds text and the paste must stay text,
@@ -56,7 +56,7 @@ export function makePasteHandler() {
                 return;
             }
         }
-        if (looksLikeMarkdown(text)) {
+        if (isMarkdown || looksLikeMarkdown(text)) {
             const frag = parseMarkdown(text).content;
             const tr = state.tr();
             const pos = deleteSelectionIn(tr, state);

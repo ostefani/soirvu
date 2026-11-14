@@ -28,6 +28,9 @@ import { deleteSelection as deleteSelectionCmd, insertTextIn } from "./commands.
 import { inlineSlice } from "./transform.js";
 import { caretScrollDelta } from "./scroll.js";
 import { tokenize } from "./highlight.js";
+import { serializeMarkdown } from "./markdown.js";
+
+const MARKDOWN_CLIPBOARD_TYPE = "text/x-soirvu-markdown";
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -637,6 +640,7 @@ export class EditorView {
             },
             compositionend: (e) => this.onCompositionEnd(e),
             paste: (e) => this.onPaste(e),
+            copy: (e) => this.onCopy(e),
             mousedown: (e) => this.onMouseDown(e),
             mousemove: (e) => this.onHoverBlock(e),
             mouseleave: (e) => {
@@ -782,6 +786,18 @@ export class EditorView {
         }
     }
 
+    onCopy(e) {
+        if (this.composing || !e.clipboardData) return;
+        const selection = this.readDOMSelection();
+        if (!selection || selection.anchor === selection.head) return;
+        const from = Math.min(selection.anchor, selection.head);
+        const to = Math.max(selection.anchor, selection.head);
+        const markdown = serializeMarkdown(this.state.doc.cut(from, to));
+        e.clipboardData.setData("text/plain", markdown);
+        e.clipboardData.setData(MARKDOWN_CLIPBOARD_TYPE, markdown);
+        e.preventDefault();
+    }
+
     onPaste(e) {
         e.preventDefault();
         if (this.composing) return;
@@ -790,10 +806,11 @@ export class EditorView {
             for (const file of files) this.onAttachFile(file);
             return;
         }
-        const text = e.clipboardData ? e.clipboardData.getData("text/plain") : null;
+        const markdown = e.clipboardData?.getData(MARKDOWN_CLIPBOARD_TYPE);
+        const text = markdown || e.clipboardData?.getData("text/plain");
         if (text != null && this.onPasteText) {
             this.lastHandledInputAt = performance.now();
-            this.onPasteText(text, this.state, (tr) => this.dispatch(tr));
+            this.onPasteText(text, this.state, (tr) => this.dispatch(tr), Boolean(markdown));
         }
     }
 
