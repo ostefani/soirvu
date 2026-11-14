@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 use objc2::{
-    MainThreadMarker, msg_send,
+    ClassType, MainThreadMarker, ffi, msg_send,
     rc::Retained,
-    runtime::{AnyClass, AnyObject, ClassBuilder, NSObjectProtocol, Sel},
+    runtime::{AnyObject, Imp, NSObjectProtocol, Sel},
     sel,
 };
-use objc2_web_kit::WKWebViewConfiguration;
-use std::{io, sync::OnceLock};
+use objc2_app_kit::NSWritingToolsBehavior;
+use objc2_foundation::NSProcessInfo;
+use objc2_web_kit::{WKWebView, WKWebViewConfiguration};
+use std::io;
 use tauri::webview::PlatformWebview;
 
 pub fn configuration() -> tauri::Result<Retained<WKWebViewConfiguration>> {
@@ -14,49 +16,114 @@ pub fn configuration() -> tauri::Result<Retained<WKWebViewConfiguration>> {
         .ok_or_else(|| io::Error::other("WKWebView must be configured on the main thread"))?;
     // SAFETY: The configuration is created and used on AppKit's main thread.
     let config = unsafe { WKWebViewConfiguration::new(mtm) };
-    if config.respondsToSelector(sel!(setWritingToolsBehavior:)) {
-        // SAFETY: This public macOS 15+ property takes NSWritingToolsBehavior
-        // (NSInteger); NSTextCheckingClient.h defines None as -1.
+    if supports_writing_tools() {
+        if !config.respondsToSelector(sel!(setWritingToolsBehavior:)) {
+            return Err(io::Error::other("WKWebView Writing Tools setter is unavailable").into());
+        }
+        // SAFETY: The selector was checked and takes NSWritingToolsBehavior.
         unsafe {
-            let () = msg_send![&config, setWritingToolsBehavior: -1_isize];
+            let () = msg_send![&config, setWritingToolsBehavior: NSWritingToolsBehavior::None];
         }
     }
     Ok(config)
 }
 
+fn supports_writing_tools() -> bool {
+    NSProcessInfo::processInfo()
+        .operatingSystemVersion()
+        .majorVersion
+        >= 15
+}
+
 pub(super) fn install(webview: &PlatformWebview) -> tauri::Result<()> {
-    static CLASS: OnceLock<Option<&'static AnyClass>> = OnceLock::new();
     // SAFETY: Tauri lends the live WKWebView on AppKit's main thread.
-    let view = unsafe { &*webview.inner().cast::<AnyObject>() };
-    let class = CLASS
-        .get_or_init(|| {
-            let mut class = ClassBuilder::new(c"SoirVuPrivateWebView", view.class())?;
-            // SAFETY: quickLookWithEvent: is an NSResponder method taking one
-            // object argument and returning void. The subclass adds no storage.
-            // validRequestorForSendType:returnType: takes two objects and returns an object.
-            unsafe {
-                class.add_method(
-                    sel!(quickLookWithEvent:),
-                    ignore_lookup as extern "C-unwind" fn(_, _, _),
-                );
-                class.add_method(
-                    sel!(quickLookPreviewItems:),
-                    ignore_lookup as extern "C-unwind" fn(_, _, _),
-                );
-                class.add_method(
-                    sel!(validRequestorForSendType:returnType:),
-                    refuse_service as extern "C-unwind" fn(_, _, _, _) -> _,
+    let native = unsafe { &*webview.inner().cast::<WKWebView>() };
+    // SAFETY: This getter reads the preview policy of the same live view.
+    if unsafe { native.allowsLinkPreview() } {
+        return Err(io::Error::other("WKWebView link previews are enabled").into());
+    }
+    if supports_writing_tools() {
+        // SAFETY: Read the copied configuration of the live view on the main thread.
+        let config = unsafe { native.configuration() };
+        if !config.respondsToSelector(sel!(writingToolsBehavior)) {
+            return Err(io::Error::other("WKWebView Writing Tools getter is unavailable").into());
+        }
+        let behavior: NSWritingToolsBehavior = unsafe { msg_send![&config, writingToolsBehavior] };
+        if behavior != NSWritingToolsBehavior::None {
+            return Err(
+                io::Error::other("WKWebView Writing Tools opt-out did not take effect").into(),
+            );
+        }
+    }
+    let view: &AnyObject = native;
+    let live_class = view.class();
+    // Patch only Wry's application-owned subclass. Changing the live view's
+    // class after AppKit has attached it invalidates its dynamic properties.
+    let mut class = live_class;
+    while class
+        .name()
+        .to_bytes()
+        .windows(b"NSKVONotifying_".len())
+        .any(|part| part == b"NSKVONotifying_")
+    {
+        class = class
+            .superclass()
+            .ok_or_else(|| io::Error::other("WKWebView KVO class has no superclass"))?;
+    }
+    if !class
+        .name()
+        .to_bytes()
+        .windows(b"::wry_web_view::WryWebView".len())
+        .any(|part| part == b"::wry_web_view::WryWebView")
+        || class.superclass() != Some(WKWebView::class())
+    {
+        return Err(io::Error::other(format!(
+            "unexpected WKWebView class: {}",
+            class.name().to_string_lossy()
+        ))
+        .into());
+    }
+    // SAFETY: Each callback has the ABI of its NSResponder selector. Their
+    // type encodings come from the existing methods; installation is on the
+    // main thread and does not affect WKWebView or other AppKit classes.
+    unsafe {
+        type Lookup = extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject);
+        type Service =
+            extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject, *mut AnyObject) -> *mut AnyObject;
+        let lookup = std::mem::transmute::<Lookup, Imp>(ignore_lookup);
+        let service = std::mem::transmute::<Service, Imp>(refuse_service);
+        for (selector, implementation, encoding) in [
+            (sel!(quickLookWithEvent:), lookup, c"v@:@"),
+            (sel!(quickLookPreviewItems:), lookup, c"v@:@"),
+            (
+                sel!(validRequestorForSendType:returnType:),
+                service,
+                c"@@:@@",
+            ),
+        ] {
+            let method = class.instance_method(selector);
+            if !method
+                .is_some_and(|method| std::ptr::fn_addr_eq(method.implementation(), implementation))
+            {
+                ffi::class_replaceMethod(
+                    std::ptr::from_ref(class).cast_mut(),
+                    selector,
+                    implementation,
+                    method.map_or(encoding.as_ptr(), |method| {
+                        ffi::method_getTypeEncoding(method)
+                    }),
                 );
             }
-            Some(class.register())
-        })
-        .ok_or_else(|| io::Error::other("could not install the WKWebView lookup guard"))?;
-    // SAFETY: The new class directly inherits Wry's class with identical layout.
-    if class.superclass() != Some(view.class()) {
-        return Err(io::Error::other("unexpected WKWebView class").into());
-    }
-    unsafe {
-        AnyObject::set_class(view, class);
+            if !live_class
+                .instance_method(selector)
+                .is_some_and(|method| std::ptr::fn_addr_eq(method.implementation(), implementation))
+            {
+                return Err(io::Error::other(format!(
+                    "WKWebView responder guard is missing: {selector:?}"
+                ))
+                .into());
+            }
+        }
     }
     Ok(())
 }
@@ -72,10 +139,71 @@ extern "C-unwind" fn refuse_service(
     std::ptr::null_mut()
 }
 
-pub(super) fn disable_services_menu() -> tauri::Result<()> {
-    use objc2_app_kit::NSApplication;
-    let mtm = MainThreadMarker::new()
-        .ok_or_else(|| io::Error::other("AppKit menus require the main thread"))?;
-    NSApplication::sharedApplication(mtm).setServicesMenu(None);
-    Ok(())
+pub fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{
+        AboutMetadata, HELP_SUBMENU_ID, Menu, PredefinedMenuItem as Item, Submenu,
+        WINDOW_SUBMENU_ID,
+    };
+    let info = app.package_info();
+    let about = AboutMetadata {
+        name: Some(info.name.clone()),
+        version: Some(info.version.to_string()),
+        copyright: app.config().bundle.copyright.clone(),
+        authors: app
+            .config()
+            .bundle
+            .publisher
+            .clone()
+            .map(|publisher| vec![publisher]),
+        ..Default::default()
+    };
+    // Build without a Services item instead of assuming AppKit will keep
+    // its internal Services menu reference nil.
+    Menu::with_items(
+        app,
+        &[
+            &Submenu::with_items(
+                app,
+                &info.name,
+                true,
+                &[
+                    &Item::about(app, None, Some(about))?,
+                    &Item::separator(app)?,
+                    &Item::hide(app, None)?,
+                    &Item::hide_others(app, None)?,
+                    &Item::separator(app)?,
+                    &Item::quit(app, None)?,
+                ],
+            )?,
+            &Submenu::with_items(app, "File", true, &[&Item::close_window(app, None)?])?,
+            &Submenu::with_items(
+                app,
+                "Edit",
+                true,
+                &[
+                    &Item::undo(app, None)?,
+                    &Item::redo(app, None)?,
+                    &Item::separator(app)?,
+                    &Item::cut(app, None)?,
+                    &Item::copy(app, None)?,
+                    &Item::paste(app, None)?,
+                    &Item::select_all(app, None)?,
+                ],
+            )?,
+            &Submenu::with_items(app, "View", true, &[&Item::fullscreen(app, None)?])?,
+            &Submenu::with_id_and_items(
+                app,
+                WINDOW_SUBMENU_ID,
+                "Window",
+                true,
+                &[
+                    &Item::minimize(app, None)?,
+                    &Item::maximize(app, None)?,
+                    &Item::separator(app)?,
+                    &Item::close_window(app, None)?,
+                ],
+            )?,
+            &Submenu::with_id_and_items(app, HELP_SUBMENU_ID, "Help", true, &[])?,
+        ],
+    )
 }

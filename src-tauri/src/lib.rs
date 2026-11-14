@@ -52,7 +52,11 @@ fn matches_app_origin(url: &tauri::Url, expected: &tauri::Url) -> bool {
 pub fn run() {
     // §9 release hardening first, before anything opens.
     platform::harden_process();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // platform-ok: preserve the macOS menu layout without registering Services.
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(context_menu::macos_app_menu);
+    builder
         .plugin(tauri_plugin_dialog::init())
         // soirvu-asset://<attachment_id> (§6.4): serves decrypted
         // attachment bytes by id only — never a path — and only
@@ -147,44 +151,61 @@ pub fn run() {
             let packaged = tauri::Url::parse(platform::packaged_webview_origin())
                 .expect("valid packaged origin");
             let dev = tauri::is_dev().then(|| app.config().build.dev_url.clone()).flatten();
-            let builder = tauri::WebviewWindowBuilder::new(
-                app,
-                "main",
-                tauri::WebviewUrl::App("index.html".into()),
-            )
-            .title("SoirVu")
-            .visible(false)
-            .inner_size(1100.0, 760.0)
-            .min_inner_size(720.0, 480.0)
-            .on_navigation(move |url| {
-                matches_app_origin(url, dev.as_ref().unwrap_or(&packaged))
-            })
-            .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny);
-            // platform-ok: configure WKWebView before creation and cancel stock menus at document start.
-            #[cfg(target_os = "macos")]
-            let builder = builder
-                .allow_link_preview(false)
-                .with_webview_configuration(context_menu::macos_configuration()?)
-                .initialization_script(context_menu::MACOS_POLICY);
-            // The editor handles drops itself (files, block
-            // drags) through the page's own events; Tauri's
-            // native handler replaces WebView2's and would
-            // swallow them on Windows (§12). Gated to Windows:
-            // the other engines deliver the page's events
-            // already, and their native path stays untouched.
-            // platform-ok: a WebView2-specific builder option.
-            #[cfg(target_os = "windows")]
-            let builder = builder.disable_drag_drop_handler();
-            // WebKitGTK's default data manager persists site
-            // data under ~/.local/share, and WebView2 keeps a
-            // profile folder; the ephemeral flag keeps the
-            // diary's webview stateless on both (§6.3, §12).
-            // platform-ok: the ephemeral flag is a builder option.
-            #[cfg(any(target_os = "linux", target_os = "windows"))]
-            let builder = builder.incognito(true);
-            let window = builder.build()?;
-            context_menu::install(&window)?;
-            window.show()?;
+            let window = (|| -> tauri::Result<_> {
+                let builder = tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    tauri::WebviewUrl::App("index.html".into()),
+                )
+                .title("SoirVu")
+                .visible(false)
+                .inner_size(1100.0, 760.0)
+                .min_inner_size(720.0, 480.0)
+                .on_navigation(move |url| {
+                    matches_app_origin(url, dev.as_ref().unwrap_or(&packaged))
+                })
+                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny);
+                // platform-ok: configure WKWebView before creation and cancel stock menus at document start.
+                #[cfg(target_os = "macos")]
+                let builder = builder
+                    .allow_link_preview(false)
+                    .with_webview_configuration(context_menu::macos_configuration()?)
+                    .initialization_script(context_menu::MACOS_POLICY);
+                // The editor handles drops itself (files, block
+                // drags) through the page's own events; Tauri's
+                // native handler replaces WebView2's and would
+                // swallow them on Windows (§12). Gated to Windows:
+                // the other engines deliver the page's events
+                // already, and their native path stays untouched.
+                // platform-ok: a WebView2-specific builder option.
+                #[cfg(target_os = "windows")]
+                let builder = builder.disable_drag_drop_handler();
+                // WebKitGTK's default data manager persists site
+                // data under ~/.local/share, and WebView2 keeps a
+                // profile folder; the ephemeral flag keeps the
+                // diary's webview stateless on both (§6.3, §12).
+                // platform-ok: the ephemeral flag is a builder option.
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
+                let builder = builder.incognito(true);
+                let window = builder.build()?;
+                context_menu::install(&window)?;
+                window.show()?;
+                Ok(window)
+            })();
+            let window = match window {
+                Ok(window) => window,
+                Err(error) => {
+                    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+                    eprintln!("SoirVu could not initialize the private window: {error}");
+                    let handle = app.handle().clone();
+                    app.dialog()
+                        .message("SoirVu could not initialize its privacy protections. The vault was not opened.")
+                        .title("SoirVu could not start")
+                        .kind(MessageDialogKind::Error)
+                        .show(move |_| handle.exit(1));
+                    return Ok(());
+                }
+            };
             let _ = window.set_focus();
 
             // OS lock signals (§9): system sleep, screen lock and

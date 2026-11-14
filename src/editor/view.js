@@ -823,7 +823,8 @@ export class EditorView {
     writeClipboardSelection(e) {
         if (this.composing || !e.clipboardData) return;
         const selection = this.readDOMSelection();
-        if (!selection || selection.anchor === selection.head) return;
+        if (!selection || !Number.isFinite(selection.anchor) || !Number.isFinite(selection.head) ||
+            selection.anchor === selection.head) return;
         const from = Math.min(selection.anchor, selection.head);
         const to = Math.max(selection.anchor, selection.head);
         const markdown = serializeMarkdown(this.state.doc.cut(from, to));
@@ -838,13 +839,16 @@ export class EditorView {
     }
 
     onCut(e) {
+        e.preventDefault();
         if (this.composing || !this.editable() || !e.clipboardData) {
-            e.preventDefault();
             e.stopPropagation();
             return;
         }
         const selection = this.writeClipboardSelection(e);
-        if (!selection) return;
+        if (!selection) {
+            e.stopPropagation();
+            return;
+        }
         const { from, to } = selection;
         const tr = this.state.tr().delete(from, to);
         tr.setSelection(selectionNear(tr.doc, from));

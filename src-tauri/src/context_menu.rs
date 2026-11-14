@@ -12,13 +12,12 @@ mod macos;
 
 // platform-ok: configure Writing Tools before creating WKWebView.
 #[cfg(target_os = "macos")]
-pub use macos::configuration as macos_configuration;
+pub use macos::{app_menu as macos_app_menu, configuration as macos_configuration};
 
 // platform-ok: catch native lookup independently of DOM events.
 #[cfg(target_os = "macos")]
 pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
-    install_before_show(window, macos::install)?;
-    macos::disable_services_menu()
+    install_before_show(window, macos::install)
 }
 
 // platform-ok: WebKitGTK provides a native menu signal.
@@ -28,11 +27,17 @@ pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
         ContextMenuAction, ContextMenuExt, ContextMenuItemExt, SettingsExt, WebViewExt,
     };
 
-    window.with_webview(|webview| {
+    install_before_show(window, |webview| {
         let view = webview.inner();
-        if let Some(settings) = view.settings() {
-            settings.set_enable_dns_prefetching(false);
-            settings.set_enable_hyperlink_auditing(false);
+        let settings = view
+            .settings()
+            .ok_or_else(|| std::io::Error::other("WebKitGTK settings are unavailable"))?;
+        settings.set_enable_dns_prefetching(false);
+        settings.set_enable_hyperlink_auditing(false);
+        if settings.enables_dns_prefetching() || settings.enables_hyperlink_auditing() {
+            return Err(
+                std::io::Error::other("WebKitGTK privacy settings did not take effect").into(),
+            );
         }
         view.connect_context_menu(|_, menu, _, _| {
             for item in menu.items() {
@@ -45,6 +50,7 @@ pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
             }
             menu.n_items() == 0
         });
+        Ok(())
     })
 }
 
@@ -58,7 +64,7 @@ pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn install_before_show(
     window: &WebviewWindow,
     configure: impl FnOnce(&tauri::webview::PlatformWebview) -> tauri::Result<()> + Send + 'static,
@@ -78,6 +84,7 @@ fn install_before_show(
 // platform-ok: WebView2 COM types are Windows-only.
 #[cfg(target_os = "windows")]
 mod webview2 {
+    use super::is_windows_clipboard_command;
     use tauri::webview::PlatformWebview;
     use webview2_com::{
         ContextMenuRequestedEventHandler,
@@ -140,7 +147,7 @@ mod webview2 {
                 if kind == COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND {
                     let mut name = Default::default();
                     item.Name(&mut name)?;
-                    if matches!(take_pwstr(name).as_str(), "cut" | "copy" | "paste") {
+                    if is_windows_clipboard_command(&take_pwstr(name)) {
                         has_edit_item = true;
                         continue;
                     }
@@ -148,6 +155,24 @@ mod webview2 {
                 items.RemoveValueAtIndex(index)?;
             }
             Ok(has_edit_item)
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+fn is_windows_clipboard_command(name: &str) -> bool {
+    matches!(name, "cut" | "copy" | "paste")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn windows_menu_only_allows_clipboard_command_ids() {
+        for name in ["cut", "copy", "paste"] {
+            assert!(super::is_windows_clipboard_command(name));
+        }
+        for name in ["copyLink", "searchWeb", "openLinkInNewWindow", "Copy", ""] {
+            assert!(!super::is_windows_clipboard_command(name));
         }
     }
 }

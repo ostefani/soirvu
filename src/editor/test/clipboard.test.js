@@ -70,6 +70,23 @@ test('cut cancels the browser default while composing or read-only', () => {
     }
 });
 
+test('cut cannot fall back to a native DOM mutation when selection mapping fails', () => {
+    for (const selection of [null, { anchor: NaN, head: 2 }]) {
+        const view = Object.assign(Object.create(EditorView.prototype), {
+            editable: () => true,
+            readDOMSelection: () => selection,
+            dispatch: () => assert.fail('editor mutated'),
+        });
+        let canceled = false;
+        view.onCut({
+            clipboardData: { setData: () => assert.fail('clipboard changed') },
+            preventDefault() { canceled = true; },
+            stopPropagation() {},
+        });
+        assert.equal(canceled, true);
+    }
+});
+
 test('pasting a standalone HTTPS URL keeps it plain', () => {
     const url = 'https://example.com/path';
     for (const [source, expected] of [
@@ -385,9 +402,10 @@ test('rendering a link exposes only its actual destination in the tooltip', (t) 
         const container = new TestNode('p');
         EditorView.prototype.renderContent(doc.firstChild, container, 1);
         function assertInert(node) {
-            assert.notEqual(node.tag, 'iframe');
-            assert.equal(node.attributes.has('href'), false);
-            assert.equal(node.attributes.has('src'), false);
+            assert(!['iframe', 'object', 'embed', 'script', 'link'].includes(node.tag));
+            for (const name of node.attributes.keys()) {
+                assert(['title', 'data-href', 'role', 'tabindex', 'alt', 'data-blocked-image', 'contenteditable'].includes(name), name);
+            }
             node.children.forEach(assertInert);
         }
         assertInert(container);

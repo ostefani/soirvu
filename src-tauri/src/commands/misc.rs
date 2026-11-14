@@ -97,7 +97,9 @@ pub async fn open_link(app: AppHandle, url: String) -> Result<bool, String> {
     if !rx.await.unwrap_or(false) {
         return Ok(false);
     }
-    let mut result = Err("locked".to_owned());
+    // Keep the session valid through the OS handoff. Releasing the operation
+    // lock after the check but before opening would race with vault locking.
+    let mut result = ipc(Err(crate::error::AppError::Code("locked".into())));
     state.deliver_session(&session, |current| {
         if current {
             result = ipc(platform::open_external(std::ffi::OsStr::new(url.as_str())).map_err(Into::into))
