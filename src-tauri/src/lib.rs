@@ -158,6 +158,33 @@ pub fn run() {
                 matches_app_origin(url, dev.as_ref().unwrap_or(&packaged))
             })
             .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny);
+            #[cfg(target_os = "macos")]
+            let builder = builder.allow_link_preview(true).initialization_script(
+                // Keep WebKit's immediate-action recognizer so it runs the
+                // DOM hit test before native Look Up. That hit test dispatches
+                // webkitmouseforcewillbegin, including for three-finger Look Up.
+                r#"(() => {
+                const suppressLinkLookup = (event) => {
+                    const editor = event.target.closest?.('.editor-mount');
+                    if (!editor) return;
+                    if (event.target.closest('a[data-href]')) {
+                        event.preventDefault();
+                        return;
+                    }
+                    const selection = window.getSelection();
+                    if (!selection?.rangeCount || selection.isCollapsed) return;
+                    const range = selection.getRangeAt(0);
+                    for (const link of editor.querySelectorAll('a[data-href]')) {
+                        if (range.intersectsNode(link)) {
+                            event.preventDefault();
+                            return;
+                        }
+                    }
+                };
+                window.addEventListener('contextmenu', suppressLinkLookup, true);
+                window.addEventListener('webkitmouseforcewillbegin', suppressLinkLookup, true);
+                })();"#,
+            );
             // The editor handles drops itself (files, block
             // drags) through the page's own events; Tauri's
             // native handler replaces WebView2's and would
