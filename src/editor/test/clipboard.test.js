@@ -362,7 +362,7 @@ test('rendering a link exposes only its actual destination in the tooltip', (t) 
     globalThis.Node = TestNode;
     globalThis.document = {
         createElement: (tag) => new TestNode(tag),
-        createTextNode: (value) => new TestNode(value),
+        createTextNode: (value) => Object.assign(new TestNode('#text'), { text: value }),
     };
     t.after(() => {
         for (const [name, value] of Object.entries(globals)) {
@@ -383,7 +383,7 @@ test('rendering a link exposes only its actual destination in the tooltip', (t) 
         assert.equal(rendered.attributes.get('title'), destination === href ? href : undefined);
         assert.equal(rendered.attributes.get('data-href'), destination === href ? href : undefined);
         assert.equal(rendered.attributes.has('href'), false);
-        assert.equal(rendered.children[0].tag, 'label');
+        assert.equal(rendered.children[0].text, 'label');
         const opened = [];
         const view = Object.assign(Object.create(EditorView.prototype), {
             dom: { contains: (node) => node === rendered },
@@ -395,14 +395,20 @@ test('rendering a link exposes only its actual destination in the tooltip', (t) 
         assert.equal(serializeMarkdown(doc), source);
     }
 
-    const untrusted = `[label](${href}) ![tracking](https://remote.example/pixel.png) <iframe src="https://remote.example/"></iframe>`;
+    const untrusted = `[label](${href}) ![tracking](https://remote.example/pixel.png) <iframe src="https://remote.example/"></iframe> <style>@import "https://remote.example/style.css";</style>`;
     let pasted = EditorState.create({ doc: parseMarkdown('') });
     makePasteHandler()(untrusted, pasted, (tr) => { pasted = pasted.apply(tr); }, true);
     for (const doc of [parseMarkdown(untrusted), pasted.doc]) {
         const container = new TestNode('p');
         EditorView.prototype.renderContent(doc.firstChild, container, 1);
         function assertInert(node) {
-            assert(!['iframe', 'object', 'embed', 'script', 'link'].includes(node.tag));
+            if (node.tag === '#text') {
+                assert.equal(typeof node.text, 'string');
+                assert.equal(node.attributes.size, 0);
+                assert.equal(node.children.length, 0);
+                return;
+            }
+            assert(['p', 'a', 'img', 'span'].includes(node.tag), node.tag);
             for (const name of node.attributes.keys()) {
                 assert(['title', 'data-href', 'role', 'tabindex', 'alt', 'data-blocked-image', 'contenteditable'].includes(name), name);
             }

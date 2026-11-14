@@ -21,6 +21,7 @@ mod state;
 mod windows_lock;
 
 use std::time::Duration;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use tauri::{Emitter, Manager};
 
@@ -56,7 +57,9 @@ pub fn run() {
     // platform-ok: preserve the macOS menu layout without registering Services.
     #[cfg(target_os = "macos")]
     let builder = builder.menu(context_menu::macos_app_menu);
-    builder
+    let startup_failed = Arc::new(AtomicBool::new(false));
+    let failure_in_setup = Arc::clone(&startup_failed);
+    let app = builder
         .plugin(tauri_plugin_dialog::init())
         // soirvu-asset://<attachment_id> (§6.4): serves decrypted
         // attachment bytes by id only — never a path — and only
@@ -139,7 +142,7 @@ pub fn run() {
                 }).await;
             });
         })
-        .setup(|app| {
+        .setup(move |app| {
             // App config (§3): ~/Library/Application Support/<name>/
             let config_dir = app.path().config_dir()?.join(CONFIG_DIR_NAME);
             app.manage(AppState::load(config_dir));
@@ -197,7 +200,21 @@ pub fn run() {
                 Err(error) => {
                     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
                     eprintln!("SoirVu could not initialize the private window: {error}");
+                    failure_in_setup.store(true, Ordering::Relaxed);
+                    if let Some(window) = app.get_webview_window("main") {
+                        if let Err(error) = window.destroy() {
+                            eprintln!("SoirVu could not destroy the failed window: {error}");
+                            app.handle().exit(1);
+                            return Ok(());
+                        }
+                    }
                     let handle = app.handle().clone();
+                    let fallback = handle.clone();
+                    // The dialog plugin cannot report a failure to present a dialog.
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(120)).await;
+                        fallback.exit(1);
+                    });
                     app.dialog()
                         .message("SoirVu could not initialize its privacy protections. The vault was not opened.")
                         .title("SoirVu could not start")
@@ -353,8 +370,16 @@ pub fn run() {
             commands::attachments::attachment_import,
             commands::attachments::attachment_open,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running SoirVu");
+    app.run(move |_, event| {
+        // Destroying the last window must not exit before the error dialog.
+        if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event
+            && startup_failed.load(Ordering::Relaxed)
+        {
+            api.prevent_exit();
+        }
+    });
 }
 
 #[cfg(test)]

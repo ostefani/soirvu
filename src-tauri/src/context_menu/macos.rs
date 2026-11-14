@@ -70,11 +70,7 @@ pub(super) fn install(webview: &PlatformWebview) -> tauri::Result<()> {
             .superclass()
             .ok_or_else(|| io::Error::other("WKWebView KVO class has no superclass"))?;
     }
-    if !class
-        .name()
-        .to_bytes()
-        .windows(b"::wry_web_view::WryWebView".len())
-        .any(|part| part == b"::wry_web_view::WryWebView")
+    if !is_wry_webview_name(class.name().to_bytes())
         || class.superclass() != Some(WKWebView::class())
     {
         return Err(io::Error::other(format!(
@@ -126,6 +122,30 @@ pub(super) fn install(webview: &PlatformWebview) -> tauri::Result<()> {
         }
     }
     Ok(())
+}
+
+fn is_wry_webview_name(name: &[u8]) -> bool {
+    // objc2's default name is module_path::Type followed by the crate version.
+    let leaf = name.rsplit(|&byte| byte == b':').next().unwrap_or_default();
+    leaf.strip_prefix(b"WryWebView").is_some_and(|version| {
+        version.is_empty() || version.first().is_some_and(u8::is_ascii_digit)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn wry_class_identity_does_not_depend_on_its_module() {
+        for name in [
+            b"WryWebView".as_slice(),
+            b"wry::relocated::WryWebView0.57.0",
+        ] {
+            assert!(super::is_wry_webview_name(name));
+        }
+        for name in [b"WKWebView".as_slice(), b"wry::WryWebViewParent0.57.0"] {
+            assert!(!super::is_wry_webview_name(name));
+        }
+    }
 }
 
 extern "C-unwind" fn ignore_lookup(_: &AnyObject, _: Sel, _: *mut AnyObject) {}
