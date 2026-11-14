@@ -59,7 +59,10 @@ pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
 pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
     install_before_show(window, |webview| {
         webview2::install(webview).map_err(|err| {
-            std::io::Error::other(format!("WebView2 privacy setup failed: {err}")).into()
+            std::io::Error::other(format!(
+                "WebView2 privacy setup failed ({err}). Update the Microsoft Edge WebView2 Runtime and try again."
+            ))
+            .into()
         })
     })
 }

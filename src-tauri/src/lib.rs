@@ -179,6 +179,7 @@ pub fn run() {
                     url,
                 )
                 .title("SoirVu")
+                .devtools(cfg!(debug_assertions))
                 .visible(false)
                 .inner_size(1100.0, 760.0)
                 .min_inner_size(720.0, 480.0)
@@ -239,6 +240,11 @@ pub fn run() {
                         app.handle().exit(1);
                         return Ok(());
                     }
+                    #[cfg(debug_assertions)]
+                    if startup_probe.as_deref() == Some("check") {
+                        app.handle().exit(1);
+                        return Ok(());
+                    }
                     let handle = app.handle().clone();
                     let fallback = handle.clone();
                     let timeout = Duration::from_secs(120);
@@ -254,11 +260,7 @@ pub fn run() {
                         eprintln!("SoirVu startup error dialog timed out");
                         fallback.exit(1);
                     });
-                    let message = if cfg!(windows) {
-                        "SoirVu could not initialize its privacy protections. Update Microsoft Edge WebView2 Runtime and try again. The vault was not opened."
-                    } else {
-                        "SoirVu could not initialize its privacy protections. The vault was not opened."
-                    };
+                    let message = format!("SoirVu could not initialize its privacy protections. The vault was not opened.\n\n{error}");
                     app.dialog()
                         .message(message)
                         .title("SoirVu could not start")

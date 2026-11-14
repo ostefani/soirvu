@@ -81,11 +81,18 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev xvfb xauth dbus-daemon
       - name: Check the bridge compiles
         run: cargo check --manifest-path src-tauri/Cargo.toml
       - name: Lint the platform bridge
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets
+      - name: Verify the debug startup probe marker
+        shell: bash
+        run: |
+          cargo build --locked -p SoirVu --bin soirvu
+          binary=target/debug/soirvu
+          if [[ "$RUNNER_OS" == Windows ]]; then binary+=.exe; fi
+          LC_ALL=C grep -aFq SOIRVU_DEBUG_STARTUP "$binary"
       - name: Smoke-test native privacy setup (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 10
@@ -95,9 +102,8 @@ jobs:
         timeout-minutes: 10
         env:
           SOIRVU_DEBUG_STARTUP: check
-        run: |
-          sudo apt-get install -y xvfb xauth
-          xvfb-run -a cargo run --locked -p SoirVu --bin soirvu
+          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+        run: dbus-run-session -- xvfb-run -a cargo run --locked -p SoirVu --bin soirvu
       - name: Smoke-test native privacy setup (Windows)
         if: runner.os == 'Windows'
         timeout-minutes: 10
