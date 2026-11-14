@@ -44,6 +44,7 @@ fn main() {
         "tag_delete",
         "open_link",
         "clipboard_note_copy",
+        "show_edit_menu",
         "backup_now",
         "export_markdown",
         "export_json",

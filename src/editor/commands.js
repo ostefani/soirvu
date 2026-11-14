@@ -15,7 +15,12 @@ import { NodeSelection, TextSelection, cursorMarks, selectionNear } from "./stat
 // ---------------------------------------------------------------------------
 // Helpers shared by commands and rules
 
-/** Runs build(tr) on a scratch transaction; null if any step fails. */
+/**
+ * Builds and validates a transaction against the current editor state.
+ * @param {import("./state.js").EditorState} state The state to edit.
+ * @param {(tr: import("./transform.js").Transaction) => void} build Adds steps to the transaction.
+ * @returns {import("./transform.js").Transaction | null} The transaction, or null if building or validation fails.
+ */
 export function tryBuild(state, build) {
     const tr = state.tr();
     try {
@@ -43,7 +48,12 @@ export function chainCommands(...commands) {
     };
 }
 
-/** Deletes the current selection, if any. Returns the insert point. */
+/**
+ * Deletes the current selection, if any, from the transaction.
+ * @param {import("./transform.js").Transaction} tr Transaction whose document contains the selection.
+ * @param {import("./state.js").EditorState} state State supplying the selection.
+ * @returns {number} The insertion position in the resulting document.
+ */
 export function deleteSelectionIn(tr, state) {
     const sel = state.selection;
     const doc = tr.doc;

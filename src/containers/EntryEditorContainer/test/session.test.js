@@ -589,3 +589,39 @@ test('Remove link is offered for selected links and omitted for ordinary text', 
     assert.deepEqual(view.calls[0], ['removeLink', { from: 3, to: 9 }]);
     session.dispose();
 });
+
+test('the toolbar inserts an HTTPS link at the captured selection', async () => {
+    const { session } = setup();
+    await session.load('e1');
+    const view = fakeViewApi({ query: () => ({ from: 2, to: 7 }), readText: () => 'words' });
+    session.attachEditor(view);
+    session.links.openLinkPicker();
+    assert.equal(session.links.pickLinkTarget({ href: 'https://example.com/', title: 'example' }), true);
+    assert.deepEqual(view.calls[0], ['insertWebLink', {
+        href: 'https://example.com/', label: 'words', from: 2, to: 7,
+    }]);
+    assert.equal(session.links.linkPicker, null);
+    session.dispose();
+});
+
+test('external link opening reports failures and coalesces clicks while the dialog is pending', async () => {
+    const { session, api, notified } = setup();
+    const { SESSION_TEXT } = await import('../data.js');
+    await session.load('e1');
+    const pending = deferred();
+    const calls = [];
+    api.openLink = (href) => {
+        calls.push(href);
+        return pending.promise;
+    };
+    const opening = session.links.openHref('https://example.com', false);
+    await session.links.openHref('mailto:a@example.com', false);
+    assert.deepEqual(calls, ['https://example.com/']);
+    pending.reject(new Error('native opener failed'));
+    await opening;
+    assert.deepEqual(notified, [SESSION_TEXT.linkOpenFailed]);
+    assert.equal(await session.prepareLock(), true);
+    await session.links.openHref('https://example.org', false);
+    assert.equal(calls.length, 1);
+    session.dispose();
+});

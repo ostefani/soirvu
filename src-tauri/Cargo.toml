@@ -39,18 +39,27 @@ libc = "0.2"
 soirvu-core = { path = "../crates/soirvu-core", version = "1.1.1" }
 tauri-plugin-dialog = "2"
 percent-encoding = "2"
+regex = { version = "1", default-features = false, features = ["std", "unicode-gencat"] }
 tempfile = "3"
 
 [dev-dependencies]
 # Contract snapshots for the IPC boundary (src/commands/contract.rs).
 insta = "1"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2.0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "0.39"
+windows-core = "0.62"
+
 # §9 lock signals: NSWorkspace + distributed notifications.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSPasteboard"] }
-objc2-foundation = { version = "0.3", features = ["NSNotification", "NSDistributedNotificationCenter", "NSOperation", "NSString"] }
+objc2-app-kit = { version = "0.3", features = ["NSTextCheckingClient", "NSWorkspace", "NSPasteboard"] }
+objc2-foundation = { version = "0.3", features = ["NSNotification", "NSDistributedNotificationCenter", "NSOperation", "NSProcessInfo", "NSString"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["WKWebView", "WKWebViewConfiguration"] }
 
 [features]
 # Touch ID (Phase 8) is opt-in at build time: it works only

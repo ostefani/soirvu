@@ -7,6 +7,7 @@
 
 mod backup;
 mod commands;
+mod context_menu;
 mod error;
 mod keychain;
 #[cfg(target_os = "linux")]
@@ -20,6 +21,7 @@ mod state;
 mod windows_lock;
 
 use std::time::Duration;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use tauri::{Emitter, Manager};
 
@@ -51,7 +53,13 @@ fn matches_app_origin(url: &tauri::Url, expected: &tauri::Url) -> bool {
 pub fn run() {
     // §9 release hardening first, before anything opens.
     platform::harden_process();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // platform-ok: preserve the macOS menu layout without registering Services.
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(context_menu::macos_app_menu);
+    let startup_failed = Arc::new(AtomicBool::new(false));
+    let failure_in_setup = Arc::clone(&startup_failed);
+    let app = builder
         .plugin(tauri_plugin_dialog::init())
         // soirvu-asset://<attachment_id> (§6.4): serves decrypted
         // attachment bytes by id only — never a path — and only
@@ -134,9 +142,20 @@ pub fn run() {
                 }).await;
             });
         })
-        .setup(|app| {
+        .setup(move |app| {
+            // Exercise the native window without loading the real vault registry
+            // or starting the frontend and its IPC requests.
+            #[cfg(debug_assertions)]
+            let startup_probe = std::env::var("SOIRVU_DEBUG_STARTUP").ok();
             // App config (§3): ~/Library/Application Support/<name>/
             let config_dir = app.path().config_dir()?.join(CONFIG_DIR_NAME);
+            #[cfg(debug_assertions)]
+            let probe_dir = match startup_probe.as_deref() {
+                Some("fail" | "fail-fast" | "check") => Some(tempfile::tempdir()?),
+                _ => None,
+            };
+            #[cfg(debug_assertions)]
+            let config_dir = probe_dir.as_ref().map_or(config_dir, |dir| dir.path().to_owned());
             app.manage(AppState::load(config_dir));
 
             // The main window is built in code, not in
@@ -146,35 +165,118 @@ pub fn run() {
             let packaged = tauri::Url::parse(platform::packaged_webview_origin())
                 .expect("valid packaged origin");
             let dev = tauri::is_dev().then(|| app.config().build.dev_url.clone()).flatten();
-            let builder = tauri::WebviewWindowBuilder::new(
-                app,
-                "main",
-                tauri::WebviewUrl::App("index.html".into()),
-            )
-            .title("SoirVu")
-            .inner_size(1100.0, 760.0)
-            .min_inner_size(720.0, 480.0)
-            .on_navigation(move |url| {
-                matches_app_origin(url, dev.as_ref().unwrap_or(&packaged))
-            })
-            .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny);
-            // The editor handles drops itself (files, block
-            // drags) through the page's own events; Tauri's
-            // native handler replaces WebView2's and would
-            // swallow them on Windows (§12). Gated to Windows:
-            // the other engines deliver the page's events
-            // already, and their native path stays untouched.
-            // platform-ok: a WebView2-specific builder option.
-            #[cfg(target_os = "windows")]
-            let builder = builder.disable_drag_drop_handler();
-            // WebKitGTK's default data manager persists site
-            // data under ~/.local/share, and WebView2 keeps a
-            // profile folder; the ephemeral flag keeps the
-            // diary's webview stateless on both (§6.3, §12).
-            // platform-ok: the ephemeral flag is a builder option.
-            #[cfg(any(target_os = "linux", target_os = "windows"))]
-            let builder = builder.incognito(true);
-            let window = builder.build()?;
+            let window = (|| -> tauri::Result<_> {
+                let url = tauri::WebviewUrl::App("index.html".into());
+                #[cfg(debug_assertions)]
+                let url = if probe_dir.is_some() {
+                    tauri::WebviewUrl::External(tauri::Url::parse("about:blank").expect("valid blank URL"))
+                } else {
+                    url
+                };
+                let builder = tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    url,
+                )
+                .title("SoirVu")
+                .devtools(cfg!(debug_assertions))
+                .visible(false)
+                .inner_size(1100.0, 760.0)
+                .min_inner_size(720.0, 480.0)
+                .on_navigation(move |url| {
+                    matches_app_origin(url, dev.as_ref().unwrap_or(&packaged))
+                })
+                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny);
+                // platform-ok: configure WKWebView before creation and cancel stock menus at document start.
+                #[cfg(target_os = "macos")]
+                let builder = builder
+                    .allow_link_preview(false)
+                    .with_webview_configuration(context_menu::macos_configuration()?)
+                    .initialization_script(context_menu::MACOS_POLICY);
+                // The editor handles drops itself (files, block
+                // drags) through the page's own events; Tauri's
+                // native handler replaces WebView2's and would
+                // swallow them on Windows (§12). Gated to Windows:
+                // the other engines deliver the page's events
+                // already, and their native path stays untouched.
+                // platform-ok: a WebView2-specific builder option.
+                #[cfg(target_os = "windows")]
+                let builder = builder.disable_drag_drop_handler();
+                // WebKitGTK's default data manager persists site
+                // data under ~/.local/share, and WebView2 keeps a
+                // profile folder; the ephemeral flag keeps the
+                // diary's webview stateless on both (§6.3, §12).
+                // platform-ok: the ephemeral flag is a builder option.
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
+                let builder = builder.incognito(true);
+                let window = builder.build()?;
+                #[cfg(debug_assertions)]
+                if matches!(startup_probe.as_deref(), Some("fail" | "fail-fast")) {
+                    return Err(std::io::Error::other("injected native privacy setup failure").into());
+                }
+                context_menu::install(&window)?;
+                #[cfg(debug_assertions)]
+                if startup_probe.as_deref() == Some("check") {
+                    return Ok(window);
+                }
+                window.show()?;
+                Ok(window)
+            })();
+            // Keep the temporary registry alive until the probe exits.
+            #[cfg(debug_assertions)]
+            if let Some(dir) = probe_dir {
+                app.manage(dir);
+            }
+            let window = match window {
+                Ok(window) => window,
+                Err(error) => {
+                    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+                    eprintln!("SoirVu could not initialize the private window: {error}");
+                    failure_in_setup.store(true, Ordering::Relaxed);
+                    if let Some(window) = app.get_webview_window("main")
+                        && let Err(error) = window.destroy()
+                    {
+                        eprintln!("SoirVu could not destroy the failed window: {error}");
+                        app.handle().exit(1);
+                        return Ok(());
+                    }
+                    #[cfg(debug_assertions)]
+                    if startup_probe.as_deref() == Some("check") {
+                        app.handle().exit(1);
+                        return Ok(());
+                    }
+                    let handle = app.handle().clone();
+                    let fallback = handle.clone();
+                    let timeout = Duration::from_secs(120);
+                    #[cfg(debug_assertions)]
+                    let timeout = if startup_probe.as_deref() == Some("fail-fast") {
+                        Duration::from_secs(5)
+                    } else {
+                        timeout
+                    };
+                    // The dialog plugin cannot report a failure to present a dialog.
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(timeout).await;
+                        eprintln!("SoirVu startup error dialog timed out");
+                        fallback.exit(1);
+                    });
+                    let message = format!("SoirVu could not initialize its privacy protections. The vault was not opened.\n\n{error}");
+                    app.dialog()
+                        .message(message)
+                        .title("SoirVu could not start")
+                        .kind(MessageDialogKind::Error)
+                        .show(move |acknowledged| {
+                            eprintln!("SoirVu startup error dialog completed (acknowledged: {acknowledged})");
+                            handle.exit(1);
+                        });
+                    return Ok(());
+                }
+            };
+            #[cfg(debug_assertions)]
+            if startup_probe.as_deref() == Some("check") {
+                app.handle().exit(0);
+                return Ok(());
+            }
             let _ = window.set_focus();
 
             // OS lock signals (§9): system sleep, screen lock and
@@ -295,6 +397,7 @@ pub fn run() {
             commands::entries::tag_delete,
             commands::misc::open_link,
             commands::misc::clipboard_note_copy,
+            context_menu::show_edit_menu,
             commands::misc::backup_now,
             commands::misc::export_markdown,
             commands::misc::export_json,
@@ -321,8 +424,16 @@ pub fn run() {
             commands::attachments::attachment_import,
             commands::attachments::attachment_open,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running SoirVu");
+    app.run(move |_, event| {
+        // Destroying the last window must not exit before the error dialog.
+        if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event
+            && startup_failed.load(Ordering::Relaxed)
+        {
+            api.prevent_exit();
+        }
+    });
 }
 
 #[cfg(test)]

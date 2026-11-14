@@ -25,7 +25,6 @@ export const ENTRY_EDITOR_TEXT = {
     attachmentUnavailable: 'Attachment unavailable.',
     doubleClickToOpen: 'Double-click to open',
     linkActionsLabel: 'Link actions',
-    openExternalLink: 'Open link',
     conflictMessage:
         'This entry changed elsewhere — your latest edits are kept but not saved. Reopen the entry to merge.',
     conflictStatus: 'Not saved — changed elsewhere',

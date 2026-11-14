@@ -7,6 +7,30 @@
 
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 const ENTRY_HREF = new RegExp(`^entry:(${UUID})$`);
+const MAX_OUTBOUND_URL_BYTES = 4096;
+const UNSAFE_URL_TEXT = /[\p{Cc}\p{Cf}]/u;
+const urlEncoder = new TextEncoder();
+
+/** Bounds link attributes before they reach the editor DOM or native dialog. */
+export function isWithinLinkLimit(value) {
+    return value.length <= MAX_OUTBOUND_URL_BYTES && urlEncoder.encode(value).length <= MAX_OUTBOUND_URL_BYTES;
+}
+
+/** Normalizes an HTTPS destination using the native opener's size and authority limits. */
+export function normalizeWebHref(href) {
+    if (!/^https:\/\/[^/?#\s<>\\@]+(?:[/?#]|$)/i.test(href)
+        || /[\s<>\\]/u.test(href) || !isWithinLinkLimit(href)) return null;
+    try {
+        // Match Rust's percent decoder: a stray percent stays literal.
+        const escaped = href.replace(/%(?![\da-f]{2})/gi, "%25");
+        // Reject all format characters, including ZWJ and ZWNJ, in outbound URLs.
+        if (UNSAFE_URL_TEXT.test(href) || UNSAFE_URL_TEXT.test(decodeURIComponent(escaped))) return null;
+        const url = new URL(href);
+        return url.hostname && isWithinLinkLimit(url.href) ? url.href : null;
+    } catch {
+        return null;
+    }
+}
 
 /**
  * The target entry id (lowercased) when `href` is a canonical

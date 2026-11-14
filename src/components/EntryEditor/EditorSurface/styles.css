@@ -64,6 +64,7 @@
 
 .editor-mount :global(a) {
     color: var(--color-accent);
+    cursor: pointer;
 }
 
 .editor-mount :global(hr) {
@@ -229,6 +230,9 @@
 :global(.block-drag-handle) {
     position: fixed;
     width: 18px;
+    /* Overlap the editor edge by 1px from the 22px gutter offset. */
+    box-sizing: content-box;
+    padding-right: 5px;
     height: 22px;
     line-height: 22px;
     text-align: center;

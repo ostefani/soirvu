@@ -42,6 +42,7 @@
     "allow-tag-delete",
         "allow-open-link",
     "allow-clipboard-note-copy",
+        "allow-show-edit-menu",
     "allow-backup-now",
     "allow-export-markdown",
     "allow-export-json",

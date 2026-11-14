@@ -11,7 +11,7 @@
 // closing it untouched saves nothing and rewrites nothing.
 
 import { Fragment, Slice } from "prosemirror-model";
-import { EditorState, TextSelection, selectionNear } from "./state.js";
+import { EditorState, TextSelection, cursorMarks, selectionNear } from "./state.js";
 import { EditorView } from "./view.js";
 import { historyPlugin } from "./history.js";
 import { inputRulesPlugin, keymapPlugin } from "./rules.js";
@@ -24,7 +24,9 @@ import { parseMarkdown, serializeMarkdown } from "./markdown.js";
 export { schema, parseMarkdown, serializeMarkdown };
 
 function looksLikeMarkdown(text) {
-    const formatted = /(^|\n)\s{0,3}(#{1,6}\s|>|```|~~~|- |\d+\.\s)|(\*\*|__)[^*\n]+\1|\[[^\]\n]+\]\(https?:[^)\s]+\)/.test(
+    if (/<(?:https?:\/\/|mailto:)[^<>\s]+>/i.test(text)) return true;
+    if (/\]\(\s*<?(?:https?:\/\/|mailto:)/i.test(text)) return true;
+    const formatted = /(^|\n)\s{0,3}(#{1,6}\s|>|```|~~~|- |\d+\.\s)|(\*\*|__)[^*\n]+\1/.test(
         text,
     );
     if (formatted) return true;
@@ -39,9 +41,12 @@ function looksLikeMarkdown(text) {
 /** Paste policy (§6.5): plain text goes in as text (newlines as
  *  hard breaks, blank lines as paragraph splits); text that looks
  *  like Markdown is parsed as Markdown. Foreign HTML never enters
- *  the schema — only the clipboard's text/plain is ever read. */
+ *  the schema. Editor copies explicitly identify their Markdown.
+ * @returns {(text: string, state: EditorState, dispatch: (tr: import("./transform.js").Transaction) => void, isMarkdown?: boolean) => void}
+ *   A handler that inserts clipboard text at the current selection.
+ */
 export function makePasteHandler() {
-    return (text, state, dispatch) => {
+    return (text, state, dispatch, isMarkdown = false) => {
         // Inside a code or raw block the clipboard is literal
         // text: no Markdown parsing, no block surgery — the
         // block holds text and the paste must stay text,
@@ -49,14 +54,15 @@ export function makePasteHandler() {
         const sel = state.selection;
         if (sel.type === "text") {
             const parent = state.doc.resolve(sel.from).parent;
-            if (parent.type === state.schema.nodes.code_block || parent.type === state.schema.nodes.raw_block) {
+            if (parent.type === state.schema.nodes.code_block || parent.type === state.schema.nodes.raw_block
+                || cursorMarks(state).some((mark) => mark.type === state.schema.marks.code)) {
                 const tr = state.tr();
                 insertTextIn(tr, state, text);
                 dispatch(tr);
                 return;
             }
         }
-        if (looksLikeMarkdown(text)) {
+        if (isMarkdown || looksLikeMarkdown(text)) {
             const frag = parseMarkdown(text).content;
             const tr = state.tr();
             const pos = deleteSelectionIn(tr, state);
@@ -138,9 +144,8 @@ export function makePasteHandler() {
  *   An attachment block was rendered: the app fills the element
  *   with the right viewer for the attachment's type (§6.4).
  * @param {(href: string, modified: boolean) => void} [options.onOpenLink]
- *   A link was modifier-clicked; `modified` is always true (plain
- *   clicks only move the caret). The app routes https/mailto
- *   through open_link and entry: links in-vault.
+ *   A web link was clicked or a note link was modifier-clicked.
+ *   The app routes external links through the native confirmation.
  * @param {(info: { bracketPos: number }) => void} [options.onRequestLinkPicker]
  *   `[[` was typed outside code and raw blocks; the app opens the
  *   link picker, which replaces the bracket pair on pick.
@@ -243,7 +248,12 @@ export function createEditor(el, options = {}) {
         getMarkdown() {
             return serializeMarkdown(view.state.doc);
         },
-        /** Plain text of a range (for link labels and previews). */
+        /**
+         * Reads plain text for link labels and previews.
+         * @param {number} from Start position in the current document.
+         * @param {number} to Exclusive end position in the current document.
+         * @returns {string} The selected text, with block boundaries separated by newlines.
+         */
         readText(from, to) {
             return view.state.doc.textBetween(from, to, "\n");
         },
@@ -251,11 +261,17 @@ export function createEditor(el, options = {}) {
          * Current range of the link run with this href, re-resolved
          * against the live document (for popover actions after an
          * async gap). Null when the link moved beyond recognition.
+         * @param {string} href The expected link destination.
+         * @param {number} hintPos A document position expected to touch the link.
          */
         locateLink(href, hintPos) {
             return locateLink(view.state, href, hintPos);
         },
-        /** Selects a range (history restores the source selection). */
+        /**
+         * Focuses the editor and selects a range.
+         * @param {number} from The anchor position in the current document.
+         * @param {number} [to] The head position, defaulting to the anchor.
+         */
         setTextSelection(from, to) {
             const tr = view.state.tr();
             tr.setSelection(new TextSelection(from, to ?? from));
@@ -267,7 +283,10 @@ export function createEditor(el, options = {}) {
             const active = document.activeElement;
             if (active && view.dom.contains(active)) active.blur();
         },
-        /** Replaces the document (switching entries). History resets. */
+        /**
+         * Replaces the document and resets history when switching entries.
+         * @param {string} md Markdown for the next entry.
+         */
         setMarkdown(md) {
             view.updateState(EditorState.create({ doc: parseMarkdown(md), plugins }));
             if (onSelectionChange) onSelectionChange();

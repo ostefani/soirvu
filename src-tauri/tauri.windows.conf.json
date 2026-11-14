@@ -1,7 +1,7 @@
 {
     "app": {
         "security": {
-            "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' soirvu-asset: http://soirvu-asset.localhost; media-src soirvu-asset: http://soirvu-asset.localhost; connect-src ipc: http://ipc.localhost"
+            "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' soirvu-asset: http://soirvu-asset.localhost; media-src soirvu-asset: http://soirvu-asset.localhost; connect-src ipc: http://ipc.localhost; object-src 'none'; form-action 'none'; base-uri 'none'"
         }
     },
     "bundle": {
@@ -9,6 +9,7 @@
             "nsis"
         ],
         "windows": {
+            "minimumWebview2Version": "103.0.1264.42",
             "webviewInstallMode": {
                 "type": "embedBootstrapper"
             },

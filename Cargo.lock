@@ -12,7 +12,9 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "objc2-web-kit",
  "percent-encoding",
+ "regex",
  "serde",
  "serde_json",
  "soirvu-core",
@@ -21,6 +23,9 @@ dependencies = [
  "tauri-plugin-dialog",
  "tempfile",
  "tokio",
+ "webkit2gtk",
+ "webview2-com",
+ "windows-core",
  "zeroize",
 ]
 

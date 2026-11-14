@@ -69,6 +69,10 @@ Import and export dialogs expire when their vault session ends. Once an authenti
 
 New passphrases require at least eight Unicode characters and at most 64 KiB. Existing shorter passphrases still unlock. If an old credential exceeds the byte limit, use the recovery key to open the vault. The inactivity timeout accepts 1 minute to 24 hours, and attachment size preferences accept 1 to 1024 MiB. The app asks for native confirmation before increasing those limits or disabling metadata stripping or clipboard clearing.
 
+Cut and Copy use the system clipboard to preserve normal paste behavior. On macOS, Universal Clipboard may share copied text with nearby devices if Handoff is enabled. SoirVu's clipboard clearing option does not recall text that the system or another app has already read.
+
+Windows clipboard history and sync and Linux clipboard managers may retain copied text. macOS Dictation is controlled by system settings and may send audio to Apple.
+
 External links require confirmation and support HTTPS or a single mail recipient with optional subject and body. The app webview stays on its packaged origin or the configured development origin. Vault connections enable SQLite defensive mode and disable trusted schemas.
 
 The vault schema checks entry and folder revisions, attachment sizes, and digest lengths on write. Upgrading a valid vault creates an encrypted pre-upgrade backup. If the upgrade finds invalid legacy metadata, it stops and preserves the existing rows for recovery. Older app builds cannot open the upgraded schema.

@@ -60,12 +60,15 @@ jobs:
           # src-tauri is a member of the root workspace, so cargo builds
           # into the workspace-root target/, not src-tauri/target/.
           - os: macos-15
+            binary: target/release/bundle/macos/SoirVu.app/Contents/MacOS/soirvu
             overlay: ""
             verify: sh scripts/verify-release.sh target/release/bundle/macos/SoirVu.app
           - os: ubuntu-26.04
+            binary: target/release/soirvu
             overlay: "--config src-tauri/tauri.linux.conf.json"
             verify: sh scripts/verify-release-linux.sh target/release/soirvu
           - os: windows-2025
+            binary: target/release/soirvu.exe
             overlay: "--config src-tauri/tauri.windows.conf.json"
             verify: python scripts/verify-release-windows.py target/release/soirvu.exe
     runs-on: ${{ matrix.os }}
@@ -103,6 +106,22 @@ jobs:
         run: npm run tauri build -- ${{ matrix.overlay }}
       - name: Verify the release binary
         run: ${{ matrix.verify }}
+      - name: Verify the startup probes are absent from release
+        shell: bash
+        env:
+          RELEASE_BINARY: ${{ matrix.binary }}
+        run: |
+          test -s "$RELEASE_BINARY"
+          if ! LC_ALL=C grep -aFq 'SoirVu could not initialize the private window:' "$RELEASE_BINARY"; then
+            echo "Expected startup diagnostic missing from $RELEASE_BINARY"
+            exit 1
+          fi
+          status=0
+          LC_ALL=C grep -aFq SOIRVU_DEBUG_STARTUP "$RELEASE_BINARY" || status=$?
+          if [[ "$status" == 0 ]]; then
+            echo "Debug startup probe found in $RELEASE_BINARY"
+          fi
+          test "$status" == 1
       - name: Install smoke test (Ubuntu .deb)
         if: runner.os == 'Linux'
         run: |

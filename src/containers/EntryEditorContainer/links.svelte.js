@@ -1,6 +1,6 @@
 import { createRequestOwner } from '../../lib/request-owner.js';
 import { entryLinkMarkdown } from '../../lib/links.js';
-import { classifyHref, parseEntryTarget } from '../../lib/entry-target.js';
+import { classifyHref, normalizeWebHref, parseEntryTarget } from '../../lib/entry-target.js';
 import { SESSION_TEXT } from './data.js';
 import { defaultLinkLabel, linkTargetError } from './labels.js';
 
@@ -11,6 +11,7 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
     let pendingNavId = $state(null);
     let linkNote = $state('');
     let copying = $state(false);
+    let openingExternalLink = false;
     const copyOwner = createRequestOwner();
     const refreshOwner = createRequestOwner();
 
@@ -46,7 +47,6 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
         const editor = getEditor();
         const picker = linkPicker;
         if (!editor || !picker || isFrozen()) return;
-        linkPicker = null;
         let from;
         let to;
         let label;
@@ -62,14 +62,18 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
             }
             from = sel.from;
             to = sel.to;
-            label = target.linkLabel?.trim() || (from === to ? defaultLinkLabel(target) : editor.readText(from, to));
+            label = target.linkLabel?.trim() || editor.readText(from, to).trim() || defaultLinkLabel(target);
         }
         if (!label.trim()) {
-            editor.focus();
-            return;
+            return false;
         }
-        editor.exec('insertEntryLink', { targetId: target.id, label, from, to });
+        const inserted = target.href
+            ? editor.exec('insertWebLink', { href: target.href, label, from, to })
+            : editor.exec('insertEntryLink', { targetId: target.id, label, from, to });
+        if (target.href && !inserted) return false;
+        linkPicker = null;
         editor.focus();
+        return inserted;
     }
 
     async function followEntryLink(id) {
@@ -98,13 +102,13 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
     }
 
     function openHref(href, modified) {
-        if (!modified || isFrozen()) return;
+        if (isFrozen()) return;
         const kind = classifyHref(href);
-        if (kind === 'entry') {
+        if (kind === 'entry' && modified) {
             const id = parseEntryTarget(href);
             if (id) followEntryLink(id);
         } else if (kind === 'external') {
-            openExternalLink(href);
+            return openExternalLink(href);
         }
     }
 
@@ -195,8 +199,18 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
         }
     }
 
-    function openExternalLink(href) {
-        api.openLink(href).catch(() => { });
+    async function openExternalLink(href) {
+        if (isFrozen() || openingExternalLink) return;
+        openingExternalLink = true;
+        try {
+            const destination = /^https:/i.test(href) ? normalizeWebHref(href) : href;
+            if (!destination) throw new Error('Invalid external URL');
+            await api.openLink(destination);
+        } catch {
+            if (!isFrozen()) notifyError?.(SESSION_TEXT.linkOpenFailed);
+        } finally {
+            openingExternalLink = false;
+        }
     }
 
     return {
@@ -233,6 +247,5 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
         retryPendingNav,
         openHref,
         linkAction,
-        openExternalLink,
     };
 }

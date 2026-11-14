@@ -8,6 +8,7 @@
 // (see markdown.js for the parser side).
 
 import { Schema } from "prosemirror-model";
+import { isWithinLinkLimit } from "../lib/entry-target.js";
 
 // CommonMark specs adapted from prosemirror-markdown 1.13.8.
 // See markdown-adapter/LICENSE.
@@ -81,7 +82,8 @@ const nodes = {
         },
         group: "inline",
         draggable: true,
-        toDOM(node) { return ["img", node.attrs]; }
+        // The view sets src after validating the attachment destination.
+        toDOM(node) { return ["img", { alt: node.attrs.alt, title: node.attrs.title }]; }
     },
     hard_break: {
         inline: true,
@@ -157,7 +159,18 @@ const marks = {
             title: { default: null }
         },
         inclusive: false,
-        toDOM(node) { return ["a", node.attrs]; }
+        toDOM(node) {
+            const { href } = node.attrs;
+            if (!isWithinLinkLimit(href)) return ["span"];
+            return ["a", {
+                "data-href": href,
+                // Authored titles are preserved in Markdown. The tooltip
+                // only displays the actual destination.
+                title: href,
+                role: "link",
+                tabindex: 0,
+            }];
+        }
     },
     code: {
         code: true,

@@ -28,6 +28,11 @@ import { deleteSelection as deleteSelectionCmd, insertTextIn } from "./commands.
 import { inlineSlice } from "./transform.js";
 import { caretScrollDelta } from "./scroll.js";
 import { tokenize } from "./highlight.js";
+import { serializeMarkdown } from "./markdown.js";
+import { completeMarkdownLink } from "./rules.js";
+import { classifyHref } from "../lib/entry-target.js";
+
+const MARKDOWN_CLIPBOARD_TYPE = "text/x-soirvu-markdown";
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -167,12 +172,9 @@ export class EditorView {
             contentEl = parent;
         });
         if (node.type.name === "image") {
-            // §6.5: only attachment: images ever load, through the
-            // asset protocol. A remote URL renders as a placeholder
-            // and causes no network request.
-            const src = node.attrs.src || "";
-            if (src.startsWith("attachment:")) {
-                el.setAttribute("src", assetUrl(src.slice("attachment:".length)));
+            // Match Rust's canonical lowercase attachment UUID format.
+            const attachment = /^attachment:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(node.attrs.src);
+            if (attachment) {
                 // An image this engine cannot decode (HEIC on
                 // WebKitGTK or WebView2, say) fires error: mark
                 // it, and the stylesheet shows a labelled
@@ -186,8 +188,8 @@ export class EditorView {
                         `${el.getAttribute("alt") || "Image"} — cannot be shown here; double-click to open the file.`,
                     );
                 });
+                el.setAttribute("src", assetUrl(attachment[1]));
             } else {
-                el.removeAttribute("src");
                 el.setAttribute("data-blocked-image", "");
             }
         }
@@ -350,7 +352,13 @@ export class EditorView {
 
     onHoverBlock(e) {
         if (this.dragState || !this.editable()) return;
-        const blockEl = this.topBlockOf(e.target);
+        // In the editor gutter, the pointer targets the editor itself.
+        const blockEl = e.target === this.dom
+            ? Array.from(this.dom.children).find((el) => {
+                const { top, bottom } = el.getBoundingClientRect();
+                return e.clientY >= top && e.clientY < bottom;
+            })
+            : this.topBlockOf(e.target);
         if (!blockEl || blockEl._pos === undefined) {
             this.hideDragHandle();
             return;
@@ -360,8 +368,12 @@ export class EditorView {
         const editorRect = this.dom.getBoundingClientRect();
         this.dragBlock = { el: blockEl, pos: blockEl._pos, node: blockEl._node };
         this.dragHandle.style.left = Math.max(0, editorRect.left - 22) + "px";
-        this.dragHandle.style.top = rect.top + "px";
         this.dragHandle.style.display = "block";
+        // Keep the grip beside the pointer in tall blocks. From a
+        // lower code line, the pointer can cross the gutter directly.
+        const height = this.dragHandle.offsetHeight;
+        const top = Math.max(rect.top, Math.min(e.clientY - height / 2, rect.bottom - height));
+        this.dragHandle.style.top = top + "px";
     }
 
     hideDragHandle() {
@@ -640,14 +652,25 @@ export class EditorView {
             },
             compositionend: (e) => this.onCompositionEnd(e),
             paste: (e) => this.onPaste(e),
+            copy: (e) => this.onCopy(e),
+            cut: (e) => this.onCut(e),
             mousedown: (e) => this.onMouseDown(e),
-            mousemove: (e) => this.onHoverBlock(e),
+            mousemove: (e) => {
+                this.trackLinkPress(e);
+                this.onHoverBlock(e);
+            },
+            dragstart: () => {
+                if (this.linkPress) this.linkPress.dragged = true;
+            },
             mouseleave: (e) => {
                 // Moving onto the handle itself is not leaving:
                 // it sits outside the editor, in the gutter.
                 if (e.relatedTarget !== this.dragHandle) this.hideDragHandle();
             },
             click: (e) => this.onClick(e),
+            auxclick: (e) => {
+                if (this.linkAtEvent(e)) e.preventDefault();
+            },
             drop: (e) => this.onDrop(e),
             dragover: (e) => e.preventDefault(),
         };
@@ -680,6 +703,9 @@ export class EditorView {
     }
 
     runKey(key, mods = {}) {
+        if (key === "Enter" && this.editable()) {
+            completeMarkdownLink(this.state, (tr) => this.dispatch(tr));
+        }
         const event = {
             key,
             ctrlKey: Boolean(mods.ctrl),
@@ -699,7 +725,11 @@ export class EditorView {
     }
 
     onKeyDown(e) {
+        if (e.key === "Enter" && this.activateLink(e, true)) return;
         if (this.composing) return;
+        if (e.key === "Enter" && this.editable()) {
+            completeMarkdownLink(this.state, (tr) => this.dispatch(tr));
+        }
         if (this.pluginProp("handleKeyDown", e)) {
             e.preventDefault();
             this.lastHandledInputAt = performance.now();
@@ -707,6 +737,10 @@ export class EditorView {
     }
 
     onBeforeInput(e) {
+        if (!this.editable()) {
+            e.preventDefault();
+            return;
+        }
         if (this.composing) return;
         const state = this.state;
         const sel = state.selection;
@@ -779,25 +813,61 @@ export class EditorView {
 
     onDrop(e) {
         e.preventDefault();
+        if (!this.editable()) return;
         const files = e.dataTransfer ? e.dataTransfer.files : null;
         if (files && files.length && this.onAttachFile) {
             for (const file of files) this.onAttachFile(file);
         }
     }
 
+    writeClipboardSelection(e) {
+        if (this.composing || !e.clipboardData) return;
+        const selection = this.readDOMSelection();
+        if (!selection || !Number.isFinite(selection.anchor) || !Number.isFinite(selection.head) ||
+            selection.anchor === selection.head) return;
+        const from = Math.min(selection.anchor, selection.head);
+        const to = Math.max(selection.anchor, selection.head);
+        const markdown = serializeMarkdown(this.state.doc.cut(from, to));
+        e.clipboardData.setData("text/plain", markdown);
+        e.clipboardData.setData(MARKDOWN_CLIPBOARD_TYPE, markdown);
+        e.preventDefault();
+        return { from, to };
+    }
+
+    onCopy(e) {
+        this.writeClipboardSelection(e);
+    }
+
+    onCut(e) {
+        e.preventDefault();
+        if (this.composing || !this.editable() || !e.clipboardData) {
+            e.stopPropagation();
+            return;
+        }
+        const selection = this.writeClipboardSelection(e);
+        if (!selection) {
+            e.stopPropagation();
+            return;
+        }
+        const { from, to } = selection;
+        const tr = this.state.tr().delete(from, to);
+        tr.setSelection(selectionNear(tr.doc, from));
+        this.dispatch(tr);
+    }
+
     onPaste(e) {
-        if (this.composing) return;
+        e.preventDefault();
+        if (this.composing || !this.editable()) return;
         const files = e.clipboardData ? e.clipboardData.files : null;
         if (files && files.length && this.onAttachFile) {
-            e.preventDefault();
             for (const file of files) this.onAttachFile(file);
             return;
         }
-        const text = e.clipboardData ? e.clipboardData.getData("text/plain") : null;
+        const markdown = e.clipboardData?.getData(MARKDOWN_CLIPBOARD_TYPE);
+        const text = markdown || e.clipboardData?.getData("text/plain");
         if (text != null && this.onPasteText) {
-            e.preventDefault();
             this.lastHandledInputAt = performance.now();
-            this.onPasteText(text, this.state, (tr) => this.dispatch(tr));
+            this.onPasteText(text, this.state, (tr) => this.dispatch(tr), Boolean(markdown));
         }
     }
 
@@ -860,8 +930,12 @@ export class EditorView {
             ? inlineSlice(Fragment.from(state.schema.text(inserted, marks)))
             : inlineSlice(Fragment.empty);
         tr.replaceRange(from, to, slice);
-        tr.setSelection(new TextSelection(from + inserted.length));
+        const caret = from + inserted.length;
+        tr.setSelection(new TextSelection(caret));
         this.dispatch(tr);
+        if (this.state.selection.head === caret) {
+            completeMarkdownLink(this.state, (conversion) => this.dispatch(conversion));
+        }
     }
 
     onInputFallback() {
@@ -873,6 +947,9 @@ export class EditorView {
     }
 
     onClick(e) {
+        this.trackLinkPress(e);
+        const dragged = this.linkPress?.dragged;
+        this.linkPress = null;
         // A task item's checkbox lives in the gutter left of its
         // text (EntryEditor's CSS draws it there). A click in the
         // gutter toggles the item; a click on the text just edits.
@@ -885,17 +962,33 @@ export class EditorView {
                 return;
             }
         }
-        const link = e.target.closest ? e.target.closest("a[href]") : null;
-        if (link && this.dom.contains(link)) {
-            // Plain clicks only move the caret. Following a link —
-            // in-vault or external — takes an explicit modifier
-            // click, so reading never navigates by accident.
-            if (e.metaKey || e.ctrlKey) {
-                e.preventDefault();
-                if (this.handleClickOn) this.handleClickOn(link.getAttribute("href"), true);
-            }
-            return;
+        if (!dragged) this.activateLink(e);
+    }
+
+    trackLinkPress(e) {
+        const press = this.linkPress;
+        if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) >= 4) {
+            press.dragged = true;
         }
+    }
+
+    linkAtEvent(e) {
+        const link = e.target.closest?.("a[data-href]");
+        return link && this.dom.contains(link) ? link : null;
+    }
+
+    activateLink(e, keyboard = false) {
+        const link = this.linkAtEvent(e);
+        if (!link || this.composing) return false;
+        e.preventDefault();
+        if (!keyboard) {
+            const selection = this.readDOMSelection();
+            if (e.button !== 0 || e.detail > 1 || (selection && selection.anchor !== selection.head)) return true;
+        }
+        const href = link.getAttribute("data-href");
+        const modified = keyboard || e.metaKey || e.ctrlKey;
+        if (classifyHref(href) === "external" || modified) this.handleClickOn?.(href, modified);
+        return true;
     }
 
     // Pressing on an atom selects it in the model, synchronously:
@@ -904,6 +997,9 @@ export class EditorView {
     // be guessed. The event is not prevented — media controls and
     // everything else still receive it normally.
     onMouseDown(e) {
+        this.linkPress = e.button === 0
+            ? { x: e.clientX, y: e.clientY, dragged: false }
+            : null;
         const atom = e.target.closest ? e.target.closest("[data-atom]") : null;
         if (!atom || !this.dom.contains(atom) || atom._pos === undefined) return;
         const pos = atom._pos;

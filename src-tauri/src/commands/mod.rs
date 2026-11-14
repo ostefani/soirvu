@@ -66,10 +66,14 @@ pub fn reload_main_window(app: &AppHandle) {
         // the iframe's src — because the app frame is sandboxed
         // cross-origin: touching its contentWindow.location
         // throws a SecurityError and nothing reloads at all.
+        // Keep bindings local to each eval. Reloading a frame leaves
+        // the current document's global bindings alive.
         let _ = window.eval(
-            "const f = document.querySelector('iframe'); \
-             if (f) { f.setAttribute('src', f.getAttribute('src')); } \
-             else { window.location.reload(); }",
+            "(() => { \
+                const frame = document.querySelector('iframe'); \
+                if (frame) { frame.setAttribute('src', frame.getAttribute('src')); } \
+                else { window.location.reload(); } \
+             })();",
         );
     }
 }

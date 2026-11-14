@@ -22,7 +22,7 @@ import { MarkdownParser } from "./markdown-adapter/parser.js";
 import { MarkdownSerializer, commonNodes, commonMarks } from "./markdown-adapter/serializer.js";
 
 import { schema } from "./schema.js";
-import { isEntryHref } from "../lib/entry-target.js";
+import { classifyHref, isWithinLinkLimit } from "../lib/entry-target.js";
 
 const RAW_INFO = "soirvu-raw";
 // Distinct encodings let Markdown carry empty blocks and breaks in positions
@@ -216,7 +216,7 @@ function extractRawBlocks(source) {
 // prefix becomes a mark, so the editor can never display a link
 // the backlink verifier would reject.
 function allowedHref(href) {
-    return /^(https?:\/\/|mailto:|attachment:)/i.test(href || "") || isEntryHref(href);
+    return classifyHref(href) !== "other";
 }
 
 // ---------------------------------------------------------------------------
@@ -298,8 +298,9 @@ parser.tokenHandlers.fence = (state, tok) => {
 parser.tokenHandlers.link_open = (state, tok) => {
     const href = tok.attrGet("href");
     if (!allowedHref(href)) return;
+    const title = tok.attrGet("title");
     state.openMark(
-        schema.marks.link.create({ href, title: tok.attrGet("title") || null }),
+        schema.marks.link.create({ href, title: title && isWithinLinkLimit(title) ? title : null }),
     );
 };
 
@@ -540,6 +541,11 @@ function needsCodePadding(text) {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Parses Markdown into the editor schema, preserving unsupported markup as text.
+ * @param {string} source Markdown source.
+ * @returns {import("prosemirror-model").Node} The editor document.
+ */
 export function parseMarkdown(source) {
     try {
         return parser.parse(extractRawBlocks(source));
@@ -559,6 +565,19 @@ export function parseMarkdown(source) {
     }
 }
 
+/** Parses an inline Markdown expression without interpreting block syntax. */
+export function parseInlineMarkdown(source) {
+    const tokens = md.parseInline(source, {});
+    const open = new md.constructor.Token("paragraph_open", "p", 1);
+    const close = new md.constructor.Token("paragraph_close", "p", -1);
+    return parser.parseTokens([open, ...tokens, close]);
+}
+
+/**
+ * Serializes an editor document to normalized Markdown.
+ * @param {import("prosemirror-model").Node} doc A document in the editor schema.
+ * @returns {string} Markdown, or an empty string for a single empty paragraph.
+ */
 export function serializeMarkdown(doc) {
     if (doc.childCount === 1 && doc.firstChild.type === schema.nodes.paragraph && doc.firstChild.childCount === 0) return "";
     return serializer.serialize(doc, { tightLists: true });

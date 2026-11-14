@@ -12,6 +12,7 @@ export const SESSION_TEXT = {
     linkMoved: 'The link moved — place the cursor on it and retry.',
     linkCopied: 'Internal link copied.',
     linkCopyFailed: 'Could not copy the link.',
+    linkOpenFailed: 'This link could not be opened.',
     targetDeleted: 'The target entry was deleted.',
     diaryLocked: 'The diary is locked.',
     tooManyUploads: 'Too many files are being attached. Please try again.',

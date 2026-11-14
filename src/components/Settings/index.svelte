@@ -103,7 +103,10 @@
                     </div>
                 </SettingsCard>
 
-                <SettingsCard title={text.privacyTitle} notes={[text.privacyIntro]}>
+                <SettingsCard title={text.privacyTitle} notes={[
+                    text.privacyIntro,
+                    ...(privacyOptions.some((option) => option.setting === 'clipboard_clear') ? [text.clipboardPrivacy] : []),
+                ]}>
                     <div class="checkbox-group">
                         {#each privacyOptions as option (option.setting)}
                             <Checkbox

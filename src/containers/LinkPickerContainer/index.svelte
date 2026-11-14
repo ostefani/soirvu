@@ -5,6 +5,7 @@
     import * as api from '@/api.js';
     import { LINK_PICKER_TEXT } from './data.js';
     import { readEntryLink } from '@/lib/links.js';
+    import { normalizeWebHref } from '@/lib/entry-target.js';
     import LinkPicker from '@/components/LinkPicker/index.svelte';
 
     let { initialQuery = '', initialLabel = '', folders = [], canRemove = false, onRemoveLink = null, onPick = null, onCancel = null } = $props();
@@ -51,6 +52,14 @@
     }
 
     function applyPastedLink(value, label) {
+        const href = normalizeWebHref(value.trim());
+        if (href) {
+            linkError = '';
+            if (onPick?.({ href, title: value.trim(), linkLabel: label }) === false) {
+                linkError = LINK_PICKER_TEXT.cannotInsert;
+            }
+            return;
+        }
         const link = readEntryLink(value);
         if (!link) {
             linkError = LINK_PICKER_TEXT.invalidLink;

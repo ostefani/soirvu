@@ -10,6 +10,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { scopeToWire } from "./lib/scope.js";
 
+export function showEditMenu({ x, y, copy, cut, paste }) {
+    return invoke('show_edit_menu', { x, y, copy, cut, paste });
+}
+
 /**
  * @typedef {object} VaultInfo
  * @property {string} id
