@@ -350,7 +350,13 @@ export class EditorView {
 
     onHoverBlock(e) {
         if (this.dragState || !this.editable()) return;
-        const blockEl = this.topBlockOf(e.target);
+        // In the editor gutter, the pointer targets the editor itself.
+        const blockEl = e.target === this.dom
+            ? Array.from(this.dom.children).find((el) => {
+                const { top, bottom } = el.getBoundingClientRect();
+                return e.clientY >= top && e.clientY < bottom;
+            })
+            : this.topBlockOf(e.target);
         if (!blockEl || blockEl._pos === undefined) {
             this.hideDragHandle();
             return;
