@@ -39,7 +39,10 @@ function looksLikeMarkdown(text) {
 /** Paste policy (§6.5): plain text goes in as text (newlines as
  *  hard breaks, blank lines as paragraph splits); text that looks
  *  like Markdown is parsed as Markdown. Foreign HTML never enters
- *  the schema. Editor copies explicitly identify their Markdown. */
+ *  the schema. Editor copies explicitly identify their Markdown.
+ * @returns {(text: string, state: EditorState, dispatch: (tr: import("./transform.js").Transaction) => void, isMarkdown?: boolean) => void}
+ *   A handler that inserts clipboard text at the current selection.
+ */
 export function makePasteHandler() {
     return (text, state, dispatch, isMarkdown = false) => {
         // Inside a code or raw block the clipboard is literal
@@ -243,7 +246,12 @@ export function createEditor(el, options = {}) {
         getMarkdown() {
             return serializeMarkdown(view.state.doc);
         },
-        /** Plain text of a range (for link labels and previews). */
+        /**
+         * Reads plain text for link labels and previews.
+         * @param {number} from Start position in the current document.
+         * @param {number} to Exclusive end position in the current document.
+         * @returns {string} The selected text, with block boundaries separated by newlines.
+         */
         readText(from, to) {
             return view.state.doc.textBetween(from, to, "\n");
         },
@@ -251,11 +259,17 @@ export function createEditor(el, options = {}) {
          * Current range of the link run with this href, re-resolved
          * against the live document (for popover actions after an
          * async gap). Null when the link moved beyond recognition.
+         * @param {string} href The expected link destination.
+         * @param {number} hintPos A document position expected to touch the link.
          */
         locateLink(href, hintPos) {
             return locateLink(view.state, href, hintPos);
         },
-        /** Selects a range (history restores the source selection). */
+        /**
+         * Focuses the editor and selects a range.
+         * @param {number} from The anchor position in the current document.
+         * @param {number} [to] The head position, defaulting to the anchor.
+         */
         setTextSelection(from, to) {
             const tr = view.state.tr();
             tr.setSelection(new TextSelection(from, to ?? from));
@@ -267,7 +281,10 @@ export function createEditor(el, options = {}) {
             const active = document.activeElement;
             if (active && view.dom.contains(active)) active.blur();
         },
-        /** Replaces the document (switching entries). History resets. */
+        /**
+         * Replaces the document and resets history when switching entries.
+         * @param {string} md Markdown for the next entry.
+         */
         setMarkdown(md) {
             view.updateState(EditorState.create({ doc: parseMarkdown(md), plugins }));
             if (onSelectionChange) onSelectionChange();

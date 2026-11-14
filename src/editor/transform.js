@@ -13,6 +13,11 @@
 import { Fragment, Slice } from "prosemirror-model";
 
 export class ReplaceStep {
+    /**
+     * @param {number} from Start position in the input document.
+     * @param {number} to Exclusive end position in the input document.
+     * @param {Slice} slice Content to insert at the range.
+     */
     constructor(from, to, slice) {
         this.from = from;
         this.to = to;
@@ -51,6 +56,12 @@ export class Mapping {
         this.maps = maps;
     }
 
+    /**
+     * Maps a position through all replacement steps in order.
+     * @param {number} pos Position before the first step.
+     * @param {number} [assoc=1] The side to follow at a replacement boundary. Use -1 for left and 1 for right.
+     * @returns {{pos: number, deleted: boolean}} The final position and whether it fell strictly inside a replaced range at any step.
+     */
     map(pos, assoc = 1) {
         let deleted = false;
         for (const step of this.maps) {
@@ -62,12 +73,18 @@ export class Mapping {
     }
 }
 
-/** A slice holding exactly the given nodes, closed on both sides. */
+/**
+ * @param {import("prosemirror-model").Node[]} nodes Nodes to wrap.
+ * @returns {Slice} A slice closed on both sides.
+ */
 export function closedSlice(nodes) {
     return new Slice(Fragment.fromArray(nodes), 0, 0);
 }
 
-/** A slice holding inline content (for replacing inside a textblock). */
+/**
+ * @param {Fragment} fragment Inline content for replacement inside a textblock.
+ * @returns {Slice} A slice closed on both sides.
+ */
 export function inlineSlice(fragment) {
     return new Slice(fragment, 0, 0);
 }

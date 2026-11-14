@@ -10,6 +10,10 @@
 import { Transaction } from "./transform.js";
 
 export class TextSelection {
+    /**
+     * @param {number} anchor The fixed endpoint in document coordinates.
+     * @param {number} [head=anchor] The moving endpoint in document coordinates.
+     */
     constructor(anchor, head = anchor) {
         this.type = "text";
         this.anchor = anchor;
@@ -50,6 +54,7 @@ export class TextSelection {
 }
 
 export class NodeSelection {
+    /** @param {number} anchor The document position immediately before the selected node. */
     constructor(anchor) {
         this.type = "node";
         this.anchor = anchor;
@@ -142,10 +147,16 @@ export class EditorState {
         return this.doc.type.schema;
     }
 
+    /** @returns {Transaction} A mutable transaction based on this state. */
     tr() {
         return new Transaction(this);
     }
 
+    /**
+     * Applies a transaction and updates plugin state.
+     * @param {Transaction} tr A transaction based on this state.
+     * @returns {EditorState} The resulting state.
+     */
     apply(tr) {
         const fields = { ...this.fields };
         const next = new EditorState({

@@ -540,6 +540,11 @@ function needsCodePadding(text) {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Parses Markdown into the editor schema, preserving unsupported markup as text.
+ * @param {string} source Markdown source.
+ * @returns {import("prosemirror-model").Node} The editor document.
+ */
 export function parseMarkdown(source) {
     try {
         return parser.parse(extractRawBlocks(source));
@@ -559,6 +564,11 @@ export function parseMarkdown(source) {
     }
 }
 
+/**
+ * Serializes an editor document to normalized Markdown.
+ * @param {import("prosemirror-model").Node} doc A document in the editor schema.
+ * @returns {string} Markdown, or an empty string for a single empty paragraph.
+ */
 export function serializeMarkdown(doc) {
     if (doc.childCount === 1 && doc.firstChild.type === schema.nodes.paragraph && doc.firstChild.childCount === 0) return "";
     return serializer.serialize(doc, { tightLists: true });
