@@ -29,16 +29,35 @@ pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
 
     install_before_show(window, |webview| {
         let view = webview.inner();
-        let settings = view
-            .settings()
-            .ok_or_else(|| std::io::Error::other("WebKitGTK settings are unavailable"))?;
-        settings.set_enable_dns_prefetching(false);
-        settings.set_enable_hyperlink_auditing(false);
-        if settings.enables_dns_prefetching() || settings.enables_hyperlink_auditing() {
-            return Err(
-                std::io::Error::other("WebKitGTK privacy settings did not take effect").into(),
-            );
+        // SAFETY: These functions report the linked WebKitGTK runtime version.
+        let version = unsafe {
+            (
+                webkit2gtk::ffi::webkit_get_major_version(),
+                webkit2gtk::ffi::webkit_get_minor_version(),
+            )
+        };
+        if version < (2, 50) {
+            let settings = view
+                .settings()
+                .ok_or_else(|| std::io::Error::other("WebKitGTK settings are unavailable"))?;
+            if version < (2, 48) {
+                settings.set_enable_dns_prefetching(false);
+                if settings.enables_dns_prefetching() {
+                    return Err(std::io::Error::other(
+                        "WebKitGTK DNS prefetching is still enabled",
+                    )
+                    .into());
+                }
+            }
+            settings.set_enable_hyperlink_auditing(false);
+            if settings.enables_hyperlink_auditing() {
+                return Err(
+                    std::io::Error::other("WebKitGTK hyperlink auditing is still enabled").into(),
+                );
+            }
         }
+        // On newer WebKitGTK the setters are no-ops. SoirVu renders diary
+        // links without href or ping and does not emit DNS-prefetch hints.
         view.connect_context_menu(|_, menu, _, _| {
             for item in menu.items() {
                 if !matches!(

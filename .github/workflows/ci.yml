@@ -103,7 +103,7 @@ jobs:
         env:
           SOIRVU_DEBUG_STARTUP: check
           WEBKIT_DISABLE_DMABUF_RENDERER: "1"
-        run: dbus-run-session -- xvfb-run -a cargo run --locked -p SoirVu --bin soirvu
+        run: xvfb-run -a dbus-run-session -- cargo run --locked -p SoirVu --bin soirvu
       - name: Smoke-test native privacy setup (Windows)
         if: runner.os == 'Windows'
         timeout-minutes: 10
