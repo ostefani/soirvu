@@ -135,8 +135,12 @@ export class MarkdownParser {
     }
 
     parse(text, markdownEnv = {}) {
+        return this.parseTokens(this.tokenizer.parse(text, markdownEnv));
+    }
+
+    parseTokens(tokens) {
         let state = new MarkdownParseState(this.schema, this.tokenHandlers), doc;
-        state.parseTokens(this.tokenizer.parse(text, markdownEnv));
+        state.parseTokens(tokens);
         do {
             doc = state.closeNode();
         } while (state.stack.length);

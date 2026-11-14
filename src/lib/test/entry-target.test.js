@@ -45,3 +45,8 @@ test('web destinations are normalized and bounded before opening', () => {
     assert.equal(normalizeWebHref('https://example.com/' + 'a'.repeat(4096)), null);
     assert.equal(normalizeWebHref('https://user@example.com'), null);
 });
+
+test('a literal percent is allowed while encoded format characters stay blocked', () => {
+    assert.equal(normalizeWebHref('https://example.com/50%off'), 'https://example.com/50%off');
+    assert.equal(normalizeWebHref('https://example.com/50%off/%E2%80%8D'), null);
+});

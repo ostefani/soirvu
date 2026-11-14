@@ -358,6 +358,7 @@ mod url_tests {
     fn outbound_urls_require_an_explicit_destination_and_safe_mail_fields() {
         let https = parse_outbound_url("HTTPS://Example.COM:443/help?q=a%20b").unwrap();
         assert_eq!(https.as_str(), "https://example.com/help?q=a%20b");
+        assert!(parse_outbound_url("https://example.com/50%off").is_some());
         let mail = "mailto:note+diary@example.com?subject=Diary%20note&body=Hello";
         assert_eq!(parse_outbound_url(mail).unwrap().as_str(), mail);
 

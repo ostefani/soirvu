@@ -47,7 +47,6 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
         const editor = getEditor();
         const picker = linkPicker;
         if (!editor || !picker || isFrozen()) return;
-        linkPicker = null;
         let from;
         let to;
         let label;
@@ -66,11 +65,15 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
             label = target.linkLabel?.trim() || (from === to ? defaultLinkLabel(target) : editor.readText(from, to));
         }
         if (!label.trim()) {
-            editor.focus();
-            return;
+            return false;
         }
-        editor.exec('insertEntryLink', { targetId: target.id, label, from, to });
+        const inserted = target.href
+            ? editor.exec('insertWebLink', { href: target.href, label, from, to })
+            : editor.exec('insertEntryLink', { targetId: target.id, label, from, to });
+        if (target.href && !inserted) return false;
+        linkPicker = null;
         editor.focus();
+        return inserted;
     }
 
     async function followEntryLink(id) {
@@ -105,7 +108,7 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
             const id = parseEntryTarget(href);
             if (id) followEntryLink(id);
         } else if (kind === 'external') {
-            openExternalLink(href);
+            return openExternalLink(href);
         }
     }
 

@@ -155,14 +155,12 @@ const marks = {
     link: {
         attrs: {
             href: {},
-            bare: { default: false },
             title: { default: null }
         },
         inclusive: false,
         toDOM(node) {
             return ["a", {
                 "data-href": node.attrs.href,
-                "data-bare-link": node.attrs.bare ? "" : null,
                 title: node.attrs.title,
                 role: "link",
                 tabindex: 0,

@@ -17,7 +17,7 @@ import {
     wrapBlocks,
 } from "./commands.js";
 import { cursorMarks, TextSelection, selectionNear } from "./state.js";
-import { parseEntryTarget } from "../lib/entry-target.js";
+import { normalizeWebHref, parseEntryTarget } from "../lib/entry-target.js";
 import {
     addColumnCommand,
     addRowCommand,
@@ -151,6 +151,15 @@ export function locateLink(state, href, hintPos) {
 export function insertEntryLink(state, dispatch, arg = {}) {
     const targetId = parseEntryTarget(`entry:${arg.targetId ?? ""}`);
     if (targetId === null) return false;
+    return insertLink(state, dispatch, arg, `entry:${targetId}`);
+}
+
+function insertWebLink(state, dispatch, arg = {}) {
+    const href = normalizeWebHref(arg.href ?? "");
+    return href ? insertLink(state, dispatch, arg, href) : false;
+}
+
+function insertLink(state, dispatch, arg, href) {
     const sel = state.selection;
     if (sel.type !== "text") return false;
     const from = arg.from ?? sel.from;
@@ -171,7 +180,7 @@ export function insertEntryLink(state, dispatch, arg = {}) {
     const kept = (marksAt ?? cursorMarks(state)).filter(
         (m) => m.type !== marks.code && m.type !== marks.link,
     );
-    const link = marks.link.create({ href: `entry:${targetId}`, title: null });
+    const link = marks.link.create({ href, title: null });
     const tr = state.tr();
     tr.replaceWith(from, to, [state.schema.text(label, [...kept, link])]);
     tr.setSelection(new TextSelection(from + label.length));
@@ -255,6 +264,7 @@ export function toolbarCommands(schema) {
         strike: toggleMark(marks.strike),
         code: toggleMark(marks.code),
         insertEntryLink: (state, dispatch, arg) => insertEntryLink(state, dispatch, arg),
+        insertWebLink,
         removeLink: removeMarkInRange(marks.link),
         paragraph: toParagraph,
         heading1: heading(1),

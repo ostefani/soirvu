@@ -5,6 +5,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makePasteHandler, parseMarkdown, serializeMarkdown } from '../index.js';
 import { EditorState, TextSelection } from '../state.js';
+import { applyInputRules, inputRulesPlugin, keymapPlugin } from '../rules.js';
+import { insertTextIn } from '../commands.js';
 import { EditorView } from '../view.js';
 
 test('copy preserves markup in a backward selection and pastes it as Markdown', () => {
@@ -36,7 +38,7 @@ test('copy preserves markup in a backward selection and pastes it as Markdown', 
     assert.equal(prevented, 2);
 });
 
-test('pasting a standalone HTTPS URL creates a Markdown link outside code', () => {
+test('pasting a standalone HTTPS URL keeps it plain', () => {
     const url = 'https://example.com/path';
     for (const [source, expected] of [
         ['', url],
@@ -45,6 +47,7 @@ test('pasting a standalone HTTPS URL creates a Markdown link outside code', () =
         let state = EditorState.create({ doc: parseMarkdown(source) });
         makePasteHandler()(url, state, (tr) => { state = state.apply(tr); });
         assert.equal(serializeMarkdown(state.doc), expected);
+        assert(!state.doc.firstChild.firstChild.marks.some((mark) => mark.type.name === 'link'));
     }
 });
 
@@ -75,7 +78,7 @@ test('a plain click on a web link delegates opening and cancels browser navigati
     assert.deepEqual(calls, [[href, false]]);
 });
 
-test('HTTPS URLs in pasted prose and saved notes become links', () => {
+test('bare HTTPS URLs stay plain in pasted prose and saved notes', () => {
     const text = 'See https://example.com, then\nhttps://example.org/help.';
     const hrefs = (doc) => {
         const links = [];
@@ -88,7 +91,7 @@ test('HTTPS URLs in pasted prose and saved notes become links', () => {
     };
     let state = EditorState.create({ doc: parseMarkdown('') });
     makePasteHandler()(text, state, (tr) => { state = state.apply(tr); });
-    const expected = ['https://example.com/', 'https://example.org/help'];
+    const expected = [];
     assert.deepEqual(hrefs(state.doc), expected);
     assert.deepEqual(hrefs(parseMarkdown(text)), expected);
     assert.deepEqual(hrefs(parseMarkdown(serializeMarkdown(state.doc))), expected);
@@ -107,7 +110,7 @@ test('paste keeps inline code literal and links URLs inside headings and table c
     ]) {
         let state = EditorState.create({ doc: parseMarkdown(markdown) });
         state = state.apply(state.tr().setSelection(new TextSelection(pos)));
-        makePasteHandler()(href, state, (tr) => { state = state.apply(tr); });
+        makePasteHandler()(`[label](${href})`, state, (tr) => { state = state.apply(tr); });
         const selected = state.doc.resolve(pos).nodeAfter;
         assert.deepEqual(selected.marks.map((mark) => mark.type.name), marks);
     }
@@ -120,4 +123,101 @@ test('an angle-bracket URL leaves adjacent HTML as text', () => {
     assert.equal(paragraph.firstChild.marks[0].attrs.href, 'https://example.com');
     assert.equal(paragraph.lastChild.text, '<script>');
     assert.deepEqual(paragraph.lastChild.marks, []);
+});
+
+test('typing the closing delimiter renders explicit Markdown links', () => {
+    const href = 'https://en.wikipedia.org/wiki/Foo_(bar)';
+    for (const source of [`[Article](${href}`, `<${href}`]) {
+        const end = source.startsWith('<') ? '>' : ')';
+        let state = EditorState.create({ doc: parseMarkdown(source) });
+        const pos = source.length + 1;
+        state = state.apply(state.tr().setSelection(new TextSelection(pos)));
+        const tr = applyInputRules(state, pos, pos, end);
+        assert.equal(tr.doc.firstChild.firstChild.marks[0].attrs.href, href);
+    }
+});
+
+test('typing a link preserves Markdown punctuation inside its URL', () => {
+    const href = 'https://example.com/a_b/(part)?q=*_~[]&next=value';
+    let state = EditorState.create({ doc: parseMarkdown('') });
+    for (const character of `[Article](${href})`) {
+        const { from, to } = state.selection;
+        let tr = applyInputRules(state, from, to, character);
+        if (!tr) {
+            tr = state.tr();
+            insertTextIn(tr, state, character);
+        }
+        state = state.apply(tr);
+    }
+    const expected = parseMarkdown(`[Article](${href})`);
+    assert(state.doc.eq(expected));
+    assert(state.doc.eq(parseMarkdown(serializeMarkdown(state.doc))));
+});
+
+test('URL punctuation survives plain and explicit Markdown round trips', () => {
+    const url = 'https://example.com/a_b_c/(part)?q=*_~[]&next=value';
+    const plain = parseMarkdown(url + '.');
+    assert.equal(parseMarkdown(serializeMarkdown(plain)).textContent, url + '.');
+    assert.deepEqual(plain.firstChild.firstChild.marks, []);
+
+    const source = '[Article](https://en.wikipedia.org/wiki/Foo_(bar)).';
+    const doc = parseMarkdown(source);
+    assert(doc.eq(parseMarkdown(serializeMarkdown(doc))));
+    assert.equal(doc.firstChild.lastChild.text, '.');
+});
+
+test('mail links activate on click or Enter and note links require a modifier or Enter', () => {
+    const note = 'entry:01900000-0000-7000-8000-000000000001';
+    let href = 'mailto:a@example.com';
+    const link = { getAttribute: () => href };
+    const calls = [];
+    const view = Object.assign(Object.create(EditorView.prototype), {
+        dom: { contains: (node) => node === link },
+        readDOMSelection: () => null,
+        handleClickOn: (target) => calls.push(target),
+    });
+    const event = {
+        target: { closest: () => link },
+        button: 0,
+        detail: 1,
+        preventDefault() {},
+    };
+    view.onClick(event);
+    view.onKeyDown({ ...event, key: 'Enter' });
+    href = note;
+    view.onClick(event);
+    view.onClick({ ...event, ctrlKey: true });
+    view.onKeyDown({ ...event, key: 'Enter' });
+    assert.deepEqual(calls, ['mailto:a@example.com', 'mailto:a@example.com', note, note]);
+});
+
+test('editor input renders complete link markup delivered in one event', () => {
+    const doc = parseMarkdown('');
+    const view = Object.assign(Object.create(EditorView.prototype), {
+        state: EditorState.create({ doc, plugins: [inputRulesPlugin()] }),
+        dispatchTransaction(tr) { this.state = this.state.apply(tr); },
+    });
+    view.onBeforeInput({
+        inputType: 'insertText',
+        data: '[test](https://example.com)',
+        preventDefault() {},
+    });
+    assert.equal(view.state.doc.textContent, 'test');
+    assert.equal(view.state.doc.firstChild.firstChild.marks[0].attrs.href, 'https://example.com');
+});
+
+test('Enter renders a literal link already present at the caret', () => {
+    const source = '[test](https://example.com)';
+    const doc = parseMarkdown('\\' + source);
+    let state = EditorState.create({ doc, plugins: [keymapPlugin(doc.type.schema)] });
+    state = state.apply(state.tr().setSelection(new TextSelection(source.length + 1)));
+    const view = Object.assign(Object.create(EditorView.prototype), {
+        state,
+        editable: () => true,
+        dispatchTransaction(tr) { this.state = this.state.apply(tr); },
+    });
+    view.onKeyDown({ key: 'Enter', target: {}, preventDefault() {} });
+    assert.equal(view.state.doc.firstChild.textContent, 'test');
+    assert.equal(view.state.doc.firstChild.firstChild.marks[0].attrs.href, 'https://example.com');
+    assert.equal(view.state.doc.childCount, 2);
 });

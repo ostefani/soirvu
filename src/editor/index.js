@@ -19,13 +19,14 @@ import { deleteSelectionIn, insertTextIn } from "./commands.js";
 import { locateLink, selectionInfo, toolbarCommands, toggleTaskAt } from "./toolbar.js";
 import { schema } from "./schema.js";
 import { isEntryHref } from "../lib/entry-target.js";
-import { findWebLinks, parseMarkdown, serializeMarkdown } from "./markdown.js";
+import { parseMarkdown, serializeMarkdown } from "./markdown.js";
 
 export { schema, parseMarkdown, serializeMarkdown };
 
 function looksLikeMarkdown(text) {
-    if (/<https?:\/\/[^<>\s]+>/i.test(text)) return true;
-    const formatted = /(^|\n)\s{0,3}(#{1,6}\s|>|```|~~~|- |\d+\.\s)|(\*\*|__)[^*\n]+\1|\[[^\]\n]+\]\(https?:[^)\s]+\)/.test(
+    if (/<(?:https?:\/\/|mailto:)[^<>\s]+>/i.test(text)) return true;
+    if (/\]\(\s*<?(?:https?:\/\/|mailto:)/i.test(text)) return true;
+    const formatted = /(^|\n)\s{0,3}(#{1,6}\s|>|```|~~~|- |\d+\.\s)|(\*\*|__)[^*\n]+\1/.test(
         text,
     );
     if (formatted) return true;
@@ -35,29 +36,6 @@ function looksLikeMarkdown(text) {
         if (node.isText && node.marks.some((mark) => mark.type.name === 'link' && isEntryHref(mark.attrs.href))) internalLink = true;
     });
     return internalLink;
-}
-
-function insertClipboardLine(tr, state, line) {
-    const links = findWebLinks(line);
-    if (!links.length) {
-        insertTextIn(tr, state, line);
-        return;
-    }
-    const { schema } = state;
-    const marks = cursorMarks(state);
-    const nodes = [];
-    let offset = 0;
-    for (const { index, lastIndex, href } of links) {
-        if (index > offset) nodes.push(schema.text(line.slice(offset, index), marks));
-        const link = schema.marks.link.create({ href, bare: true });
-        nodes.push(schema.text(line.slice(index, lastIndex), link.addToSet(marks)));
-        offset = lastIndex;
-    }
-    if (offset < line.length) nodes.push(schema.text(line.slice(offset), marks));
-    const pos = deleteSelectionIn(tr, state);
-    tr.replaceRange(pos, pos, new Slice(Fragment.fromArray(nodes), 0, 0));
-    tr.setSelection(new TextSelection(pos + line.length));
-    if (state.storedMarks) tr.setStoredMarks(state.storedMarks);
 }
 
 /** Paste policy (§6.5): plain text goes in as text (newlines as
@@ -139,7 +117,7 @@ export function makePasteHandler() {
                 }
                 if (line) {
                     const tr = current.tr();
-                    insertClipboardLine(tr, current, line);
+                    insertTextIn(tr, current, line);
                     send(tr);
                 }
             });

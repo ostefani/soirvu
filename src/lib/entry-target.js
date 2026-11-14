@@ -17,7 +17,10 @@ export function normalizeWebHref(href) {
         || /[\s<>\\]/u.test(href) || href.length > MAX_OUTBOUND_URL_BYTES
         || urlEncoder.encode(href).length > MAX_OUTBOUND_URL_BYTES) return null;
     try {
-        if (UNSAFE_URL_TEXT.test(href) || UNSAFE_URL_TEXT.test(decodeURIComponent(href))) return null;
+        // Match Rust's percent decoder: a stray percent stays literal.
+        const escaped = href.replace(/%(?![\da-f]{2})/gi, "%25");
+        // Reject all format characters, including ZWJ and ZWNJ, in outbound URLs.
+        if (UNSAFE_URL_TEXT.test(href) || UNSAFE_URL_TEXT.test(decodeURIComponent(escaped))) return null;
         const url = new URL(href);
         return url.hostname && urlEncoder.encode(url.href).length <= MAX_OUTBOUND_URL_BYTES ? url.href : null;
     } catch {

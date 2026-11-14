@@ -29,8 +29,8 @@ import { inlineSlice } from "./transform.js";
 import { caretScrollDelta } from "./scroll.js";
 import { tokenize } from "./highlight.js";
 import { serializeMarkdown } from "./markdown.js";
-import { classifyHref, normalizeWebHref } from "../lib/entry-target.js";
-import { locateLink } from "./toolbar.js";
+import { completeMarkdownLink } from "./rules.js";
+import { classifyHref } from "../lib/entry-target.js";
 
 const MARKDOWN_CLIPBOARD_TYPE = "text/x-soirvu-markdown";
 
@@ -699,6 +699,9 @@ export class EditorView {
     }
 
     runKey(key, mods = {}) {
+        if (key === "Enter" && this.editable()) {
+            completeMarkdownLink(this.state, (tr) => this.dispatch(tr));
+        }
         const event = {
             key,
             ctrlKey: Boolean(mods.ctrl),
@@ -720,6 +723,9 @@ export class EditorView {
     onKeyDown(e) {
         if (e.key === "Enter" && this.activateLink(e, true)) return;
         if (this.composing) return;
+        if (e.key === "Enter" && this.editable()) {
+            completeMarkdownLink(this.state, (tr) => this.dispatch(tr));
+        }
         if (this.pluginProp("handleKeyDown", e)) {
             e.preventDefault();
             this.lastHandledInputAt = performance.now();
@@ -892,8 +898,12 @@ export class EditorView {
             ? inlineSlice(Fragment.from(state.schema.text(inserted, marks)))
             : inlineSlice(Fragment.empty);
         tr.replaceRange(from, to, slice);
-        tr.setSelection(new TextSelection(from + inserted.length));
+        const caret = from + inserted.length;
+        tr.setSelection(new TextSelection(caret));
         this.dispatch(tr);
+        if (this.state.selection.head === caret) {
+            completeMarkdownLink(this.state, (conversion) => this.dispatch(conversion));
+        }
     }
 
     onInputFallback() {
@@ -933,13 +943,7 @@ export class EditorView {
             const selection = this.readDOMSelection();
             if (e.button !== 0 || e.detail > 1 || (selection && selection.anchor !== selection.head)) return true;
         }
-        let href = link.getAttribute("data-href");
-        if (link.hasAttribute("data-bare-link")) {
-            // Edits can change the visible URL before the note is reparsed.
-            const range = locateLink(this.state, href, link._pos);
-            href = range && normalizeWebHref(this.state.doc.textBetween(range.from, range.to));
-            if (!href) return true;
-        }
+        const href = link.getAttribute("data-href");
         const modified = keyboard || e.metaKey || e.ctrlKey;
         if (classifyHref(href) === "external" || modified) this.handleClickOn?.(href, modified);
         return true;
