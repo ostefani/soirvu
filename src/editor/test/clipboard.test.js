@@ -344,3 +344,34 @@ test('rendering a link exposes only its actual destination in the tooltip', (t) 
         assert.equal(serializeMarkdown(doc), source);
     }
 });
+
+test('dragging into or within a link does not open it after the DOM selection collapses', () => {
+    const href = 'https://example.com/';
+    const link = { getAttribute: () => href };
+    const linkTarget = { closest: (selector) => selector === 'a[data-href]' ? link : null };
+    const calls = [];
+    const view = Object.assign(Object.create(EditorView.prototype), {
+        dom: { contains: (node) => node === link },
+        readDOMSelection: () => null,
+        handleClickOn: (url) => calls.push(url),
+    });
+    const event = {
+        target: linkTarget,
+        button: 0,
+        detail: 1,
+        clientX: 10,
+        clientY: 10,
+        preventDefault() {},
+    };
+
+    view.onMouseDown(event);
+    view.trackLinkPress({ ...event, clientX: 30 });
+    view.onClick(event);
+    view.onMouseDown({ ...event, target: {} });
+    view.onClick({ ...event, clientX: 30 });
+    assert.deepEqual(calls, []);
+
+    view.onMouseDown(event);
+    view.onClick({ ...event, clientX: 11 });
+    assert.deepEqual(calls, [href]);
+});

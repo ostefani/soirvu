@@ -654,7 +654,13 @@ export class EditorView {
             paste: (e) => this.onPaste(e),
             copy: (e) => this.onCopy(e),
             mousedown: (e) => this.onMouseDown(e),
-            mousemove: (e) => this.onHoverBlock(e),
+            mousemove: (e) => {
+                this.trackLinkPress(e);
+                this.onHoverBlock(e);
+            },
+            dragstart: () => {
+                if (this.linkPress) this.linkPress.dragged = true;
+            },
             mouseleave: (e) => {
                 // Moving onto the handle itself is not leaving:
                 // it sits outside the editor, in the gutter.
@@ -912,6 +918,9 @@ export class EditorView {
     }
 
     onClick(e) {
+        this.trackLinkPress(e);
+        const dragged = this.linkPress?.dragged;
+        this.linkPress = null;
         // A task item's checkbox lives in the gutter left of its
         // text (EntryEditor's CSS draws it there). A click in the
         // gutter toggles the item; a click on the text just edits.
@@ -924,7 +933,14 @@ export class EditorView {
                 return;
             }
         }
-        this.activateLink(e);
+        if (!dragged) this.activateLink(e);
+    }
+
+    trackLinkPress(e) {
+        const press = this.linkPress;
+        if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) >= 4) {
+            press.dragged = true;
+        }
     }
 
     linkAtEvent(e) {
@@ -952,6 +968,9 @@ export class EditorView {
     // be guessed. The event is not prevented — media controls and
     // everything else still receive it normally.
     onMouseDown(e) {
+        this.linkPress = e.button === 0
+            ? { x: e.clientX, y: e.clientY, dragged: false }
+            : null;
         const atom = e.target.closest ? e.target.closest("[data-atom]") : null;
         if (!atom || !this.dom.contains(atom) || atom._pos === undefined) return;
         const pos = atom._pos;
