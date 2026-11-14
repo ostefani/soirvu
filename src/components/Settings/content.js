@@ -30,6 +30,7 @@ export const DEFAULT_TEXT = {
     storageIntro: 'View storage location and configure automatic locking.',
     privacyTitle: 'Privacy & Clipboard',
     privacyIntro: 'Control location metadata handling and clipboard auto-clearing.',
+    clipboardPrivacy: 'Other apps and Universal Clipboard can read copied text before SoirVu clears it.',
     backupTitle: 'Automated & Manual Backups',
     deviceIdentityTitle: 'Device Identity',
 };

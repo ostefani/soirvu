@@ -71,6 +71,8 @@ New passphrases require at least eight Unicode characters and at most 64 KiB. Ex
 
 Cut and Copy use the system clipboard to preserve normal paste behavior. On macOS, Universal Clipboard may share copied text with nearby devices if Handoff is enabled. SoirVu's clipboard clearing option does not recall text that the system or another app has already read.
 
+Windows clipboard history and sync and Linux clipboard managers may retain copied text. macOS Dictation is controlled by system settings and may send audio to Apple.
+
 External links require confirmation and support HTTPS or a single mail recipient with optional subject and body. The app webview stays on its packaged origin or the configured development origin. Vault connections enable SQLite defensive mode and disable trusted schemas.
 
 The vault schema checks entry and folder revisions, attachment sizes, and digest lengths on write. Upgrading a valid vault creates an encrypted pre-upgrade backup. If the upgrade finds invalid legacy metadata, it stops and preserves the existing rows for recovery. Older app builds cannot open the upgraded schema.

@@ -132,22 +132,6 @@ fn is_wry_webview_name(name: &[u8]) -> bool {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn wry_class_identity_does_not_depend_on_its_module() {
-        for name in [
-            b"WryWebView".as_slice(),
-            b"wry::relocated::WryWebView0.57.0",
-        ] {
-            assert!(super::is_wry_webview_name(name));
-        }
-        for name in [b"WKWebView".as_slice(), b"wry::WryWebViewParent0.57.0"] {
-            assert!(!super::is_wry_webview_name(name));
-        }
-    }
-}
-
 extern "C-unwind" fn ignore_lookup(_: &AnyObject, _: Sel, _: *mut AnyObject) {}
 
 extern "C-unwind" fn refuse_service(
@@ -226,4 +210,20 @@ pub fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri
             &Submenu::with_id_and_items(app, HELP_SUBMENU_ID, "Help", true, &[])?,
         ],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn wry_class_identity_does_not_depend_on_its_module() {
+        for name in [
+            b"WryWebView".as_slice(),
+            b"wry::relocated::WryWebView0.57.0",
+        ] {
+            assert!(super::is_wry_webview_name(name));
+        }
+        for name in [b"WKWebView".as_slice(), b"wry::WryWebViewParent0.57.0"] {
+            assert!(!super::is_wry_webview_name(name));
+        }
+    }
 }

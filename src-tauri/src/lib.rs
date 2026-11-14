@@ -143,8 +143,19 @@ pub fn run() {
             });
         })
         .setup(move |app| {
+            // Exercise the native window without loading the real vault registry
+            // or starting the frontend and its IPC requests.
+            #[cfg(debug_assertions)]
+            let startup_probe = std::env::var("SOIRVU_DEBUG_STARTUP").ok();
             // App config (§3): ~/Library/Application Support/<name>/
             let config_dir = app.path().config_dir()?.join(CONFIG_DIR_NAME);
+            #[cfg(debug_assertions)]
+            let probe_dir = match startup_probe.as_deref() {
+                Some("fail" | "check") => Some(tempfile::tempdir()?),
+                _ => None,
+            };
+            #[cfg(debug_assertions)]
+            let config_dir = probe_dir.as_ref().map_or(config_dir, |dir| dir.path().to_owned());
             app.manage(AppState::load(config_dir));
 
             // The main window is built in code, not in
@@ -155,10 +166,17 @@ pub fn run() {
                 .expect("valid packaged origin");
             let dev = tauri::is_dev().then(|| app.config().build.dev_url.clone()).flatten();
             let window = (|| -> tauri::Result<_> {
+                let url = tauri::WebviewUrl::App("index.html".into());
+                #[cfg(debug_assertions)]
+                let url = if probe_dir.is_some() {
+                    tauri::WebviewUrl::External(tauri::Url::parse("about:blank").expect("valid blank URL"))
+                } else {
+                    url
+                };
                 let builder = tauri::WebviewWindowBuilder::new(
                     app,
                     "main",
-                    tauri::WebviewUrl::App("index.html".into()),
+                    url,
                 )
                 .title("SoirVu")
                 .visible(false)
@@ -191,22 +209,35 @@ pub fn run() {
                 #[cfg(any(target_os = "linux", target_os = "windows"))]
                 let builder = builder.incognito(true);
                 let window = builder.build()?;
+                #[cfg(debug_assertions)]
+                if startup_probe.as_deref() == Some("fail") {
+                    return Err(std::io::Error::other("injected native privacy setup failure").into());
+                }
                 context_menu::install(&window)?;
+                #[cfg(debug_assertions)]
+                if startup_probe.as_deref() == Some("check") {
+                    return Ok(window);
+                }
                 window.show()?;
                 Ok(window)
             })();
+            // Keep the temporary registry alive until the probe exits.
+            #[cfg(debug_assertions)]
+            if let Some(dir) = probe_dir {
+                app.manage(dir);
+            }
             let window = match window {
                 Ok(window) => window,
                 Err(error) => {
                     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
                     eprintln!("SoirVu could not initialize the private window: {error}");
                     failure_in_setup.store(true, Ordering::Relaxed);
-                    if let Some(window) = app.get_webview_window("main") {
-                        if let Err(error) = window.destroy() {
-                            eprintln!("SoirVu could not destroy the failed window: {error}");
-                            app.handle().exit(1);
-                            return Ok(());
-                        }
+                    if let Some(window) = app.get_webview_window("main")
+                        && let Err(error) = window.destroy()
+                    {
+                        eprintln!("SoirVu could not destroy the failed window: {error}");
+                        app.handle().exit(1);
+                        return Ok(());
                     }
                     let handle = app.handle().clone();
                     let fallback = handle.clone();
@@ -223,6 +254,11 @@ pub fn run() {
                     return Ok(());
                 }
             };
+            #[cfg(debug_assertions)]
+            if startup_probe.as_deref() == Some("check") {
+                app.handle().exit(0);
+                return Ok(());
+            }
             let _ = window.set_focus();
 
             // OS lock signals (§9): system sleep, screen lock and

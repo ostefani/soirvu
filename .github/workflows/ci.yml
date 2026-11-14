@@ -86,6 +86,10 @@ jobs:
         run: cargo check --manifest-path src-tauri/Cargo.toml
       - name: Lint the platform bridge
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets
+      - name: Smoke-test native privacy setup (macOS)
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: SOIRVU_DEBUG_STARTUP=check cargo run --locked -p SoirVu --bin soirvu
       - name: Check the Touch ID variant compiles (macOS)
         if: runner.os == 'macOS'
         run: cargo check --manifest-path src-tauri/Cargo.toml --features touch-id
