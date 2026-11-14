@@ -9,6 +9,7 @@
             "nsis"
         ],
         "windows": {
+            "minimumWebview2Version": "100.0.1185.39",
             "webviewInstallMode": {
                 "type": "embedBootstrapper"
             },

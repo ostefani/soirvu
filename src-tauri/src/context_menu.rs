@@ -102,19 +102,26 @@ mod webview2 {
         unsafe {
             let core = webview.controller().CoreWebView2()?;
             let settings = core.Settings()?;
-            if let Ok(settings) = settings.cast::<ICoreWebView2Settings3>() {
-                settings.SetAreBrowserAcceleratorKeysEnabled(false)?;
-            }
-            if let Ok(settings) = settings.cast::<ICoreWebView2Settings4>() {
-                settings.SetIsGeneralAutofillEnabled(false)?;
-                settings.SetIsPasswordAutosaveEnabled(false)?;
+            let keyboard = settings.cast::<ICoreWebView2Settings3>()?;
+            let forms = settings.cast::<ICoreWebView2Settings4>()?;
+            keyboard.SetAreBrowserAcceleratorKeysEnabled(false)?;
+            forms.SetIsGeneralAutofillEnabled(false)?;
+            forms.SetIsPasswordAutosaveEnabled(false)?;
+            let mut shortcuts = Default::default();
+            let mut autofill = Default::default();
+            let mut autosave = Default::default();
+            keyboard.AreBrowserAcceleratorKeysEnabled(&mut shortcuts)?;
+            forms.IsGeneralAutofillEnabled(&mut autofill)?;
+            forms.IsPasswordAutosaveEnabled(&mut autosave)?;
+            if shortcuts.as_bool() || autofill.as_bool() || autosave.as_bool() {
+                return Err(windows_core::Error::new(
+                    windows_core::HRESULT(0x80004005_u32 as i32),
+                    "WebView2 privacy settings did not take effect",
+                ));
             }
             // Enable stock menu presentation only after installing the allowlist.
             settings.SetAreDefaultContextMenusEnabled(false)?;
-            // Older WebView2 runtimes can safely run without a context menu.
-            let Ok(core) = core.cast::<ICoreWebView2_11>() else {
-                return Ok(());
-            };
+            let core = core.cast::<ICoreWebView2_11>()?;
             let handler = ContextMenuRequestedEventHandler::create(Box::new(|_, args| {
                 if let Some(args) = args {
                     // If filtering fails partway through, never show the remainder.

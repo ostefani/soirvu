@@ -90,6 +90,20 @@ jobs:
         if: runner.os == 'macOS'
         timeout-minutes: 10
         run: SOIRVU_DEBUG_STARTUP=check cargo run --locked -p SoirVu --bin soirvu
+      - name: Smoke-test native privacy setup (Linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        env:
+          SOIRVU_DEBUG_STARTUP: check
+        run: |
+          sudo apt-get install -y xvfb xauth
+          xvfb-run -a cargo run --locked -p SoirVu --bin soirvu
+      - name: Smoke-test native privacy setup (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        env:
+          SOIRVU_DEBUG_STARTUP: check
+        run: cargo run --locked -p SoirVu --bin soirvu
       - name: Check the Touch ID variant compiles (macOS)
         if: runner.os == 'macOS'
         run: cargo check --manifest-path src-tauri/Cargo.toml --features touch-id

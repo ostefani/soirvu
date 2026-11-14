@@ -151,7 +151,7 @@ pub fn run() {
             let config_dir = app.path().config_dir()?.join(CONFIG_DIR_NAME);
             #[cfg(debug_assertions)]
             let probe_dir = match startup_probe.as_deref() {
-                Some("fail" | "check") => Some(tempfile::tempdir()?),
+                Some("fail" | "fail-fast" | "check") => Some(tempfile::tempdir()?),
                 _ => None,
             };
             #[cfg(debug_assertions)]
@@ -210,7 +210,7 @@ pub fn run() {
                 let builder = builder.incognito(true);
                 let window = builder.build()?;
                 #[cfg(debug_assertions)]
-                if startup_probe.as_deref() == Some("fail") {
+                if matches!(startup_probe.as_deref(), Some("fail" | "fail-fast")) {
                     return Err(std::io::Error::other("injected native privacy setup failure").into());
                 }
                 context_menu::install(&window)?;
@@ -241,16 +241,32 @@ pub fn run() {
                     }
                     let handle = app.handle().clone();
                     let fallback = handle.clone();
+                    let timeout = Duration::from_secs(120);
+                    #[cfg(debug_assertions)]
+                    let timeout = if startup_probe.as_deref() == Some("fail-fast") {
+                        Duration::from_secs(5)
+                    } else {
+                        timeout
+                    };
                     // The dialog plugin cannot report a failure to present a dialog.
                     tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(120)).await;
+                        tokio::time::sleep(timeout).await;
+                        eprintln!("SoirVu startup error dialog timed out");
                         fallback.exit(1);
                     });
+                    let message = if cfg!(windows) {
+                        "SoirVu could not initialize its privacy protections. Update Microsoft Edge WebView2 Runtime and try again. The vault was not opened."
+                    } else {
+                        "SoirVu could not initialize its privacy protections. The vault was not opened."
+                    };
                     app.dialog()
-                        .message("SoirVu could not initialize its privacy protections. The vault was not opened.")
+                        .message(message)
                         .title("SoirVu could not start")
                         .kind(MessageDialogKind::Error)
-                        .show(move |_| handle.exit(1));
+                        .show(move |acknowledged| {
+                            eprintln!("SoirVu startup error dialog completed (acknowledged: {acknowledged})");
+                            handle.exit(1);
+                        });
                     return Ok(());
                 }
             };

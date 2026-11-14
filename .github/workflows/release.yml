@@ -103,6 +103,16 @@ jobs:
         run: npm run tauri build -- ${{ matrix.overlay }}
       - name: Verify the release binary
         run: ${{ matrix.verify }}
+      - name: Verify the startup probes are absent from release
+        shell: bash
+        run: |
+          binary=target/release/soirvu
+          if [[ "$RUNNER_OS" == Windows ]]; then binary+=.exe; fi
+          test -s "$binary"
+          if LC_ALL=C grep -aFq SOIRVU_DEBUG_STARTUP "$binary"; then
+            echo "Debug startup probe found in $binary"
+            exit 1
+          fi
       - name: Install smoke test (Ubuntu .deb)
         if: runner.os == 'Linux'
         run: |
