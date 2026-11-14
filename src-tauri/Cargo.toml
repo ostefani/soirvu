@@ -46,6 +46,13 @@ tempfile = "3"
 # Contract snapshots for the IPC boundary (src/commands/contract.rs).
 insta = "1"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2.0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "0.39"
+windows-core = "0.62"
+
 # §9 lock signals: NSWorkspace + distributed notifications.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"

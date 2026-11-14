@@ -653,6 +653,7 @@ export class EditorView {
             compositionend: (e) => this.onCompositionEnd(e),
             paste: (e) => this.onPaste(e),
             copy: (e) => this.onCopy(e),
+            cut: (e) => this.onCut(e),
             mousedown: (e) => this.onMouseDown(e),
             mousemove: (e) => {
                 this.trackLinkPress(e);
@@ -814,7 +815,7 @@ export class EditorView {
         }
     }
 
-    onCopy(e) {
+    writeClipboardSelection(e) {
         if (this.composing || !e.clipboardData) return;
         const selection = this.readDOMSelection();
         if (!selection || selection.anchor === selection.head) return;
@@ -824,6 +825,20 @@ export class EditorView {
         e.clipboardData.setData("text/plain", markdown);
         e.clipboardData.setData(MARKDOWN_CLIPBOARD_TYPE, markdown);
         e.preventDefault();
+        return { from, to };
+    }
+
+    onCopy(e) {
+        this.writeClipboardSelection(e);
+    }
+
+    onCut(e) {
+        const selection = this.writeClipboardSelection(e);
+        if (!selection) return;
+        const { from, to } = selection;
+        const tr = this.state.tr().delete(from, to);
+        tr.setSelection(selectionNear(tr.doc, from));
+        this.dispatch(tr);
     }
 
     onPaste(e) {

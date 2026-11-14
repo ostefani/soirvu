@@ -21,10 +21,11 @@ test('copy preserves markup in a backward selection and pastes it as Markdown', 
         preventDefault() { prevented++; },
     };
 
-    EditorView.prototype.onCopy.call({
+    const view = Object.assign(Object.create(EditorView.prototype), {
         state: source,
         readDOMSelection: () => ({ anchor: 14, head: 8 }),
-    }, event);
+    });
+    view.onCopy(event);
     assert.equal(flavors.get('text/plain'), '*italic*');
 
     const destination = EditorState.create({ doc: parseMarkdown('') });
@@ -36,6 +37,23 @@ test('copy preserves markup in a backward selection and pastes it as Markdown', 
     }, event);
     assert.equal(serializeMarkdown(pasted.doc), '*italic*');
     assert.equal(prevented, 2);
+});
+
+test('cut writes Markdown and removes the live selection in a transaction', () => {
+    const view = Object.assign(Object.create(EditorView.prototype), {
+        state: EditorState.create({ doc: parseMarkdown('Before *italic* after') }),
+        readDOMSelection: () => ({ anchor: 14, head: 8 }),
+        dispatch(tr) { this.state = this.state.apply(tr); },
+    });
+    const flavors = new Map();
+    let prevented = false;
+    view.onCut({
+        clipboardData: { setData: (type, value) => flavors.set(type, value) },
+        preventDefault() { prevented = true; },
+    });
+    assert.equal(prevented, true);
+    assert.equal(flavors.get('text/x-soirvu-markdown'), '*italic*');
+    assert.equal(serializeMarkdown(view.state.doc), 'Before  after');
 });
 
 test('pasting a standalone HTTPS URL keeps it plain', () => {

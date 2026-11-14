@@ -22,6 +22,9 @@ dependencies = [
  "tauri-plugin-dialog",
  "tempfile",
  "tokio",
+ "webkit2gtk",
+ "webview2-com",
+ "windows-core",
  "zeroize",
 ]
 

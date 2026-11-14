@@ -12,6 +12,7 @@
     import { notify } from '@/components/Notification/store.svelte.js';
     import { applicationText } from '@/data.js';
     import { startVaultLifecycle } from '@/vault-lifecycle.js';
+    import { editMenuRequest } from '@/lib/edit-menu.js';
 
     let screen = $state(APPLICATION_SCREEN.BOOT);
     let mainView = $state(MAIN_VIEW.WELCOME);
@@ -82,6 +83,13 @@
         api.clipboardNoteCopy().catch(() => {});
     }
 
+    function handleContextMenu(event) {
+        if (!window.isTauri || !navigator.platform.includes('Mac') || !event.isTrusted) return;
+        event.preventDefault();
+        const request = editMenuRequest(event, document.activeElement, window.getSelection());
+        if (request) api.showEditMenu(request).catch(() => {});
+    }
+
     // Drop safety net: prevent accidental file navigation on unhandled drag & drop
     function swallowDrop(event) {
         event.preventDefault();
@@ -91,7 +99,7 @@
 </script>
 
 <svelte:window onkeydown={handleKeydown} onpointerdown={noteActivity} onwheel={noteActivity} ontouchstart={noteActivity} onmousemove={noteActivity} ondragover={swallowDrop} ondrop={swallowDrop} />
-<svelte:document oncopy={handleCopy} />
+<svelte:document oncopy={handleCopy} oncut={handleCopy} oncontextmenu={handleContextMenu} />
 
 {#if screen === APPLICATION_SCREEN.BOOT}
     <p class="note">{applicationText.bootMessage}</p>
