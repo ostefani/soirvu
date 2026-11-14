@@ -80,8 +80,13 @@ pub async fn open_link(app: AppHandle, url: String) -> Result<bool, String> {
     };
     // A native confirmation, from Rust: the webview cannot skip it.
     let (tx, rx) = oneshot::channel();
+    let question = if url.scheme() == "https" {
+        "Open this link in your browser?"
+    } else {
+        "Open this link in your email app?"
+    };
     app.dialog()
-        .message(format!("Open this link?\n\nDestination: {destination}\n\n{url}"))
+        .message(format!("{question}\n\nDestination: {destination}\n\n{url}"))
         .title("SoirVu")
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::OkCancelCustom(

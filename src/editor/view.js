@@ -29,6 +29,7 @@ import { inlineSlice } from "./transform.js";
 import { caretScrollDelta } from "./scroll.js";
 import { tokenize } from "./highlight.js";
 import { serializeMarkdown } from "./markdown.js";
+import { classifyHref } from "../lib/entry-target.js";
 
 const MARKDOWN_CLIPBOARD_TYPE = "text/x-soirvu-markdown";
 
@@ -910,12 +911,11 @@ export class EditorView {
         }
         const link = e.target.closest ? e.target.closest("a[href]") : null;
         if (link && this.dom.contains(link)) {
-            // Plain clicks only move the caret. Following a link —
-            // in-vault or external — takes an explicit modifier
-            // click, so reading never navigates by accident.
-            if (e.metaKey || e.ctrlKey) {
-                e.preventDefault();
-                if (this.handleClickOn) this.handleClickOn(link.getAttribute("href"), true);
+            e.preventDefault();
+            const href = link.getAttribute("href");
+            const modified = e.metaKey || e.ctrlKey;
+            if (classifyHref(href) === "external" || modified) {
+                this.handleClickOn?.(href, modified);
             }
             return;
         }

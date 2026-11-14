@@ -39,7 +39,8 @@ const INLINE_BREAK = "&#0000010;";
 // on, HTML blocks are tokens, get captured as raw_blocks below, and
 // inline HTML becomes literal text. No HTML ever becomes a node,
 // a mark, or DOM — the schema has none. Fidelity and safety both win.
-const md = new MarkdownIt({ html: true });
+const md = new MarkdownIt({ html: true, linkify: true });
+md.linkify.set({ fuzzyLink: false, fuzzyEmail: false });
 
 md.inline.ruler.before("entity", "soirvu_whitespace", (state, silent) => {
     const { src, pos, posMax } = state;
@@ -297,11 +298,27 @@ parser.tokenHandlers.fence = (state, tok) => {
 // close token then removes a mark that was never opened — a no-op.)
 parser.tokenHandlers.link_open = (state, tok) => {
     const href = tok.attrGet("href");
+    if (tok.markup === "linkify" && !isAutoLink(href)) return;
     if (!allowedHref(href)) return;
     state.openMark(
         schema.marks.link.create({ href, title: tok.attrGet("title") || null }),
     );
 };
+
+function isAutoLink(href) {
+    if (!/^https:\/\/[^/?#\s<>\\][^\s<>\\]*$/i.test(href)) return false;
+    try {
+        const url = new URL(href);
+        return Boolean(url.hostname && !url.username && !url.password);
+    } catch {
+        return false;
+    }
+}
+
+/** Finds explicit HTTPS URLs in clipboard text without parsing it as Markdown. */
+export function findWebLinks(text) {
+    return (md.linkify.match(text) ?? []).filter(({ url }) => isAutoLink(url));
+}
 
 // Cells: markdown-it puts the inline content directly inside
 // th/td, with no paragraph token — but a cell holds exactly

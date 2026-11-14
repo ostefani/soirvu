@@ -11,6 +11,7 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
     let pendingNavId = $state(null);
     let linkNote = $state('');
     let copying = $state(false);
+    let openingExternalLink = false;
     const copyOwner = createRequestOwner();
     const refreshOwner = createRequestOwner();
 
@@ -98,9 +99,9 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
     }
 
     function openHref(href, modified) {
-        if (!modified || isFrozen()) return;
+        if (isFrozen()) return;
         const kind = classifyHref(href);
-        if (kind === 'entry') {
+        if (kind === 'entry' && modified) {
             const id = parseEntryTarget(href);
             if (id) followEntryLink(id);
         } else if (kind === 'external') {
@@ -195,8 +196,16 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
         }
     }
 
-    function openExternalLink(href) {
-        api.openLink(href).catch(() => { });
+    async function openExternalLink(href) {
+        if (isFrozen() || openingExternalLink) return;
+        openingExternalLink = true;
+        try {
+            await api.openLink(href);
+        } catch {
+            if (!isFrozen()) notifyError?.('This link could not be opened.');
+        } finally {
+            openingExternalLink = false;
+        }
     }
 
     return {
@@ -233,6 +242,5 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
         retryPendingNav,
         openHref,
         linkAction,
-        openExternalLink,
     };
 }

@@ -11,7 +11,7 @@
 // closing it untouched saves nothing and rewrites nothing.
 
 import { Fragment, Slice } from "prosemirror-model";
-import { EditorState, TextSelection, selectionNear } from "./state.js";
+import { EditorState, TextSelection, cursorMarks, selectionNear } from "./state.js";
 import { EditorView } from "./view.js";
 import { historyPlugin } from "./history.js";
 import { inputRulesPlugin, keymapPlugin } from "./rules.js";
@@ -19,11 +19,12 @@ import { deleteSelectionIn, insertTextIn } from "./commands.js";
 import { locateLink, selectionInfo, toolbarCommands, toggleTaskAt } from "./toolbar.js";
 import { schema } from "./schema.js";
 import { isEntryHref } from "../lib/entry-target.js";
-import { parseMarkdown, serializeMarkdown } from "./markdown.js";
+import { findWebLinks, parseMarkdown, serializeMarkdown } from "./markdown.js";
 
 export { schema, parseMarkdown, serializeMarkdown };
 
 function looksLikeMarkdown(text) {
+    if (/<https?:\/\/[^<>\s]+>/i.test(text)) return true;
     const formatted = /(^|\n)\s{0,3}(#{1,6}\s|>|```|~~~|- |\d+\.\s)|(\*\*|__)[^*\n]+\1|\[[^\]\n]+\]\(https?:[^)\s]+\)/.test(
         text,
     );
@@ -34,6 +35,29 @@ function looksLikeMarkdown(text) {
         if (node.isText && node.marks.some((mark) => mark.type.name === 'link' && isEntryHref(mark.attrs.href))) internalLink = true;
     });
     return internalLink;
+}
+
+function insertClipboardLine(tr, state, line) {
+    const links = findWebLinks(line);
+    if (!links.length) {
+        insertTextIn(tr, state, line);
+        return;
+    }
+    const { schema } = state;
+    const marks = cursorMarks(state);
+    const nodes = [];
+    let offset = 0;
+    for (const { index, lastIndex, url } of links) {
+        if (index > offset) nodes.push(schema.text(line.slice(offset, index), marks));
+        const link = schema.marks.link.create({ href: url });
+        nodes.push(schema.text(line.slice(index, lastIndex), link.addToSet(marks)));
+        offset = lastIndex;
+    }
+    if (offset < line.length) nodes.push(schema.text(line.slice(offset), marks));
+    const pos = deleteSelectionIn(tr, state);
+    tr.replaceRange(pos, pos, new Slice(Fragment.fromArray(nodes), 0, 0));
+    tr.setSelection(new TextSelection(pos + line.length));
+    if (state.storedMarks) tr.setStoredMarks(state.storedMarks);
 }
 
 /** Paste policy (§6.5): plain text goes in as text (newlines as
@@ -114,7 +138,7 @@ export function makePasteHandler() {
                 }
                 if (line) {
                     const tr = current.tr();
-                    insertTextIn(tr, current, line);
+                    insertClipboardLine(tr, current, line);
                     send(tr);
                 }
             });
@@ -141,9 +165,8 @@ export function makePasteHandler() {
  *   An attachment block was rendered: the app fills the element
  *   with the right viewer for the attachment's type (§6.4).
  * @param {(href: string, modified: boolean) => void} [options.onOpenLink]
- *   A link was modifier-clicked; `modified` is always true (plain
- *   clicks only move the caret). The app routes https/mailto
- *   through open_link and entry: links in-vault.
+ *   A web link was clicked or a note link was modifier-clicked.
+ *   The app routes external links through the native confirmation.
  * @param {(info: { bracketPos: number }) => void} [options.onRequestLinkPicker]
  *   `[[` was typed outside code and raw blocks; the app opens the
  *   link picker, which replaces the bracket pair on pick.

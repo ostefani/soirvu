@@ -35,3 +35,54 @@ test('copy preserves markup in a backward selection and pastes it as Markdown', 
     assert.equal(serializeMarkdown(pasted.doc), '*italic*');
     assert.equal(prevented, 2);
 });
+
+test('pasting a standalone HTTPS URL creates a Markdown link outside code', () => {
+    const url = 'https://example.com/path';
+    for (const [source, expected] of [
+        ['', `<${url}>`],
+        ['```\n\n```', '```\n' + url + '\n```'],
+    ]) {
+        let state = EditorState.create({ doc: parseMarkdown(source) });
+        makePasteHandler()(url, state, (tr) => { state = state.apply(tr); });
+        assert.equal(serializeMarkdown(state.doc), expected);
+    }
+});
+
+test('a plain click on a web link delegates opening and cancels browser navigation', () => {
+    const href = 'https://example.com/path';
+    const link = { getAttribute: () => href };
+    const calls = [];
+    let prevented = false;
+    EditorView.prototype.onClick.call({
+        dom: { contains: (node) => node === link },
+        handleClickOn: (...args) => calls.push(args),
+    }, {
+        target: { closest: (selector) => selector === 'a[href]' ? link : null },
+        metaKey: false,
+        ctrlKey: false,
+        preventDefault() { prevented = true; },
+    });
+    assert.equal(prevented, true);
+    assert.deepEqual(calls, [[href, false]]);
+});
+
+test('HTTPS URLs in pasted prose and saved notes become links', () => {
+    const text = 'See https://example.com, then\nhttps://example.org/help.';
+    const hrefs = (doc) => {
+        const links = [];
+        doc.descendants((node) => {
+            for (const mark of node.marks) {
+                if (mark.type.name === 'link') links.push(mark.attrs.href);
+            }
+        });
+        return links;
+    };
+    let state = EditorState.create({ doc: parseMarkdown('') });
+    makePasteHandler()(text, state, (tr) => { state = state.apply(tr); });
+    const expected = ['https://example.com', 'https://example.org/help'];
+    assert.deepEqual(hrefs(state.doc), expected);
+    assert.deepEqual(hrefs(parseMarkdown(text)), expected);
+    assert.deepEqual(hrefs(parseMarkdown(serializeMarkdown(state.doc))), expected);
+    assert.deepEqual(hrefs(parseMarkdown('`https://example.com`')), []);
+    assert.deepEqual(hrefs(parseMarkdown('![Example](https://example.com)')), []);
+});

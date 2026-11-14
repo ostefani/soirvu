@@ -3,7 +3,7 @@
     import EditorSurface from './EditorSurface/index.svelte';
     import EntryFooter from './EntryFooter/index.svelte';
     import EntryMeta from './EntryMeta/index.svelte';
-    import { classifyHref, parseEntryTarget } from '@/lib/entry-target.js';
+    import { isEntryHref } from '@/lib/entry-target.js';
     import EditorToolbar from '@/components/EditorToolbar/index.svelte';
     import Button from '@/components/Button/index.svelte';
     import IconLeft from '@/icons/arrow-left.svelte';
@@ -101,9 +101,8 @@
     }
 
     const linkInfo = $derived(!frozen && !pickerOpen && info?.link ? info.link : null);
-    const linkKind = $derived(linkInfo ? classifyHref(linkInfo.href) : null);
     const showPopover = $derived(
-        linkInfo !== null && !linkPopoverDismissed && (linkKind === 'entry' || linkKind === 'external'),
+        linkInfo !== null && !linkPopoverDismissed && isEntryHref(linkInfo.href),
     );
 
 </script>
@@ -147,31 +146,21 @@
             onOpenLink={links.openHref}
             onRequestLinkPicker={links.requestBracketPicker} />
         {#if showPopover}
-            {@const targetId = parseEntryTarget(linkInfo.href)}
             <div
                 class="link-popover"
                 {@attach trackLinkPopover}
                 style={popoverStyle(linkInfo)}
                 role="dialog"
                 aria-label={ENTRY_EDITOR_TEXT.linkActionsLabel}>
-                {#if linkKind === 'entry' && targetId}
-                    {#each LINK_POPOVER_ACTIONS as action (action.id)}
-                        <button
-                            class="pop"
-                            class:primary={action.primary}
-                            onmousedown={keepPopoverFocus}
-                            onclick={() => links.linkAction(action.id, linkInfo)}>
-                            {action.label}
-                        </button>
-                    {/each}
-                {:else if linkKind === 'external'}
+                {#each LINK_POPOVER_ACTIONS as action (action.id)}
                     <button
-                        class="pop primary"
+                        class="pop"
+                        class:primary={action.primary}
                         onmousedown={keepPopoverFocus}
-                        onclick={() => links.openExternalLink(linkInfo.href)}>
-                        {ENTRY_EDITOR_TEXT.openExternalLink}
+                        onclick={() => links.linkAction(action.id, linkInfo)}>
+                        {action.label}
                     </button>
-                {/if}
+                {/each}
                 {#if links.linkNote}<span class="pop-note">{links.linkNote}</span>{/if}
             </div>
         {/if}

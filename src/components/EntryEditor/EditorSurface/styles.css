@@ -64,6 +64,7 @@
 
 .editor-mount :global(a) {
     color: var(--color-accent);
+    cursor: pointer;
 }
 
 .editor-mount :global(hr) {
