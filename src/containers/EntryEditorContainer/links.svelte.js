@@ -1,6 +1,6 @@
 import { createRequestOwner } from '../../lib/request-owner.js';
 import { entryLinkMarkdown } from '../../lib/links.js';
-import { classifyHref, parseEntryTarget } from '../../lib/entry-target.js';
+import { classifyHref, normalizeWebHref, parseEntryTarget } from '../../lib/entry-target.js';
 import { SESSION_TEXT } from './data.js';
 import { defaultLinkLabel, linkTargetError } from './labels.js';
 
@@ -200,9 +200,11 @@ export function createLinks({ api, getEntry, getEditor, isFrozen, draft, onOpenE
         if (isFrozen() || openingExternalLink) return;
         openingExternalLink = true;
         try {
-            await api.openLink(href);
+            const destination = /^https:/i.test(href) ? normalizeWebHref(href) : href;
+            if (!destination) throw new Error('Invalid external URL');
+            await api.openLink(destination);
         } catch {
-            if (!isFrozen()) notifyError?.('This link could not be opened.');
+            if (!isFrozen()) notifyError?.(SESSION_TEXT.linkOpenFailed);
         } finally {
             openingExternalLink = false;
         }

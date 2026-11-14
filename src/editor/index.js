@@ -47,9 +47,9 @@ function insertClipboardLine(tr, state, line) {
     const marks = cursorMarks(state);
     const nodes = [];
     let offset = 0;
-    for (const { index, lastIndex, url } of links) {
+    for (const { index, lastIndex, href } of links) {
         if (index > offset) nodes.push(schema.text(line.slice(offset, index), marks));
-        const link = schema.marks.link.create({ href: url });
+        const link = schema.marks.link.create({ href, bare: true });
         nodes.push(schema.text(line.slice(index, lastIndex), link.addToSet(marks)));
         offset = lastIndex;
     }
@@ -76,7 +76,8 @@ export function makePasteHandler() {
         const sel = state.selection;
         if (sel.type === "text") {
             const parent = state.doc.resolve(sel.from).parent;
-            if (parent.type === state.schema.nodes.code_block || parent.type === state.schema.nodes.raw_block) {
+            if (parent.type === state.schema.nodes.code_block || parent.type === state.schema.nodes.raw_block
+                || cursorMarks(state).some((mark) => mark.type === state.schema.marks.code)) {
                 const tr = state.tr();
                 insertTextIn(tr, state, text);
                 dispatch(tr);

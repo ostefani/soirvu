@@ -7,6 +7,23 @@
 
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 const ENTRY_HREF = new RegExp(`^entry:(${UUID})$`);
+const MAX_OUTBOUND_URL_BYTES = 4096;
+const UNSAFE_URL_TEXT = /[\p{Cc}\p{Cf}]/u;
+const urlEncoder = new TextEncoder();
+
+/** Normalizes an HTTPS destination using the native opener's size and authority limits. */
+export function normalizeWebHref(href) {
+    if (!/^https:\/\/[^/?#\s<>\\@]+(?:[/?#]|$)/i.test(href)
+        || /[\s<>\\]/u.test(href) || href.length > MAX_OUTBOUND_URL_BYTES
+        || urlEncoder.encode(href).length > MAX_OUTBOUND_URL_BYTES) return null;
+    try {
+        if (UNSAFE_URL_TEXT.test(href) || UNSAFE_URL_TEXT.test(decodeURIComponent(href))) return null;
+        const url = new URL(href);
+        return url.hostname && urlEncoder.encode(url.href).length <= MAX_OUTBOUND_URL_BYTES ? url.href : null;
+    } catch {
+        return null;
+    }
+}
 
 /**
  * The target entry id (lowercased) when `href` is a canonical

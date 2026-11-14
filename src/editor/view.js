@@ -29,7 +29,8 @@ import { inlineSlice } from "./transform.js";
 import { caretScrollDelta } from "./scroll.js";
 import { tokenize } from "./highlight.js";
 import { serializeMarkdown } from "./markdown.js";
-import { classifyHref } from "../lib/entry-target.js";
+import { classifyHref, normalizeWebHref } from "../lib/entry-target.js";
+import { locateLink } from "./toolbar.js";
 
 const MARKDOWN_CLIPBOARD_TYPE = "text/x-soirvu-markdown";
 
@@ -660,6 +661,12 @@ export class EditorView {
                 if (e.relatedTarget !== this.dragHandle) this.hideDragHandle();
             },
             click: (e) => this.onClick(e),
+            auxclick: (e) => {
+                if (this.linkAtEvent(e)) e.preventDefault();
+            },
+            dragstart: (e) => {
+                if (this.linkAtEvent(e)) e.preventDefault();
+            },
             drop: (e) => this.onDrop(e),
             dragover: (e) => e.preventDefault(),
         };
@@ -711,6 +718,7 @@ export class EditorView {
     }
 
     onKeyDown(e) {
+        if (e.key === "Enter" && this.activateLink(e, true)) return;
         if (this.composing) return;
         if (this.pluginProp("handleKeyDown", e)) {
             e.preventDefault();
@@ -909,16 +917,32 @@ export class EditorView {
                 return;
             }
         }
-        const link = e.target.closest ? e.target.closest("a[href]") : null;
-        if (link && this.dom.contains(link)) {
-            e.preventDefault();
-            const href = link.getAttribute("href");
-            const modified = e.metaKey || e.ctrlKey;
-            if (classifyHref(href) === "external" || modified) {
-                this.handleClickOn?.(href, modified);
-            }
-            return;
+        this.activateLink(e);
+    }
+
+    linkAtEvent(e) {
+        const link = e.target.closest?.("a[data-href]");
+        return link && this.dom.contains(link) ? link : null;
+    }
+
+    activateLink(e, keyboard = false) {
+        const link = this.linkAtEvent(e);
+        if (!link || this.composing) return false;
+        e.preventDefault();
+        if (!keyboard) {
+            const selection = this.readDOMSelection();
+            if (e.button !== 0 || e.detail > 1 || (selection && selection.anchor !== selection.head)) return true;
         }
+        let href = link.getAttribute("data-href");
+        if (link.hasAttribute("data-bare-link")) {
+            // Edits can change the visible URL before the note is reparsed.
+            const range = locateLink(this.state, href, link._pos);
+            href = range && normalizeWebHref(this.state.doc.textBetween(range.from, range.to));
+            if (!href) return true;
+        }
+        const modified = keyboard || e.metaKey || e.ctrlKey;
+        if (classifyHref(href) === "external" || modified) this.handleClickOn?.(href, modified);
+        return true;
     }
 
     // Pressing on an atom selects it in the model, synchronously:

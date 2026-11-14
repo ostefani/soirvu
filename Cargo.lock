@@ -13,6 +13,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "percent-encoding",
+ "regex",
  "serde",
  "serde_json",
  "soirvu-core",

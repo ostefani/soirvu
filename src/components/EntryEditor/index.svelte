@@ -58,7 +58,7 @@
     onMount(() => {
         function dismissLinkOnOutsideClick(event) {
             if (linkPopoverEl?.contains(event.target)) return;
-            const anchor = event.target.closest('.editor-mount a[href]');
+            const anchor = event.target.closest('.editor-mount a[data-href]');
             linkPopoverDismissed = !(anchor && paneEl?.contains(anchor));
         }
 

@@ -13,8 +13,9 @@ use crate::state::{AppState, Settings, SettingsPatch};
 const MAX_OUTBOUND_URL_BYTES: usize = 4096;
 
 fn contains_unsafe_url_text(text: &str) -> bool {
-    text.chars().any(|c| c.is_control()
-        || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+    static UNSAFE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"[\p{Cc}\p{Cf}]").expect("valid URL character classes"));
+    UNSAFE.is_match(text)
 }
 
 fn parse_outbound_url(input: &str) -> Option<tauri::Url> {
@@ -73,18 +74,13 @@ fn parse_outbound_url(input: &str) -> Option<tauri::Url> {
 #[tauri::command]
 pub async fn open_link(app: AppHandle, url: String) -> Result<bool, String> {
     let url = parse_outbound_url(&url).ok_or_else(|| "invalid_input".to_string())?;
-    let destination = if url.scheme() == "https" {
-        url.origin().ascii_serialization()
-    } else {
-        url.path().to_owned()
+    let (question, destination) = match url.scheme() {
+        "https" => ("Open this link in your browser?", url.origin().ascii_serialization()),
+        "mailto" => ("Open this link in your email app?", url.path().to_owned()),
+        _ => return Err("invalid_input".to_string()),
     };
     // A native confirmation, from Rust: the webview cannot skip it.
     let (tx, rx) = oneshot::channel();
-    let question = if url.scheme() == "https" {
-        "Open this link in your browser?"
-    } else {
-        "Open this link in your email app?"
-    };
     app.dialog()
         .message(format!("{question}\n\nDestination: {destination}\n\n{url}"))
         .title("SoirVu")
@@ -374,6 +370,7 @@ mod url_tests {
             "https://example.com/\n",
             "https://example.com/%00",
             "https://example.com/%E2%80%AE",
+            "https://example.com/%E2%80%8B",
             "mailto:a@example.com,b@example.com",
             "mailto:a@example.com?bcc=b@example.com",
             "mailto:a@example.com?subject=one&subject=two",

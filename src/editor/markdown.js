@@ -22,7 +22,7 @@ import { MarkdownParser } from "./markdown-adapter/parser.js";
 import { MarkdownSerializer, commonNodes, commonMarks } from "./markdown-adapter/serializer.js";
 
 import { schema } from "./schema.js";
-import { isEntryHref } from "../lib/entry-target.js";
+import { classifyHref, normalizeWebHref } from "../lib/entry-target.js";
 
 const RAW_INFO = "soirvu-raw";
 // Distinct encodings let Markdown carry empty blocks and breaks in positions
@@ -217,7 +217,7 @@ function extractRawBlocks(source) {
 // prefix becomes a mark, so the editor can never display a link
 // the backlink verifier would reject.
 function allowedHref(href) {
-    return /^(https?:\/\/|mailto:|attachment:)/i.test(href || "") || isEntryHref(href);
+    return classifyHref(href) !== "other";
 }
 
 // ---------------------------------------------------------------------------
@@ -298,26 +298,22 @@ parser.tokenHandlers.fence = (state, tok) => {
 // close token then removes a mark that was never opened — a no-op.)
 parser.tokenHandlers.link_open = (state, tok) => {
     const href = tok.attrGet("href");
-    if (tok.markup === "linkify" && !isAutoLink(href)) return;
+    const bare = tok.markup === "linkify";
+    const destination = bare ? normalizeWebHref(href) : href;
+    if (!destination) return;
     if (!allowedHref(href)) return;
     state.openMark(
-        schema.marks.link.create({ href, title: tok.attrGet("title") || null }),
+        schema.marks.link.create({ href: destination, title: tok.attrGet("title") || null, bare }),
     );
 };
 
-function isAutoLink(href) {
-    if (!/^https:\/\/[^/?#\s<>\\][^\s<>\\]*$/i.test(href)) return false;
-    try {
-        const url = new URL(href);
-        return Boolean(url.hostname && !url.username && !url.password);
-    } catch {
-        return false;
-    }
-}
-
 /** Finds explicit HTTPS URLs in clipboard text without parsing it as Markdown. */
 export function findWebLinks(text) {
-    return (md.linkify.match(text) ?? []).filter(({ url }) => isAutoLink(url));
+    if (!/https:\/\//i.test(text)) return [];
+    return (md.linkify.match(text) ?? []).flatMap((match) => {
+        const href = normalizeWebHref(match.url);
+        return href ? [{ index: match.index, lastIndex: match.lastIndex, href }] : [];
+    });
 }
 
 // Cells: markdown-it puts the inline content directly inside
@@ -529,6 +525,15 @@ const serializer = new MarkdownSerializer(
     },
     {
         ...commonMarks,
+        link: {
+            ...commonMarks.link,
+            open(state, mark, parent, index) {
+                return mark.attrs.bare ? "" : commonMarks.link.open(state, mark, parent, index);
+            },
+            close(state, mark, parent, index) {
+                return mark.attrs.bare ? "" : commonMarks.link.close(state, mark, parent, index);
+            },
+        },
         strike: {
             open: "~~",
             close: "~~",
