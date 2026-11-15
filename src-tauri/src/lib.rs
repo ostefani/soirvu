@@ -24,6 +24,7 @@ use std::time::Duration;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use tauri::{Emitter, Manager};
+use tokio::sync::Semaphore;
 
 use state::AppState;
 
@@ -40,6 +41,8 @@ const CONFIG_DIR_NAME: &str = if cfg!(debug_assertions) {
 } else {
     "SoirVu"
 };
+
+const MAX_ACTIVE_ASSET_REQUESTS: usize = 4;
 
 fn matches_app_origin(url: &tauri::Url, expected: &tauri::Url) -> bool {
     url.scheme() == expected.scheme()
@@ -80,27 +83,21 @@ pub fn run() {
                 .get(tauri::http::header::RANGE)
                 .and_then(|v| v.to_str().ok())
                 .map(|v| v.to_string());
-            static ASSET_REQUESTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
-            let Ok(permit) = ASSET_REQUESTS.try_acquire() else {
+            let Ok(session) = app.state::<crate::state::AppState>().session() else {
                 responder.respond(
                     tauri::http::Response::builder()
-                        .status(503)
+                        .status(403)
                         .header("Cache-Control", "no-store")
                         .body(Vec::<u8>::new())
-                        .expect("valid overload response"),
+                        .expect("valid locked response"),
                 );
                 return;
             };
-            let Ok(session) = app.state::<crate::state::AppState>().session() else {
-                responder.respond(tauri::http::Response::builder()
-                    .status(403)
-                    .header("Cache-Control", "no-store")
-                    .body(Vec::<u8>::new())
-                    .expect("valid locked response"));
-                return;
-            };
+            // WebView requests wait for a slot before any attachment
+            // bytes are decrypted. Each request retains its original session.
+            static ACTIVE_ASSETS: Semaphore = Semaphore::const_new(MAX_ACTIVE_ASSET_REQUESTS);
             tauri::async_runtime::spawn(async move {
-                let _permit = permit;
+                let _active = ACTIVE_ASSETS.acquire().await.expect("asset semaphore stays open");
                 let worker_app = app.clone();
                 let worker_session = session.clone();
                 let answer = tauri::async_runtime::spawn_blocking(move || {
