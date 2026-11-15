@@ -21,7 +21,7 @@ mod state;
 mod windows_lock;
 
 use std::time::Duration;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 
 use tauri::{Emitter, Manager};
 use tokio::sync::Semaphore;
@@ -118,7 +118,11 @@ pub fn run() {
                     headers: vec![("Content-Length".into(), "0".into())],
                     body: Vec::new(),
                 });
-                let _ = tauri::async_runtime::spawn_blocking(move || {
+                // Keep the one-shot responder available if delivery fails
+                // before the worker hands a response to the WebView.
+                let responder = Arc::new(Mutex::new(Some(responder)));
+                let delivery_responder = Arc::clone(&responder);
+                let delivery = tauri::async_runtime::spawn_blocking(move || {
                     app.state::<crate::state::AppState>().deliver_session(&session, |current| {
                         let mut answer = answer;
                         if !current {
@@ -131,12 +135,17 @@ pub fn run() {
                         for (name, value) in &answer.headers {
                             builder = builder.header(name.as_str(), value.as_str());
                         }
-                        responder.respond(
-                            builder.body(answer.body)
-                                .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
-                        );
+                        let response = builder.body(answer.body)
+                            .unwrap_or_else(|_| empty_asset_error());
+                        let responder = delivery_responder.lock().unwrap().take();
+                        if let Some(responder) = responder {
+                            responder.respond(response);
+                        }
                     });
                 }).await;
+                if delivery.is_err() && let Some(responder) = responder.lock().unwrap().take() {
+                    responder.respond(empty_asset_error());
+                }
             });
         })
         .setup(move |app| {
@@ -431,6 +440,12 @@ pub fn run() {
             api.prevent_exit();
         }
     });
+}
+
+fn empty_asset_error() -> tauri::http::Response<Vec<u8>> {
+    let mut response = tauri::http::Response::new(Vec::new());
+    *response.status_mut() = tauri::http::StatusCode::INTERNAL_SERVER_ERROR;
+    response
 }
 
 #[cfg(test)]
