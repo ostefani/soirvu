@@ -82,8 +82,31 @@ export function insertTextIn(tr, state, text) {
 export function deleteSelection(state, dispatch) {
     if (state.selection.empty) return false;
     return finish(state, dispatch, (tr) => {
-        const pos = deleteSelectionIn(tr, state);
+        const sel = state.selection;
+        let pos;
+        if (sel.type === "node" && sel.node(state.doc).type === state.schema.nodes.horizontal_rule) {
+            pos = sel.from;
+            removeSeparator(tr, state.schema, pos);
+        } else {
+            pos = deleteSelectionIn(tr, state);
+        }
         tr.setSelection(selectionNear(tr.doc, pos));
+    });
+}
+
+/** Deletes back to the start of the current line, keeping its block. */
+export function deleteToLineStart(state, dispatch, visualStart) {
+    if (!state.selection.empty) return deleteSelection(state, dispatch);
+    const $cursor = state.selection.$from(state.doc);
+    if (!$cursor.parent.isTextblock) return false;
+    const prefix = $cursor.parent.textBetween(0, $cursor.parentOffset, "", (node) =>
+        node.type === state.schema.nodes.hard_break ? "\n" : "\ufffc");
+    const lineStart = $cursor.start() + prefix.lastIndexOf("\n") + 1;
+    const from = visualStart >= lineStart && visualStart <= $cursor.pos ? visualStart : lineStart;
+    if (from === $cursor.pos) return true;
+    return finish(state, dispatch, (tr) => {
+        tr.delete(from, $cursor.pos);
+        tr.setSelection(new TextSelection(from));
     });
 }
 
@@ -98,7 +121,7 @@ export function deleteChar(dir) {
         const text = $pos.parent.textContent;
         const offset = $pos.parentOffset;
         if (dir < 0 && offset === 0) return false;
-        if (dir > 0 && offset === text.length) return false;
+        if (dir > 0 && offset === $pos.parent.content.size) return false;
         let from = sel.from;
         let to = sel.from;
         if (dir < 0) {
@@ -492,11 +515,28 @@ export function sinkListItem(state, dispatch) {
 // ---------------------------------------------------------------------------
 // Joining (Backspace / Delete at block edges)
 
-function joinAt(state, dispatch, pos) {
+function removeSeparator(tr, schema, pos) {
+    const $pos = tr.doc.resolve(pos);
+    const index = $pos.index();
+    const end = pos + $pos.nodeAfter.nodeSize;
+    if ($pos.parent.canReplace(index, index + 1)) tr.delete(pos, end);
+    else tr.replaceWith(pos, end, [schema.nodes.paragraph.create()]);
+}
+
+function joinAt(state, dispatch, pos, dir) {
     const doc = state.doc;
     const $pos = doc.resolve(pos);
     const before = $pos.nodeBefore;
     const after = $pos.nodeAfter;
+    const adjacent = dir < 0 ? before : after;
+    if (adjacent?.type === state.schema.nodes.horizontal_rule) {
+        const start = dir < 0 ? pos - adjacent.nodeSize : pos;
+        return finish(state, dispatch, (tr) => {
+            removeSeparator(tr, state.schema, start);
+            const { pos: cursor } = tr.mapping.map(state.selection.from);
+            tr.setSelection(new TextSelection(cursor));
+        });
+    }
     if (!before || !after) return false;
     if (!(before.isTextblock && after.isTextblock) && before.type !== after.type) return false;
     const start = pos - before.nodeSize;
@@ -519,12 +559,9 @@ export function joinBackward(state, dispatch) {
     // Find the deepest level at which the block has a previous sibling.
     for (let d = $from.depth; d > 0; d--) {
         if ($from.index(d - 1) > 0) {
-            return joinAt(state, dispatch, $from.before(d));
+            return joinAt(state, dispatch, $from.before(d), -1);
         }
-    }
-    // First child everywhere: leave the innermost wrapper — the
-    // item, if this is a list, or the enclosing block otherwise.
-    for (let d = $from.depth; d > 0; d--) {
+        // A first list item can lift even when another block precedes its list.
         if ($from.node(d).type.name === "list_item") return liftListItem(state, dispatch);
     }
     if ($from.depth >= 2) {
@@ -541,7 +578,7 @@ export function joinForward(state, dispatch) {
     if ($from.parentOffset < $from.parent.content.size) return false;
     for (let d = $from.depth; d > 0; d--) {
         if ($from.index(d - 1) + 1 < $from.node(d - 1).childCount) {
-            return joinAt(state, dispatch, $from.after(d));
+            return joinAt(state, dispatch, $from.after(d), 1);
         }
     }
     return false;

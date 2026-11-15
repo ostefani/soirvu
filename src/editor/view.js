@@ -24,7 +24,7 @@
 
 import { Fragment, Slice } from "prosemirror-model";
 import { NodeSelection, TextSelection, selectionNear } from "./state.js";
-import { deleteSelection as deleteSelectionCmd, insertTextIn } from "./commands.js";
+import { deleteSelection as deleteSelectionCmd, deleteToLineStart, insertTextIn } from "./commands.js";
 import { inlineSlice } from "./transform.js";
 import { caretScrollDelta } from "./scroll.js";
 import { tokenize } from "./highlight.js";
@@ -730,10 +730,32 @@ export class EditorView {
         if (e.key === "Enter" && this.editable()) {
             completeMarkdownLink(this.state, (tr) => this.dispatch(tr));
         }
-        if (this.pluginProp("handleKeyDown", e)) {
+        const deleteLine = e.key === "Backspace" && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey;
+        const handled = deleteLine
+            ? this.editable() && this.deleteLineBackward()
+            : this.pluginProp("handleKeyDown", e);
+        if (handled) {
             e.preventDefault();
             this.lastHandledInputAt = performance.now();
         }
+    }
+
+    deleteLineBackward() {
+        const state = this.state;
+        const domSel = document.getSelection();
+        let visualStart;
+        // Ask the browser where the rendered line starts, including soft wraps.
+        if (state.selection.empty && domSel?.isCollapsed && domSel.modify &&
+            this.dom.contains(domSel.anchorNode) &&
+            this.posFromDOM(domSel.anchorNode, domSel.anchorOffset) === state.selection.from) {
+            const { anchorNode, anchorOffset } = domSel;
+            domSel.modify("extend", "backward", "lineboundary");
+            if (this.dom.contains(domSel.focusNode)) {
+                visualStart = this.posFromDOM(domSel.focusNode, domSel.focusOffset);
+            }
+            if (!domSel.isCollapsed) domSel.collapse(anchorNode, anchorOffset);
+        }
+        return deleteToLineStart(state, (tr) => this.dispatch(tr), visualStart);
     }
 
     onBeforeInput(e) {
@@ -779,6 +801,12 @@ export class EditorView {
                 return;
             case "deleteWordForward":
                 handled(() => this.runKey("Delete", { alt: true }));
+                return;
+            case "deleteSoftLineBackward":
+                handled(() => this.deleteLineBackward());
+                return;
+            case "deleteHardLineBackward":
+                handled(() => deleteToLineStart(state, (tr) => this.dispatch(tr)));
                 return;
             case "deleteByCut":
                 handled(() => deleteSelectionCmd(state, (tr) => this.dispatch(tr)));
@@ -994,8 +1022,7 @@ export class EditorView {
     // Pressing on an atom selects it in the model, synchronously:
     // mousedown always precedes the selection changes the press
     // causes, so no ordering with selectionchange or click has to
-    // be guessed. The event is not prevented — media controls and
-    // everything else still receive it normally.
+    // be guessed. Separators keep editor focus for keyboard deletion.
     onMouseDown(e) {
         this.linkPress = e.button === 0
             ? { x: e.clientX, y: e.clientY, dragged: false }
@@ -1003,11 +1030,15 @@ export class EditorView {
         const atom = e.target.closest ? e.target.closest("[data-atom]") : null;
         if (!atom || !this.dom.contains(atom) || atom._pos === undefined) return;
         const pos = atom._pos;
+        const separator = e.button === 0 && atom._node.type === this.state.schema.nodes.horizontal_rule;
+        if (separator) e.preventDefault();
         const sel = this.state.selection;
-        if (sel.type === "node" && sel.anchor === pos) return;
-        const tr = this.state.tr();
-        tr.setSelection(new NodeSelection(pos));
-        this.dispatch(tr);
+        if (sel.type !== "node" || sel.anchor !== pos) {
+            const tr = this.state.tr();
+            tr.setSelection(new NodeSelection(pos));
+            this.dispatch(tr);
+        }
+        if (separator) this.focus();
     }
 
     onSelectionChange() {
