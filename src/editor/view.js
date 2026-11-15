@@ -590,14 +590,20 @@ export class EditorView {
             return;
         }
         const sel = this.state.selection;
+        const atom = sel.type === "node"
+            ? this.candidates().find((c) => c.leaf && c.from === sel.from && c.node._node)?.node
+            : undefined;
+        if (this.selectedAtom !== atom) {
+            this.selectedAtom?.removeAttribute("data-selected");
+            atom?.setAttribute("data-selected", "");
+            this.selectedAtom = atom;
+        }
         this.syncingSelection = true;
         try {
             if (sel.type === "node") {
-                const cands = this.candidates();
-                const atom = cands.find((c) => c.leaf && c.from === sel.from && c.node._node);
                 if (atom) {
                     const range = document.createRange();
-                    range.selectNode(atom.node);
+                    range.selectNode(atom);
                     domSel.removeAllRanges();
                     domSel.addRange(range);
                 }
@@ -725,7 +731,8 @@ export class EditorView {
     }
 
     onKeyDown(e) {
-        if (this.composing || e.isComposing) return;
+        // Older WebKit can end composition before delivering the IME keydown.
+        if (this.composing || e.isComposing || e.keyCode === 229) return;
         if (e.key === "Enter" && this.activateLink(e, true)) return;
         if (e.key === "Enter" && this.editable()) {
             completeMarkdownLink(this.state, (tr) => this.dispatch(tr));

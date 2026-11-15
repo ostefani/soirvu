@@ -105,6 +105,7 @@ export function deleteToLineStart(state, dispatch, visualStart) {
     const from = visualStart >= lineStart && visualStart <= $cursor.pos ? visualStart : lineStart;
     if (from === $cursor.pos) {
         if ($cursor.parentOffset === 0) joinBackward(state, dispatch);
+        else if ($cursor.nodeBefore?.type === state.schema.nodes.hard_break) deleteChar(-1)(state, dispatch);
         return true;
     }
     return finish(state, dispatch, (tr) => {
@@ -523,15 +524,42 @@ function joinAt(state, dispatch, pos, dir) {
     const before = $pos.nodeBefore;
     const after = $pos.nodeAfter;
     const adjacent = dir < 0 ? before : after;
-    if (adjacent?.type === state.schema.nodes.horizontal_rule) {
+    if (adjacent?.isBlock && adjacent.isAtom) {
         const start = dir < 0 ? pos - adjacent.nodeSize : pos;
         return finish(state, dispatch, (tr) => {
+            if (adjacent.type !== state.schema.nodes.horizontal_rule) {
+                tr.setSelection(new NodeSelection(start));
+                return;
+            }
             removeBlock(tr, state.schema, start);
             const { pos: cursor } = tr.mapping.map(state.selection.from);
             tr.setSelection(new TextSelection(cursor));
         });
     }
     if (!before || !after) return false;
+    const { blockquote, bullet_list, ordered_list, paragraph } = state.schema.nodes;
+    const beforeIsQuoteOrList = before.type === blockquote || before.type === bullet_list || before.type === ordered_list;
+    const emptyParagraph = after.type === paragraph && after.content.size === 0;
+    if (beforeIsQuoteOrList && emptyParagraph && dir > 0) {
+        return finish(state, dispatch, (tr) => {
+            tr.delete(pos, pos + after.nodeSize);
+        });
+    }
+    if (beforeIsQuoteOrList && after.isTextblock && dir < 0) {
+        const start = pos - before.nodeSize;
+        let end;
+        before.descendants((node, offset) => {
+            if (!node.isTextblock) return true;
+            end = start + offset + node.nodeSize;
+            return false;
+        });
+        if (end !== undefined) {
+            return finish(state, dispatch, (tr) => {
+                if (emptyParagraph) tr.delete(pos, pos + after.nodeSize);
+                tr.setSelection(new TextSelection(end));
+            });
+        }
+    }
     if (!(before.isTextblock && after.isTextblock) && before.type !== after.type) return false;
     const start = pos - before.nodeSize;
     const merged = before.type.create(
@@ -551,9 +579,12 @@ export function joinBackward(state, dispatch) {
     const $from = doc.resolve(sel.from);
     if ($from.parentOffset > 0) return false;
     // Find the deepest level at which the block has a previous sibling.
+    let quoteDepth = 0;
     for (let d = $from.depth; d > 0; d--) {
+        if (!quoteDepth && $from.node(d).type === state.schema.nodes.blockquote) quoteDepth = d;
         if ($from.index(d - 1) > 0) {
-            return joinAt(state, dispatch, $from.before(d), -1);
+            return joinAt(state, dispatch, $from.before(d), -1) ||
+                (quoteDepth > 0 && liftChild(state, dispatch, quoteDepth, $from.index(quoteDepth)));
         }
         // A first list item can lift even when another block precedes its list.
         if ($from.node(d).type.name === "list_item") return liftListItem(state, dispatch);

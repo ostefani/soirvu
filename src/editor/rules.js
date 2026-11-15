@@ -430,7 +430,7 @@ export function inputRulesPlugin(onBracketLink = null) {
 
 export function isMacLineDelete(event) {
     return event.key === "Backspace" && event.metaKey && !event.ctrlKey &&
-        !event.altKey && !event.shiftKey && globalThis.navigator?.platform?.includes("Mac");
+        !event.altKey && !event.shiftKey && (globalThis.navigator?.platform?.includes("Mac") ?? false);
 }
 
 function keyNameCandidates(event) {
