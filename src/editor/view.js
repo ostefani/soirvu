@@ -29,7 +29,7 @@ import { inlineSlice } from "./transform.js";
 import { caretScrollDelta } from "./scroll.js";
 import { tokenize } from "./highlight.js";
 import { serializeMarkdown } from "./markdown.js";
-import { completeMarkdownLink } from "./rules.js";
+import { completeMarkdownLink, isMacLineDelete } from "./rules.js";
 import { classifyHref } from "../lib/entry-target.js";
 
 const MARKDOWN_CLIPBOARD_TYPE = "text/x-soirvu-markdown";
@@ -725,15 +725,13 @@ export class EditorView {
     }
 
     onKeyDown(e) {
+        if (this.composing || e.isComposing) return;
         if (e.key === "Enter" && this.activateLink(e, true)) return;
-        if (this.composing) return;
         if (e.key === "Enter" && this.editable()) {
             completeMarkdownLink(this.state, (tr) => this.dispatch(tr));
         }
-        const deleteLine = e.key === "Backspace" && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey;
-        const handled = deleteLine
-            ? this.editable() && this.deleteLineBackward()
-            : this.pluginProp("handleKeyDown", e);
+        const handled = this.pluginProp("handleKeyDown", e) ||
+            (isMacLineDelete(e) && this.editable() && this.deleteLineBackward());
         if (handled) {
             e.preventDefault();
             this.lastHandledInputAt = performance.now();
@@ -763,7 +761,7 @@ export class EditorView {
             e.preventDefault();
             return;
         }
-        if (this.composing) return;
+        if (this.composing || e.isComposing) return;
         const state = this.state;
         const sel = state.selection;
         const handled = (fn) => {
@@ -1031,6 +1029,7 @@ export class EditorView {
         if (!atom || !this.dom.contains(atom) || atom._pos === undefined) return;
         const pos = atom._pos;
         const separator = e.button === 0 && atom._node.type === this.state.schema.nodes.horizontal_rule;
+        if (separator && e.shiftKey) return;
         if (separator) e.preventDefault();
         const sel = this.state.selection;
         if (sel.type !== "node" || sel.anchor !== pos) {

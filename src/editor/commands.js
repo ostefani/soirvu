@@ -84,9 +84,9 @@ export function deleteSelection(state, dispatch) {
     return finish(state, dispatch, (tr) => {
         const sel = state.selection;
         let pos;
-        if (sel.type === "node" && sel.node(state.doc).type === state.schema.nodes.horizontal_rule) {
+        if (sel.type === "node" && sel.node(state.doc).isBlock) {
             pos = sel.from;
-            removeSeparator(tr, state.schema, pos);
+            removeBlock(tr, state.schema, pos);
         } else {
             pos = deleteSelectionIn(tr, state);
         }
@@ -103,7 +103,10 @@ export function deleteToLineStart(state, dispatch, visualStart) {
         node.type === state.schema.nodes.hard_break ? "\n" : "\ufffc");
     const lineStart = $cursor.start() + prefix.lastIndexOf("\n") + 1;
     const from = visualStart >= lineStart && visualStart <= $cursor.pos ? visualStart : lineStart;
-    if (from === $cursor.pos) return true;
+    if (from === $cursor.pos) {
+        if ($cursor.parentOffset === 0) joinBackward(state, dispatch);
+        return true;
+    }
     return finish(state, dispatch, (tr) => {
         tr.delete(from, $cursor.pos);
         tr.setSelection(new TextSelection(from));
@@ -115,24 +118,15 @@ export function deleteChar(dir) {
     return (state, dispatch) => {
         const sel = state.selection;
         if (sel.type !== "text" || !sel.empty) return false;
-        const doc = state.doc;
-        const $pos = doc.resolve(sel.from);
+        const $pos = sel.$from(state.doc);
         if (!$pos.parent.isTextblock) return false;
-        const text = $pos.parent.textContent;
-        const offset = $pos.parentOffset;
-        if (dir < 0 && offset === 0) return false;
-        if (dir > 0 && offset === $pos.parent.content.size) return false;
-        let from = sel.from;
-        let to = sel.from;
-        if (dir < 0) {
-            const before = text.slice(0, offset);
-            const ch = [...before].pop();
-            from -= ch ? ch.length : 1;
-        } else {
-            const after = text.slice(offset);
-            const ch = [...after][0];
-            to += ch ? ch.length : 1;
-        }
+        const adjacent = dir < 0 ? $pos.nodeBefore : $pos.nodeAfter;
+        if (!adjacent) return false;
+        const size = adjacent.isText
+            ? (dir < 0 ? [...adjacent.text].pop() : [...adjacent.text][0]).length
+            : adjacent.nodeSize;
+        const from = dir < 0 ? sel.from - size : sel.from;
+        const to = dir < 0 ? sel.from : sel.from + size;
         return finish(state, dispatch, (tr) => {
             tr.delete(from, to);
             tr.setSelection(new TextSelection(from));
@@ -515,7 +509,7 @@ export function sinkListItem(state, dispatch) {
 // ---------------------------------------------------------------------------
 // Joining (Backspace / Delete at block edges)
 
-function removeSeparator(tr, schema, pos) {
+function removeBlock(tr, schema, pos) {
     const $pos = tr.doc.resolve(pos);
     const index = $pos.index();
     const end = pos + $pos.nodeAfter.nodeSize;
@@ -532,7 +526,7 @@ function joinAt(state, dispatch, pos, dir) {
     if (adjacent?.type === state.schema.nodes.horizontal_rule) {
         const start = dir < 0 ? pos - adjacent.nodeSize : pos;
         return finish(state, dispatch, (tr) => {
-            removeSeparator(tr, state.schema, start);
+            removeBlock(tr, state.schema, start);
             const { pos: cursor } = tr.mapping.map(state.selection.from);
             tr.setSelection(new TextSelection(cursor));
         });

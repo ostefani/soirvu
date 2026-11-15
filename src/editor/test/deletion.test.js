@@ -27,12 +27,14 @@ function press(state, key, modifiers = {}) {
     return next;
 }
 
-test('Backspace lifts the first list item after a preceding paragraph', () => {
-    for (const marker of ['- ', '1. ', '- [x] ']) {
-        const state = atText(`Above\n\n${marker}item`, 'item');
-        const next = press(state, 'Backspace');
-        assert.equal(next.doc.toString(), 'doc(paragraph("Above"), paragraph("item"))');
-        assert.equal(next.selection.$from(next.doc).parentOffset, 0);
+test('Backspace lifts a lone list item with or without a preceding paragraph', () => {
+    for (const prefix of ['', 'Above\n\n']) {
+        for (const marker of ['- ', '1. ', '- [x] ']) {
+            const state = atText(`${prefix}${marker}item`, 'item');
+            const next = press(state, 'Backspace');
+            assert.ok(next.doc.eq(parseMarkdown(`${prefix}item`)));
+            assert.equal(next.selection.$from(next.doc).parentOffset, 0);
+        }
     }
 });
 
@@ -58,11 +60,15 @@ test('clicking the only separator focuses the editor so either key can delete it
             focus() { this.focused = true; },
         };
         let prevented = false;
-        EditorView.prototype.onMouseDown.call(view, {
+        const event = {
             button: 0,
             target: { closest: () => atom },
             preventDefault() { prevented = true; },
-        });
+        };
+        EditorView.prototype.onMouseDown.call(view, { ...event, shiftKey: true });
+        assert.equal(prevented, false);
+        assert.equal(view.state, state);
+        EditorView.prototype.onMouseDown.call(view, event);
         assert.ok(prevented);
         assert.ok(view.focused);
         assert.ok(view.state.selection.eq(new NodeSelection(0)));
@@ -72,8 +78,41 @@ test('clicking the only separator focuses the editor so either key can delete it
     }
 });
 
+test('deleting a selected attachment that is the only block leaves a paragraph', () => {
+    const doc = parseMarkdown('[Attachment](attachment:9b2f2072-8b5d-4c1f-a3e0-5d6b7a8c9d0e)');
+    assert.equal(doc.firstChild.type.name, 'attachment');
+    const state = new EditorState({ doc, selection: new NodeSelection(0) });
+    assert.equal(press(state, 'Delete').doc.toString(), 'doc(paragraph)');
+});
+
+test('character deletion preserves emoji boundaries after an inline atom', () => {
+    const markdown = 'a![image](https://example.com/image.png)😀b';
+    assert.equal(press(atText(markdown, 'a😀b', 2), 'Delete').doc.firstChild.textContent, 'ab');
+    assert.equal(press(atText(markdown, 'a😀b', 4), 'Backspace').doc.firstChild.textContent, 'ab');
+    const next = press(atText(markdown, 'a😀b', 2), 'Backspace');
+    assert.equal(next.doc.toString(), 'doc(paragraph("a😀b"))');
+});
+
 test('Command–Delete removes text back to the rendered line start', (t) => {
-    const state = atText('one two three four', 'one two three four', 13);
+    const platform = { platform: 'MacIntel' };
+    const navigatorProperty = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: platform });
+    t.after(() => {
+        if (navigatorProperty) Object.defineProperty(globalThis, 'navigator', navigatorProperty);
+        else delete globalThis.navigator;
+    });
+    const initial = atText('one two three four', 'one two three four', 13);
+    const received = [];
+    const observer = {
+        props: {
+            handleKeyDown(_state, event) { received.push(event.key); },
+        },
+    };
+    const state = new EditorState({
+        doc: initial.doc,
+        selection: initial.selection,
+        plugins: [keymapPlugin(initial.schema), observer],
+    });
     const text = {};
     const selection = {
         isCollapsed: true,
@@ -101,18 +140,32 @@ test('Command–Delete removes text back to the rendered line start', (t) => {
         dispatch(tr) { this.state = this.state.apply(tr); },
     });
     let prevented = false;
-    view.onKeyDown({
+    const event = {
         key: 'Backspace',
         metaKey: true,
         preventDefault() { prevented = true; },
-    });
+    };
+    view.onKeyDown({ ...event, isComposing: true });
+    assert.equal(view.state, state);
+    assert.deepEqual(received, []);
+    view.onKeyDown(event);
     assert.ok(prevented);
+    assert.deepEqual(received, ['Backspace']);
     assert.equal(view.state.doc.textContent, 'one  four');
     assert.equal(view.state.selection.from, 5);
 
     assert.equal(press(state, 'Backspace', { ctrlKey: true }).doc.textContent, 'one two four');
     selection.isCollapsed = false;
-    view.state = atText('above  \nsecond line', 'abovesecond line', 17);
+    view.state = atText('above  \n![image](https://example.com/image.png)second line', 'abovesecond line', 18);
     view.onBeforeInput({ inputType: 'deleteSoftLineBackward', preventDefault() {} });
     assert.equal(view.state.doc.toString(), 'doc(paragraph("above", hard_break))');
+
+    view.state = atText('Above\n\n- item', 'item');
+    view.onKeyDown(event);
+    assert.ok(view.state.doc.eq(parseMarkdown('Above\n\nitem')));
+
+    view.state = state;
+    platform.platform = 'Win32';
+    view.onKeyDown(event);
+    assert.equal(view.state.doc.textContent, 'one two four');
 });
