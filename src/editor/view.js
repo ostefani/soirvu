@@ -33,6 +33,7 @@ import { completeMarkdownLink, isMacLineDelete } from "./rules.js";
 import { classifyHref } from "../lib/entry-target.js";
 
 const MARKDOWN_CLIPBOARD_TYPE = "text/x-soirvu-markdown";
+const TEXT_WRAPPER_TAGS = new Set(["SPAN", "CODE", "EM", "STRONG", "DEL", "A"]);
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -826,7 +827,11 @@ export class EditorView {
                 return;
             case "insertReplacementText": {
                 const range = e.getTargetRanges?.()[0];
-                if (e.data == null || !range ||
+                const transfer = e.dataTransfer;
+                const text = e.data ?? (
+                    transfer?.types.includes("text/plain") ? transfer.getData("text/plain") : null
+                );
+                if (text == null || !range ||
                     !this.dom.contains(range.startContainer) || !this.dom.contains(range.endContainer)) return;
                 const from = this.posFromDOM(range.startContainer, range.startOffset);
                 const to = this.posFromDOM(range.endContainer, range.endOffset);
@@ -835,7 +840,7 @@ export class EditorView {
                 if (from >= to || !$from.parent.isTextblock || !$from.sameParent($to)) return;
                 handled(() => {
                     const marks = $from.marksAcross($to) || [];
-                    const content = e.data ? Fragment.from(state.schema.text(e.data, marks)) : Fragment.empty;
+                    const content = text ? Fragment.from(state.schema.text(text, marks)) : Fragment.empty;
                     const tr = state.tr().replaceRange(from, to, inlineSlice(content));
                     tr.setSelection(new TextSelection(from + content.size));
                     this.dispatch(tr);
@@ -919,21 +924,46 @@ export class EditorView {
         return node || null;
     }
 
-    /** If the block element's DOM text differs from its state node,
-     *  dispatch a transaction replacing the differing span. Only
-     *  for textblocks whose content is pure text. */
+    /** Accept a native text change only within a single run between inline nodes. */
     syncBlockText(blockEl) {
         const node = blockEl._node;
         const pos = blockEl._pos;
         if (!node?.isTextblock || this.state.doc.nodeAt(pos) !== node) return false;
-        let pure = true;
-        node.content.forEach((child) => {
-            if (!child.isText) pure = false;
+        const runs = [{ start: pos + 1, before: "", after: "" }];
+        const inlines = [];
+        node.forEach((child, offset) => {
+            if (child.isText) runs.at(-1).before += child.text;
+            else {
+                inlines.push({ node: child, pos: pos + 1 + offset });
+                runs.push({ start: pos + 1 + offset + child.nodeSize, before: "", after: "" });
+            }
         });
-        if (!pure) return false;
-        const domText = blockEl.textContent;
-        const stateText = node.textContent;
-        if (domText === stateText) return false;
+
+        let runIndex = 0;
+        let mapped = true;
+        function readDOM(parent) {
+            for (const child of parent.childNodes) {
+                if (child.nodeType === 3) {
+                    const run = runs[runIndex];
+                    if (child._pos !== run.start + run.after.length) mapped = false;
+                    run.after += child.textContent;
+                } else if (child._node) {
+                    const expected = inlines[runIndex];
+                    if (!expected || child._node !== expected.node || child._pos !== expected.pos) return false;
+                    runIndex++;
+                } else if (child.nodeType === 1) {
+                    // The editor renders an empty block with a zero-width placeholder.
+                    if (child._leaf && node.content.size === 0) continue;
+                    if (!TEXT_WRAPPER_TAGS.has(child.tagName) || !readDOM(child)) return false;
+                }
+            }
+            return true;
+        }
+        if (!readDOM(blockEl) || runIndex !== inlines.length) return false;
+        const changed = runs.filter(({ before, after }) => before !== after);
+        if (!changed.length) return mapped;
+        if (changed.length !== 1) return false;
+        const { start, before: stateText, after: domText } = changed[0];
         let prefix = 0;
         while (prefix < Math.min(domText.length, stateText.length) && domText[prefix] === stateText[prefix]) prefix++;
         let suffix = 0;
@@ -943,18 +973,12 @@ export class EditorView {
         ) {
             suffix++;
         }
-        const contentStart = pos + 1;
-        const from = contentStart + prefix;
-        const to = contentStart + stateText.length - suffix;
+        const from = start + prefix;
+        const to = start + stateText.length - suffix;
         const inserted = domText.slice(prefix, domText.length - suffix);
-        // Marks for the inserted text: those of the state text at the cut.
-        let marks = [];
-        let offset = 0;
-        node.content.forEach((child) => {
-            if (prefix >= offset && prefix <= offset + child.nodeSize) marks = child.marks;
-            offset += child.nodeSize;
-        });
         const state = this.state;
+        const $from = state.doc.resolve(from);
+        const marks = (from < to ? $from.marksAcross(state.doc.resolve(to)) : $from.marks()) || [];
         const tr = state.tr();
         const slice = inserted
             ? inlineSlice(Fragment.from(state.schema.text(inserted, marks)))

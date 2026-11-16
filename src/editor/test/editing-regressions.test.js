@@ -93,7 +93,7 @@ test("clipboard events apply paste once and a native paste mutation only restore
     assert.equal(prevented, 2);
 });
 
-test("replacement input changes the browser's target range at a collapsed caret", () => {
+test("replacement input reads Chromium's plain-text transfer and changes the target range", () => {
     const node = {};
     const view = Object.assign(Object.create(EditorView.prototype), {
         dom: { contains: (candidate) => candidate === node },
@@ -106,10 +106,56 @@ test("replacement input changes the browser's target range at a collapsed caret"
     let canceled = false;
     view.onBeforeInput({
         inputType: "insertReplacementText",
-        data: "the",
+        data: null,
+        dataTransfer: {
+            types: ["text/plain"],
+            getData: (type) => type === "text/plain" ? "the" : "",
+        },
         getTargetRanges: () => [{ startContainer: node, startOffset: 7, endContainer: node, endOffset: 10 }],
         preventDefault() { canceled = true; },
     });
     assert.equal(canceled, true);
     assert.equal(view.state.doc.textContent, "pasted the");
+});
+
+test("composition beside a hard break commits once and the final input keeps the projection", (t) => {
+    const state = EditorState.create({ doc: parseMarkdown("before\\\nafter") });
+    const dom = {};
+    const block = { _pos: 0, _node: state.doc.firstChild, parentNode: dom };
+    const before = { nodeType: 3, _pos: 1, textContent: "before", parentNode: block };
+    const hardBreak = { _pos: 7, _node: block._node.child(1) };
+    const after = { nodeType: 3, _pos: 8, textContent: "日本after", parentNode: block };
+    block.childNodes = [before, hardBreak, after];
+    dom.childNodes = [block];
+    const original = Object.getOwnPropertyDescriptor(globalThis, "document");
+    Object.defineProperty(globalThis, "document", {
+        configurable: true,
+        value: { getSelection: () => ({ anchorNode: after }) },
+    });
+    t.after(() => {
+        if (original) Object.defineProperty(globalThis, "document", original);
+        else delete globalThis.document;
+    });
+
+    let edits = 0;
+    const view = Object.assign(Object.create(EditorView.prototype), {
+        dom,
+        state,
+        composing: true,
+        editable: () => true,
+        dispatch(tr) {
+            edits++;
+            this.state = this.state.apply(tr);
+            block._node = this.state.doc.firstChild;
+        },
+        restoreProjection() { assert.fail("restored an aligned text block"); },
+    });
+    view.onNativeInput({ inputType: "insertCompositionText", isComposing: true });
+    assert.equal(edits, 0);
+    view.onCompositionEnd();
+    view.onNativeInput({ inputType: "insertFromComposition" });
+    assert.equal(edits, 1);
+    assert.equal(view.state.doc.firstChild.child(1), hardBreak._node);
+    assert.equal(view.state.doc.firstChild.lastChild.text, "日本after");
+    assert.equal(view.state.selection.from, 10);
 });
