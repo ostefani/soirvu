@@ -766,22 +766,22 @@ export function setBlockType(nodeType, attrs = {}) {
         const sel = state.selection;
         if (sel.type !== "text") return false;
         const doc = state.doc;
-        return finish(state, dispatch, (tr) => {
-            const blocks = [];
-            doc.nodesBetween(sel.from, sel.to, (node, pos) => {
-                if (node.isTextblock) {
-                    blocks.push({ node, pos });
-                    return false;
-                }
-                return true;
-            });
-            for (let i = blocks.length - 1; i >= 0; i--) {
-                const { node, pos } = blocks[i];
-                tr.replaceWith(pos, pos + node.nodeSize, [
-                    nodeType.create(attrs, node.content, node.marks),
-                ]);
+        const blocks = [];
+        doc.nodesBetween(sel.from, sel.to, (node, pos, parent, index) => {
+            if (!node.isTextblock) return true;
+            if (nodeType.validContent(node.content) &&
+                parent.canReplaceWith(index, index + 1, nodeType, node.marks)) {
+                const replacement = nodeType.create(attrs, node.content, node.marks);
+                if (!replacement.eq(node)) blocks.push({ node, pos, replacement });
             }
-            tr.setSelection(selectionNear(tr.doc, sel.from));
+            return false;
+        });
+        if (!blocks.length) return false;
+        return finish(state, dispatch, (tr) => {
+            for (const { node, pos, replacement } of blocks.reverse()) {
+                tr.replaceWith(pos, pos + node.nodeSize, [replacement]);
+            }
+            tr.setSelection(sel);
         });
     };
 }

@@ -24,7 +24,7 @@
 
 import { Fragment, Slice } from "prosemirror-model";
 import { NodeSelection, TextSelection, selectionNear } from "./state.js";
-import { deleteSelection as deleteSelectionCmd, deleteToLineStart, insertTextIn } from "./commands.js";
+import { deleteToLineStart, insertTextIn } from "./commands.js";
 import { inlineSlice } from "./transform.js";
 import { caretScrollDelta } from "./scroll.js";
 import { tokenize } from "./highlight.js";
@@ -103,9 +103,7 @@ export class EditorView {
         this.onPasteText = options.onPasteText || null;
         this.onAttachFile = options.onAttachFile || null;
         this.composing = false;
-        this.compositionBlockPos = null;
         this.syncingSelection = false;
-        this.lastHandledInputAt = 0;
         this.dragHandle = null;
         this.dragState = null;
 
@@ -652,11 +650,11 @@ export class EditorView {
         this.handlers = {
             beforeinput: (e) => this.onBeforeInput(e),
             keydown: (e) => this.onKeyDown(e),
-            input: (e) => this.onInputFallback(e),
+            input: (e) => this.onNativeInput(e),
             compositionstart: () => {
                 this.composing = true;
             },
-            compositionend: (e) => this.onCompositionEnd(e),
+            compositionend: () => this.onCompositionEnd(),
             paste: (e) => this.onPaste(e),
             copy: (e) => this.onCopy(e),
             cut: (e) => this.onCut(e),
@@ -741,7 +739,6 @@ export class EditorView {
             (isMacLineDelete(e) && this.editable() && this.deleteLineBackward());
         if (handled) {
             e.preventDefault();
-            this.lastHandledInputAt = performance.now();
         }
     }
 
@@ -769,12 +766,20 @@ export class EditorView {
             return;
         }
         if (this.composing || e.isComposing) return;
+        // Clipboard events own transfer edits. Claim their beforeinput
+        // even when this engine omits clipboard data on the event.
+        if (e.inputType === "insertFromPaste" || e.inputType === "insertFromPasteAsQuotation" ||
+            e.inputType === "insertFromDrop" || e.inputType === "deleteByCut" ||
+            e.inputType === "deleteByDrag") {
+            e.preventDefault();
+            return;
+        }
+        if (e.cancelable === false) return;
         const state = this.state;
         const sel = state.selection;
         const handled = (fn) => {
-            fn();
             e.preventDefault();
-            this.lastHandledInputAt = performance.now();
+            fn();
         };
         switch (e.inputType) {
             case "insertText": {
@@ -813,28 +818,26 @@ export class EditorView {
             case "deleteHardLineBackward":
                 handled(() => deleteToLineStart(state, (tr) => this.dispatch(tr)));
                 return;
-            case "deleteByCut":
-                handled(() => deleteSelectionCmd(state, (tr) => this.dispatch(tr)));
-                return;
             case "historyUndo":
                 handled(() => this.runKey("z", { mod: true }));
                 return;
             case "historyRedo":
                 handled(() => this.runKey("Z", { mod: true, shift: true }));
                 return;
-            case "insertFromPaste":
-            case "insertFromDrop": {
-                const text = e.dataTransfer ? e.dataTransfer.getData("text/plain") : null;
-                if (text != null && this.onPasteText) {
-                    handled(() => this.onPasteText(text, state, (tr) => this.dispatch(tr)));
-                }
-                return;
-            }
             case "insertReplacementText": {
-                if (e.data == null) return;
+                const range = e.getTargetRanges?.()[0];
+                if (e.data == null || !range ||
+                    !this.dom.contains(range.startContainer) || !this.dom.contains(range.endContainer)) return;
+                const from = this.posFromDOM(range.startContainer, range.startOffset);
+                const to = this.posFromDOM(range.endContainer, range.endOffset);
+                const $from = state.doc.resolve(from);
+                const $to = state.doc.resolve(to);
+                if (from >= to || !$from.parent.isTextblock || !$from.sameParent($to)) return;
                 handled(() => {
-                    const tr = state.tr();
-                    insertTextIn(tr, state, e.data);
+                    const marks = $from.marksAcross($to) || [];
+                    const content = e.data ? Fragment.from(state.schema.text(e.data, marks)) : Fragment.empty;
+                    const tr = state.tr().replaceRange(from, to, inlineSlice(content));
+                    tr.setSelection(new TextSelection(from + content.size));
                     this.dispatch(tr);
                 });
                 return;
@@ -899,21 +902,15 @@ export class EditorView {
         const markdown = e.clipboardData?.getData(MARKDOWN_CLIPBOARD_TYPE);
         const text = markdown || e.clipboardData?.getData("text/plain");
         if (text != null && this.onPasteText) {
-            this.lastHandledInputAt = performance.now();
+            this.onSelectionChange();
             this.onPasteText(text, this.state, (tr) => this.dispatch(tr), Boolean(markdown));
         }
     }
 
-    onCompositionEnd(e) {
+    onCompositionEnd() {
+        if (!this.composing) return;
         this.composing = false;
-        // The browser edited one block's text. Commit it back.
-        const anchor = document.getSelection()?.anchorNode;
-        const blockEl = this.topBlockOf(anchor);
-        if (blockEl && blockEl._node) {
-            this.syncBlockText(blockEl);
-        }
-        this.updateState(this.state);
-        void e;
+        this.recoverNativeText();
     }
 
     topBlockOf(domNode) {
@@ -928,15 +925,15 @@ export class EditorView {
     syncBlockText(blockEl) {
         const node = blockEl._node;
         const pos = blockEl._pos;
-        if (!node || !node.isTextblock) return;
+        if (!node?.isTextblock || this.state.doc.nodeAt(pos) !== node) return false;
         let pure = true;
         node.content.forEach((child) => {
             if (!child.isText) pure = false;
         });
-        if (!pure) return;
+        if (!pure) return false;
         const domText = blockEl.textContent;
         const stateText = node.textContent;
-        if (domText === stateText) return;
+        if (domText === stateText) return false;
         let prefix = 0;
         while (prefix < Math.min(domText.length, stateText.length) && domText[prefix] === stateText[prefix]) prefix++;
         let suffix = 0;
@@ -969,14 +966,47 @@ export class EditorView {
         if (this.state.selection.head === caret) {
             completeMarkdownLink(this.state, (conversion) => this.dispatch(conversion));
         }
+        return true;
     }
 
-    onInputFallback() {
-        if (this.composing) return;
-        if (performance.now() - this.lastHandledInputAt < 50) return;
-        const anchor = document.getSelection()?.anchorNode;
-        const blockEl = this.topBlockOf(anchor);
-        if (blockEl) this.syncBlockText(blockEl);
+    restoreProjection() {
+        this.renderAll();
+        // Run the normal selection and attachment update after replacing DOM.
+        this.dispatch(this.state.tr());
+    }
+
+    recoverNativeText() {
+        let el = document.getSelection()?.anchorNode;
+        while (el && el !== this.dom && !el._node?.isTextblock) el = el.parentNode;
+        const roots = this.dom.childNodes;
+        const doc = this.state.doc;
+        // Positional reconciliation requires the same top-level DOM blocks.
+        let aligned = roots.length === doc.childCount;
+        doc.forEach((node, _pos, index) => {
+            if (roots[index]?._node !== node) aligned = false;
+        });
+        if (aligned && this.editable() && el && el !== this.dom && this.syncBlockText(el)) return;
+        this.restoreProjection();
+    }
+
+    onNativeInput(e) {
+        if (this.composing || e.isComposing) return;
+        switch (e.inputType) {
+            case "insertText":
+            case "insertReplacementText":
+            case "insertCompositionText":
+            case "insertFromComposition":
+            case "deleteContentBackward":
+            case "deleteContentForward":
+            case "deleteWordBackward":
+            case "deleteWordForward":
+                this.recoverNativeText();
+                break;
+            default:
+                // A native structural edit can leave extra DOM children that
+                // would shift every index used by the incremental renderer.
+                this.restoreProjection();
+        }
     }
 
     onClick(e) {

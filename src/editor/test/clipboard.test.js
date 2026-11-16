@@ -34,6 +34,7 @@ test('copy preserves markup in a backward selection and pastes it as Markdown', 
         state: destination,
         editable: () => true,
         onPasteText: makePasteHandler(),
+        onSelectionChange() {},
         dispatch(transaction) { pasted = destination.apply(transaction); },
     }, event);
     assert.equal(serializeMarkdown(pasted.doc), '*italic*');
