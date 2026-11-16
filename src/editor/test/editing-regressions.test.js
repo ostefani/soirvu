@@ -3,18 +3,17 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { insertHardBreak, insertTextIn } from "../commands.js";
-import { makePasteHandler, parseMarkdown, serializeMarkdown } from "../index.js";
+import { insertTextIn } from "../commands.js";
+import { makePasteHandler, parseMarkdown, schema, serializeMarkdown } from "../index.js";
 import { EditorState, TextSelection } from "../state.js";
 import { toolbarCommands } from "../toolbar.js";
 import { EditorView } from "../view.js";
 
 test("Heading 2 preserves soft breaks and selection through a Markdown round trip", () => {
-    let state = EditorState.create({ doc: parseMarkdown("onetwo") });
+    let state = EditorState.create({ doc: parseMarkdown("") });
     const dispatch = (tr) => { state = state.apply(tr); };
-    dispatch(state.tr().setSelection(new TextSelection(4)));
-    assert.equal(insertHardBreak(state, dispatch), true);
-    const selection = new TextSelection(8, 1);
+    makePasteHandler()("a\nb", state, dispatch);
+    const selection = new TextSelection(4, 1);
     dispatch(state.tr().setSelection(selection));
     assert.equal(toolbarCommands(state.schema).heading2(state, dispatch), true);
     assert.equal(state.doc.firstChild.attrs.level, 2);
@@ -127,6 +126,7 @@ test("composition beside a hard break commits once and the final input keeps the
     const after = { nodeType: 3, _pos: 8, textContent: "日本after", parentNode: block };
     block.childNodes = [before, hardBreak, after];
     dom.childNodes = [block];
+    dom.contains = (el) => el === block;
     const original = Object.getOwnPropertyDescriptor(globalThis, "document");
     Object.defineProperty(globalThis, "document", {
         configurable: true,
@@ -158,4 +158,66 @@ test("composition beside a hard break commits once and the final input keeps the
     assert.equal(view.state.doc.firstChild.child(1), hardBreak._node);
     assert.equal(view.state.doc.firstChild.lastChild.text, "日本after");
     assert.equal(view.state.selection.from, 10);
+});
+
+test("composition commits in its original empty or pasted block after the selection moves", async (t) => {
+    for (const pasted of ["", "pasted"]) {
+        await t.test(pasted ? "start of pasted text" : "empty block", (t) => {
+            const view = Object.assign(Object.create(EditorView.prototype), {
+                state: EditorState.create({ doc: schema.nodes.doc.create(null, [
+                    schema.nodes.paragraph.create(),
+                    schema.nodes.paragraph.create(null, schema.text("next")),
+                ]) }),
+                editable: () => true,
+                onSelectionChange() {},
+                onPasteText: makePasteHandler(),
+                restoreProjection() { assert.fail("restored DOM during native text recovery"); },
+            });
+            const dom = { childNodes: [], contains: (el) => dom.childNodes.includes(el) };
+            view.dom = dom;
+            let anchorNode;
+            function project() {
+                dom.childNodes = [];
+                view.state.doc.forEach((node, pos) => {
+                    const block = { _node: node, _pos: pos, parentNode: dom, childNodes: [] };
+                    const child = node.content.size
+                        ? { nodeType: 3, _pos: pos + 1, textContent: node.textContent, parentNode: block }
+                        : { nodeType: 1, _leaf: true, tagName: "BR", parentNode: block };
+                    block.childNodes.push(child);
+                    dom.childNodes.push(block);
+                });
+                anchorNode = dom.childNodes[0].childNodes[0];
+            }
+            view.dispatch = (tr) => {
+                view.state = view.state.apply(tr);
+                project();
+            };
+            project();
+            const original = Object.getOwnPropertyDescriptor(globalThis, "document");
+            Object.defineProperty(globalThis, "document", {
+                configurable: true,
+                value: { getSelection: () => ({ anchorNode }) },
+            });
+            t.after(() => {
+                if (original) Object.defineProperty(globalThis, "document", original);
+                else delete globalThis.document;
+            });
+            if (pasted) {
+                view.onPaste({
+                    clipboardData: { getData: (type) => type === "text/plain" ? pasted : "" },
+                    preventDefault() {},
+                });
+            }
+            view.onCompositionStart();
+            const block = dom.childNodes[0];
+            if (pasted) anchorNode.textContent = "日本" + pasted;
+            else block.childNodes.unshift({ nodeType: 3, textContent: "日本", parentNode: block });
+            view.onNativeInput({ inputType: "insertCompositionText", isComposing: true });
+            anchorNode = dom.childNodes[1].childNodes[0];
+            view.onCompositionEnd();
+            view.onNativeInput({ inputType: "insertFromComposition" });
+            assert.equal(view.state.doc.firstChild.textContent, "日本" + pasted);
+            assert.equal(view.state.doc.lastChild.textContent, "next");
+        });
+    }
 });

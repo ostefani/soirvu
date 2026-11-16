@@ -652,9 +652,7 @@ export class EditorView {
             beforeinput: (e) => this.onBeforeInput(e),
             keydown: (e) => this.onKeyDown(e),
             input: (e) => this.onNativeInput(e),
-            compositionstart: () => {
-                this.composing = true;
-            },
+            compositionstart: () => this.onCompositionStart(),
             compositionend: () => this.onCompositionEnd(),
             paste: (e) => this.onPaste(e),
             copy: (e) => this.onCopy(e),
@@ -912,10 +910,23 @@ export class EditorView {
         }
     }
 
+    selectionTextBlock() {
+        let el = document.getSelection()?.anchorNode;
+        while (el && el !== this.dom && !el._node?.isTextblock) el = el.parentNode;
+        return el && el !== this.dom && this.dom.contains(el) ? el : null;
+    }
+
+    onCompositionStart() {
+        this.compositionBlock = this.selectionTextBlock();
+        this.composing = true;
+    }
+
     onCompositionEnd() {
         if (!this.composing) return;
+        const block = this.compositionBlock;
+        this.compositionBlock = null;
         this.composing = false;
-        this.recoverNativeText();
+        this.recoverNativeText(block ?? this.selectionTextBlock());
     }
 
     topBlockOf(domNode) {
@@ -932,7 +943,7 @@ export class EditorView {
         const runs = [{ start: pos + 1, before: "", after: "" }];
         const inlines = [];
         node.forEach((child, offset) => {
-            if (child.isText) runs.at(-1).before += child.text;
+            if (child.isText) runs[runs.length - 1].before += child.text;
             else {
                 inlines.push({ node: child, pos: pos + 1 + offset });
                 runs.push({ start: pos + 1 + offset + child.nodeSize, before: "", after: "" });
@@ -952,7 +963,7 @@ export class EditorView {
                     if (!expected || child._node !== expected.node || child._pos !== expected.pos) return false;
                     runIndex++;
                 } else if (child.nodeType === 1) {
-                    // The editor renders an empty block with a zero-width placeholder.
+                    // An empty block has a position-only <br> placeholder.
                     if (child._leaf && node.content.size === 0) continue;
                     if (!TEXT_WRAPPER_TAGS.has(child.tagName) || !readDOM(child)) return false;
                 }
@@ -994,14 +1005,13 @@ export class EditorView {
     }
 
     restoreProjection() {
+        if (import.meta.env?.DEV) console.debug("Editor restored its DOM after an unsupported native edit.");
         this.renderAll();
         // Run the normal selection and attachment update after replacing DOM.
         this.dispatch(this.state.tr());
     }
 
-    recoverNativeText() {
-        let el = document.getSelection()?.anchorNode;
-        while (el && el !== this.dom && !el._node?.isTextblock) el = el.parentNode;
+    recoverNativeText(block = this.selectionTextBlock()) {
         const roots = this.dom.childNodes;
         const doc = this.state.doc;
         // Positional reconciliation requires the same top-level DOM blocks.
@@ -1009,7 +1019,7 @@ export class EditorView {
         doc.forEach((node, _pos, index) => {
             if (roots[index]?._node !== node) aligned = false;
         });
-        if (aligned && this.editable() && el && el !== this.dom && this.syncBlockText(el)) return;
+        if (aligned && this.editable() && block && this.dom.contains(block) && this.syncBlockText(block)) return;
         this.restoreProjection();
     }
 
