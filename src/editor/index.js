@@ -298,6 +298,7 @@ export function createEditor(el, options = {}) {
         finishComposing() {
             const active = document.activeElement;
             if (active && view.dom.contains(active)) active.blur();
+            view.onCompositionEnd();
         },
         /**
          * Replaces the document and resets history when switching entries.

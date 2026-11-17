@@ -104,6 +104,7 @@ export class EditorView {
         this.onPasteText = options.onPasteText || null;
         this.onAttachFile = options.onAttachFile || null;
         this.composing = false;
+        this.compositionBlock = null;
         this.syncingSelection = false;
         this.dragHandle = null;
         this.dragState = null;
@@ -240,6 +241,14 @@ export class EditorView {
         oldDoc.content.forEach((n) => oldKids.push(n));
         const newKids = [];
         newDoc.content.forEach((n) => newKids.push(n));
+        const composingRoot = this.compositionBlock && this.topBlockOf(this.compositionBlock);
+        const composingIndex = composingRoot ? newKids.indexOf(composingRoot._node) : -1;
+        if (composingRoot && composingIndex < 0) {
+            // A model edit replaced the composing subtree. Its native text
+            // can no longer be applied safely to the new document.
+            this.composing = false;
+            this.compositionBlock = null;
+        }
         let prefix = 0;
         while (
             prefix < oldKids.length &&
@@ -264,19 +273,25 @@ export class EditorView {
         for (let i = 0; i < newMiddle; i++) newMiddleSize += newKids[prefix + i].nodeSize;
         const delta = newMiddleSize - oldMiddleSize;
 
-        // Remove the changed middle block elements.
-        for (let i = 0; i < oldMiddle; i++) {
-            const el = this.dom.childNodes[prefix];
-            if (el) el.remove();
+        // Keep an unchanged composing subtree attached even when separate
+        // edits put it inside the changed middle.
+        const keepComposition = composingIndex >= prefix && composingIndex < prefix + newMiddle;
+        for (let i = prefix + oldMiddle - 1; i >= prefix; i--) {
+            const el = this.dom.childNodes[i];
+            if (!keepComposition || el !== composingRoot) el?.remove();
         }
-        // Insert freshly rendered replacements.
         let pos = 0;
         for (let i = 0; i < prefix; i++) pos += newKids[i].nodeSize;
-        const ref = this.dom.childNodes[prefix] || null;
-        for (let i = 0; i < newMiddle; i++) {
-            const child = newKids[prefix + i];
-            const el = this.renderNode(child, pos);
-            this.dom.insertBefore(el, ref);
+        let ref = this.dom.childNodes[prefix] || null;
+        for (let i = prefix; i < prefix + newMiddle; i++) {
+            const child = newKids[i];
+            if (keepComposition && i === composingIndex) {
+                const shift = pos - composingRoot._pos;
+                if (shift) this.shiftPositions(composingRoot, shift);
+                ref = composingRoot.nextSibling;
+            } else {
+                this.dom.insertBefore(this.renderNode(child, pos), ref);
+            }
             pos += child.nodeSize;
         }
         // Kept blocks after the edit keep their nodes but move.
@@ -300,10 +315,10 @@ export class EditorView {
     updateState(newState) {
         const oldDoc = this.state.doc;
         this.state = newState;
-        if (newState.doc !== oldDoc && !this.composing) {
+        if (newState.doc !== oldDoc) {
             this.reconcile(oldDoc, newState.doc);
         }
-        if (!this.composing) this.syncSelection();
+        this.syncSelection();
     }
 
     setEditable(value) {
@@ -316,6 +331,8 @@ export class EditorView {
     }
 
     destroy() {
+        this.composing = false;
+        this.compositionBlock = null;
         this.unbindEvents();
         if (this.dragHandle) this.dragHandle.remove();
         if (this.dropLine) this.dropLine.remove();
@@ -583,6 +600,7 @@ export class EditorView {
     }
 
     syncSelection() {
+        if (this.composing) return;
         const domSel = document.getSelection();
         if (!domSel) return;
         if (domSel.rangeCount && !this.dom.contains(domSel.anchorNode) && document.activeElement !== this.dom) {
@@ -654,6 +672,7 @@ export class EditorView {
             input: (e) => this.onNativeInput(e),
             compositionstart: () => this.onCompositionStart(),
             compositionend: () => this.onCompositionEnd(),
+            blur: () => this.onCompositionEnd(),
             paste: (e) => this.onPaste(e),
             copy: (e) => this.onCopy(e),
             cut: (e) => this.onCut(e),
