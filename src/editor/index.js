@@ -212,12 +212,19 @@ export function createEditor(el, options = {}) {
 
     const commands = toolbarCommands(schema);
 
+    function finishComposition() {
+        const active = document.activeElement;
+        if (active && view.dom.contains(active)) active.blur();
+        view.onCompositionEnd();
+    }
+
     return {
         /** Runs a selection-toolbar command by name (toolbar.js).
          *  `arg` reaches commands that take one (setCodeLanguage). */
         exec(name, arg) {
             const command = commands[name];
             if (!command) return false;
+            if (view.composing) finishComposition();
             view.onSelectionChange();
             const ok = command(view.state, (tr) => view.dispatch(tr), arg);
             view.focus();
@@ -296,9 +303,7 @@ export function createEditor(el, options = {}) {
         },
         /** Commits a pending IME composition before navigation. */
         finishComposing() {
-            const active = document.activeElement;
-            if (active && view.dom.contains(active)) active.blur();
-            view.onCompositionEnd();
+            finishComposition();
         },
         /**
          * Replaces the document and resets history when switching entries.

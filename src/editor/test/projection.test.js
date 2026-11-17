@@ -6,7 +6,7 @@ import test from "node:test";
 import { Window } from "happy-dom";
 import { insertTextIn } from "../commands.js";
 import { historyPlugin, undo } from "../history.js";
-import { makePasteHandler, parseMarkdown } from "../index.js";
+import { createEditor, makePasteHandler, parseMarkdown } from "../index.js";
 import { EditorState, TextSelection } from "../state.js";
 import { toolbarCommands } from "../toolbar.js";
 import { EditorView } from "../view.js";
@@ -30,7 +30,7 @@ function assertProjection(view) {
     assert.deepEqual(actual, expected);
 }
 
-function mount(t, source, onUpdate = assertProjection) {
+function mountDOM(t, makeEditor) {
     const window = new Window();
     const keys = ["document", "Node", "NodeFilter"];
     const previous = keys.map((key) => Object.getOwnPropertyDescriptor(globalThis, key));
@@ -38,23 +38,28 @@ function mount(t, source, onUpdate = assertProjection) {
 
     const dom = document.createElement("div");
     document.body.append(dom);
-    const view = new EditorView(dom, {
-        state: EditorState.create({ doc: parseMarkdown(source), plugins: [historyPlugin()] }),
-        onPasteText: makePasteHandler(),
-        dispatchTransaction(tr) {
-            view.updateState(view.state.apply(tr));
-            onUpdate(view);
-        },
-    });
+    const editor = makeEditor(dom);
     t.after(async () => {
-        view.destroy();
+        editor.destroy();
         await window.close();
         keys.forEach((key, index) => {
             if (previous[index]) Object.defineProperty(globalThis, key, previous[index]);
             else delete globalThis[key];
         });
     });
-    view.focus();
+    editor.focus();
+    return { editor, dom, window };
+}
+
+function mount(t, source, onUpdate = assertProjection) {
+    const { editor: view, dom, window } = mountDOM(t, (dom) => new EditorView(dom, {
+        state: EditorState.create({ doc: parseMarkdown(source), plugins: [historyPlugin()] }),
+        onPasteText: makePasteHandler(),
+        dispatchTransaction(tr) {
+            view.updateState(view.state.apply(tr));
+            onUpdate(view);
+        },
+    }));
     assertProjection(view);
     return { view, dom, window };
 }
@@ -166,3 +171,18 @@ for (const pasted of ["", "pasted"]) {
         assert.equal(view.state.doc.textContent, "日本" + pasted);
     });
 }
+
+test("Heading 2 commits pending composition before replacing the paragraph", (t) => {
+    const { editor, dom, window } = mountDOM(t, (dom) => createEditor(dom, { markdown: "draft" }));
+    const text = dom.firstChild.firstChild;
+    document.getSelection().collapse(text, 0);
+    dom.dispatchEvent(new window.CompositionEvent("compositionstart"));
+    text.textContent = "日本draft";
+
+    assert.equal(editor.exec("heading2"), true);
+    assert.equal(editor.getMarkdown(), "## 日本draft");
+    assert.equal(dom.firstChild.tagName, "H2");
+    assert.equal(document.activeElement, dom);
+    dom.dispatchEvent(new window.CompositionEvent("compositionend"));
+    assert.equal(editor.getMarkdown(), "## 日本draft");
+});
