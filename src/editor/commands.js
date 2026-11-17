@@ -82,8 +82,35 @@ export function insertTextIn(tr, state, text) {
 export function deleteSelection(state, dispatch) {
     if (state.selection.empty) return false;
     return finish(state, dispatch, (tr) => {
-        const pos = deleteSelectionIn(tr, state);
+        const sel = state.selection;
+        let pos;
+        if (sel.type === "node" && sel.node(state.doc).isBlock) {
+            pos = sel.from;
+            removeBlock(tr, state.schema, pos);
+        } else {
+            pos = deleteSelectionIn(tr, state);
+        }
         tr.setSelection(selectionNear(tr.doc, pos));
+    });
+}
+
+/** Deletes back to the start of the current line, keeping its block. */
+export function deleteToLineStart(state, dispatch, visualStart) {
+    if (!state.selection.empty) return deleteSelection(state, dispatch);
+    const $cursor = state.selection.$from(state.doc);
+    if (!$cursor.parent.isTextblock) return false;
+    const prefix = $cursor.parent.textBetween(0, $cursor.parentOffset, "", (node) =>
+        node.type === state.schema.nodes.hard_break ? "\n" : "\ufffc");
+    const lineStart = $cursor.start() + prefix.lastIndexOf("\n") + 1;
+    const from = visualStart >= lineStart && visualStart <= $cursor.pos ? visualStart : lineStart;
+    if (from === $cursor.pos) {
+        if ($cursor.parentOffset === 0) joinBackward(state, dispatch);
+        else if ($cursor.nodeBefore?.type === state.schema.nodes.hard_break) deleteChar(-1)(state, dispatch);
+        return true;
+    }
+    return finish(state, dispatch, (tr) => {
+        tr.delete(from, $cursor.pos);
+        tr.setSelection(new TextSelection(from));
     });
 }
 
@@ -92,24 +119,15 @@ export function deleteChar(dir) {
     return (state, dispatch) => {
         const sel = state.selection;
         if (sel.type !== "text" || !sel.empty) return false;
-        const doc = state.doc;
-        const $pos = doc.resolve(sel.from);
+        const $pos = sel.$from(state.doc);
         if (!$pos.parent.isTextblock) return false;
-        const text = $pos.parent.textContent;
-        const offset = $pos.parentOffset;
-        if (dir < 0 && offset === 0) return false;
-        if (dir > 0 && offset === text.length) return false;
-        let from = sel.from;
-        let to = sel.from;
-        if (dir < 0) {
-            const before = text.slice(0, offset);
-            const ch = [...before].pop();
-            from -= ch ? ch.length : 1;
-        } else {
-            const after = text.slice(offset);
-            const ch = [...after][0];
-            to += ch ? ch.length : 1;
-        }
+        const adjacent = dir < 0 ? $pos.nodeBefore : $pos.nodeAfter;
+        if (!adjacent) return false;
+        const size = adjacent.isText
+            ? (dir < 0 ? [...adjacent.text].pop() : [...adjacent.text][0]).length
+            : adjacent.nodeSize;
+        const from = dir < 0 ? sel.from - size : sel.from;
+        const to = dir < 0 ? sel.from : sel.from + size;
         return finish(state, dispatch, (tr) => {
             tr.delete(from, to);
             tr.setSelection(new TextSelection(from));
@@ -492,12 +510,56 @@ export function sinkListItem(state, dispatch) {
 // ---------------------------------------------------------------------------
 // Joining (Backspace / Delete at block edges)
 
-function joinAt(state, dispatch, pos) {
+function removeBlock(tr, schema, pos) {
+    const $pos = tr.doc.resolve(pos);
+    const index = $pos.index();
+    const end = pos + $pos.nodeAfter.nodeSize;
+    if ($pos.parent.canReplace(index, index + 1)) tr.delete(pos, end);
+    else tr.replaceWith(pos, end, [schema.nodes.paragraph.create()]);
+}
+
+function joinAt(state, dispatch, pos, dir) {
     const doc = state.doc;
     const $pos = doc.resolve(pos);
     const before = $pos.nodeBefore;
     const after = $pos.nodeAfter;
+    const adjacent = dir < 0 ? before : after;
+    if (adjacent?.isBlock && adjacent.isAtom) {
+        const start = dir < 0 ? pos - adjacent.nodeSize : pos;
+        return finish(state, dispatch, (tr) => {
+            if (adjacent.type !== state.schema.nodes.horizontal_rule) {
+                tr.setSelection(new NodeSelection(start));
+                return;
+            }
+            removeBlock(tr, state.schema, start);
+            const { pos: cursor } = tr.mapping.map(state.selection.from);
+            tr.setSelection(new TextSelection(cursor));
+        });
+    }
     if (!before || !after) return false;
+    const { blockquote, bullet_list, ordered_list, paragraph } = state.schema.nodes;
+    const beforeIsQuoteOrList = before.type === blockquote || before.type === bullet_list || before.type === ordered_list;
+    const emptyParagraph = after.type === paragraph && after.content.size === 0;
+    if (beforeIsQuoteOrList && emptyParagraph && dir > 0) {
+        return finish(state, dispatch, (tr) => {
+            tr.delete(pos, pos + after.nodeSize);
+        });
+    }
+    if (beforeIsQuoteOrList && after.isTextblock && dir < 0) {
+        const start = pos - before.nodeSize;
+        let end;
+        before.descendants((node, offset) => {
+            if (!node.isTextblock) return true;
+            end = start + offset + node.nodeSize;
+            return false;
+        });
+        if (end !== undefined) {
+            return finish(state, dispatch, (tr) => {
+                if (emptyParagraph) tr.delete(pos, pos + after.nodeSize);
+                tr.setSelection(new TextSelection(end));
+            });
+        }
+    }
     if (!(before.isTextblock && after.isTextblock) && before.type !== after.type) return false;
     const start = pos - before.nodeSize;
     const merged = before.type.create(
@@ -517,14 +579,14 @@ export function joinBackward(state, dispatch) {
     const $from = doc.resolve(sel.from);
     if ($from.parentOffset > 0) return false;
     // Find the deepest level at which the block has a previous sibling.
+    let quoteDepth = 0;
     for (let d = $from.depth; d > 0; d--) {
+        if (!quoteDepth && $from.node(d).type === state.schema.nodes.blockquote) quoteDepth = d;
         if ($from.index(d - 1) > 0) {
-            return joinAt(state, dispatch, $from.before(d));
+            return joinAt(state, dispatch, $from.before(d), -1) ||
+                (quoteDepth > 0 && liftChild(state, dispatch, quoteDepth, $from.index(quoteDepth)));
         }
-    }
-    // First child everywhere: leave the innermost wrapper — the
-    // item, if this is a list, or the enclosing block otherwise.
-    for (let d = $from.depth; d > 0; d--) {
+        // A first list item can lift even when another block precedes its list.
         if ($from.node(d).type.name === "list_item") return liftListItem(state, dispatch);
     }
     if ($from.depth >= 2) {
@@ -541,7 +603,7 @@ export function joinForward(state, dispatch) {
     if ($from.parentOffset < $from.parent.content.size) return false;
     for (let d = $from.depth; d > 0; d--) {
         if ($from.index(d - 1) + 1 < $from.node(d - 1).childCount) {
-            return joinAt(state, dispatch, $from.after(d));
+            return joinAt(state, dispatch, $from.after(d), 1);
         }
     }
     return false;
@@ -704,22 +766,22 @@ export function setBlockType(nodeType, attrs = {}) {
         const sel = state.selection;
         if (sel.type !== "text") return false;
         const doc = state.doc;
-        return finish(state, dispatch, (tr) => {
-            const blocks = [];
-            doc.nodesBetween(sel.from, sel.to, (node, pos) => {
-                if (node.isTextblock) {
-                    blocks.push({ node, pos });
-                    return false;
-                }
-                return true;
-            });
-            for (let i = blocks.length - 1; i >= 0; i--) {
-                const { node, pos } = blocks[i];
-                tr.replaceWith(pos, pos + node.nodeSize, [
-                    nodeType.create(attrs, node.content, node.marks),
-                ]);
+        const blocks = [];
+        doc.nodesBetween(sel.from, sel.to, (node, pos, parent, index) => {
+            if (!node.isTextblock) return true;
+            if (nodeType.validContent(node.content) &&
+                parent.canReplaceWith(index, index + 1, nodeType, node.marks)) {
+                const replacement = nodeType.create(attrs, node.content, node.marks);
+                if (!replacement.eq(node)) blocks.push({ node, pos, replacement });
             }
-            tr.setSelection(selectionNear(tr.doc, sel.from));
+            return false;
+        });
+        if (!blocks.length) return false;
+        return finish(state, dispatch, (tr) => {
+            for (const { node, pos, replacement } of blocks.reverse()) {
+                tr.replaceWith(pos, pos + node.nodeSize, [replacement]);
+            }
+            tr.setSelection(sel);
         });
     };
 }

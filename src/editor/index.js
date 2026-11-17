@@ -15,7 +15,7 @@ import { EditorState, TextSelection, cursorMarks, selectionNear } from "./state.
 import { EditorView } from "./view.js";
 import { historyPlugin } from "./history.js";
 import { inputRulesPlugin, keymapPlugin } from "./rules.js";
-import { deleteSelectionIn, insertTextIn } from "./commands.js";
+import { deleteSelectionIn, insertTextIn, tryBuild } from "./commands.js";
 import { locateLink, selectionInfo, toolbarCommands, toggleTaskAt } from "./toolbar.js";
 import { schema } from "./schema.js";
 import { isEntryHref } from "../lib/entry-target.js";
@@ -47,86 +47,101 @@ function looksLikeMarkdown(text) {
  */
 export function makePasteHandler() {
     return (text, state, dispatch, isMarkdown = false) => {
-        // Inside a code or raw block the clipboard is literal
-        // text: no Markdown parsing, no block surgery — the
-        // block holds text and the paste must stay text,
-        // newlines included.
-        const sel = state.selection;
-        if (sel.type === "text") {
-            const parent = state.doc.resolve(sel.from).parent;
-            if (parent.type === state.schema.nodes.code_block || parent.type === state.schema.nodes.raw_block
-                || cursorMarks(state).some((mark) => mark.type === state.schema.marks.code)) {
-                const tr = state.tr();
-                insertTextIn(tr, state, text);
-                dispatch(tr);
+        if (!text) return;
+        const { doc, schema, selection } = state;
+        const marks = cursorMarks(state);
+        const parent = doc.resolve(selection.from).parent;
+        const literal = selection.type === "text" && (
+            parent.type.spec.code || marks.some((mark) => mark.type === schema.marks.code)
+        );
+        const replaceSelection = (tr) => {
+            if (selection.type === "node" && selection.node(doc).isBlock) {
+                const pos = selection.from;
+                tr.replaceWith(pos, selection.to(doc), [schema.nodes.paragraph.create()]);
+                return pos + 1;
+            }
+            return deleteSelectionIn(tr, state);
+        };
+        const plain = () => tryBuild(state, (tr) => {
+            const pos = replaceSelection(tr);
+            const $pos = tr.doc.resolve(pos);
+            const block = $pos.parent;
+            const normalized = text.replace(/\r\n?/g, "\n");
+            const lines = (value) => {
+                const nodes = [];
+                value.split("\n").forEach((line, index) => {
+                    if (index) nodes.push(schema.nodes.hard_break.create());
+                    if (line) nodes.push(schema.text(line, marks));
+                });
+                return Fragment.fromArray(nodes);
+            };
+            const parts = normalized.split("\n\n");
+            if (parts.length > 1 && block.isTextblock && block.type !== schema.nodes.heading) {
+                const before = block.content.cut(0, $pos.parentOffset);
+                const after = block.content.cut($pos.parentOffset);
+                const blocks = parts.map((part, index) => {
+                    const inline = lines(part);
+                    if (index === 0) return block.copy(before.append(inline));
+                    return schema.nodes.paragraph.create(null,
+                        index === parts.length - 1 ? inline.append(after) : inline);
+                });
+                const container = $pos.node(-1);
+                const index = $pos.index(-1);
+                const fragment = Fragment.fromArray(blocks);
+                if (container.canReplace(index, index + 1, fragment)) {
+                    tr.replaceRange($pos.before(), $pos.after(), new Slice(fragment, 0, 0));
+                    tr.setSelection(new TextSelection($pos.before() + fragment.size - after.size - 1));
+                    return;
+                }
+            }
+            const inline = lines(normalized);
+            if (block.isTextblock) {
+                tr.replaceRange(pos, pos, new Slice(inline, 0, 0));
+                tr.setSelection(new TextSelection(pos + inline.size));
+            } else {
+                const paragraph = schema.nodes.paragraph.create(null, inline);
+                tr.insert(pos, [paragraph]);
+                tr.setSelection(new TextSelection(pos + 1 + inline.size));
+            }
+        });
+        const markdown = () => tryBuild(state, (tr) => {
+            const frag = parseMarkdown(text).content;
+            const pos = replaceSelection(tr);
+            const $pos = tr.doc.resolve(pos);
+            if (!$pos.parent.isTextblock) {
+                tr.replaceRange(pos, pos, new Slice(frag, 0, 0));
+                tr.setSelection(selectionNear(tr.doc, pos + frag.size - 1));
                 return;
             }
-        }
-        if (isMarkdown || looksLikeMarkdown(text)) {
-            const frag = parseMarkdown(text).content;
-            const tr = state.tr();
-            const pos = deleteSelectionIn(tr, state);
-            const $pos = tr.doc.resolve(pos);
-            if ($pos.parent.isTextblock && $pos.parent.content.size === 0 && frag.childCount > 0) {
-                // Into an empty block: the pasted blocks take its place.
-                const start = $pos.start() - 1;
-                tr.replaceRange(start, start + $pos.parent.nodeSize, new Slice(frag, 0, 0));
-                tr.setSelection(selectionNear(tr.doc, start + frag.size));
-            } else {
-                tr.replaceRange(pos, pos, new Slice(frag, 1, 1));
-                tr.setSelection(selectionNear(tr.doc, pos + frag.size));
+            const block = $pos.parent;
+            const container = $pos.node(-1);
+            const index = $pos.index(-1);
+            if (!block.content.size && container.canReplace(index, index + 1, frag)) {
+                const start = $pos.before();
+                tr.replaceRange(start, $pos.after(), new Slice(frag, 0, 0));
+                tr.setSelection(selectionNear(tr.doc, start + frag.size - 1));
+                return;
             }
-            dispatch(tr);
-            return;
-        }
-        // Plain text. Pieces are computed against intermediate
-        // states (positions move as text lands), then their steps
-        // are replayed onto a single transaction for dispatch.
-        let current = state;
-        const steps = [];
-        let lastSelection = null;
-        const send = (tr) => {
-            steps.push(...tr.steps);
-            if (tr.selectionSet) lastSelection = tr.selection;
-            current = current.apply(tr);
-        };
-        text.replace(/\r\n?/g, "\n").split("\n\n").forEach((para, i) => {
-            if (i > 0) {
-                const tr = current.tr();
-                const sel = current.selection;
-                const $from = current.doc.resolve(sel.from);
-                const block = $from.parent;
-                const blockStart = $from.start();
-                const before = block.type.create(block.attrs, block.content.cut(0, $from.parentOffset));
-                const after = current.schema.nodes.paragraph.create(
-                    null,
-                    block.content.cut($from.parentOffset),
-                );
-                tr.replaceWith(blockStart - 1, $from.end() + 1, [before, after]);
-                tr.setSelection(selectionNear(tr.doc, blockStart + before.nodeSize));
-                send(tr);
+            const paragraph = schema.nodes.paragraph;
+            if (frag.firstChild?.type === paragraph && frag.lastChild?.type === paragraph) {
+                const slice = new Slice(frag, 1, 1);
+                tr.replaceRange(pos, pos, slice);
+                tr.setSelection(new TextSelection(pos + slice.size));
+                return;
             }
-            para.split("\n").forEach((line, j) => {
-                if (j > 0) {
-                    const tr = current.tr();
-                    const pos = deleteSelectionIn(tr, current);
-                    const hardBreak = current.schema.nodes.hard_break;
-                    tr.replaceRange(pos, pos, new Slice(Fragment.from(hardBreak.create()), 0, 0));
-                    tr.setSelection(selectionNear(tr.doc, pos + 1));
-                    send(tr);
-                }
-                if (line) {
-                    const tr = current.tr();
-                    insertTextIn(tr, current, line);
-                    send(tr);
-                }
-            });
+            const before = block.content.cut(0, $pos.parentOffset);
+            const after = block.content.cut($pos.parentOffset);
+            const prefix = before.size ? Fragment.from(block.copy(before)) : Fragment.empty;
+            const suffix = after.size ? Fragment.from(block.copy(after)) : Fragment.empty;
+            const content = prefix.append(frag).append(suffix);
+            const start = $pos.before();
+            tr.replaceRange(start, $pos.after(), new Slice(content, 0, 0));
+            tr.setSelection(selectionNear(tr.doc, start + prefix.size + frag.size - 1));
         });
-        if (!steps.length) return;
-        const tr = state.tr();
-        for (const step of steps) tr.addStep(step);
-        if (lastSelection) tr.setSelection(lastSelection);
-        dispatch(tr);
+        const tr = literal
+            ? tryBuild(state, (tr) => insertTextIn(tr, state, text))
+            : ((isMarkdown || looksLikeMarkdown(text)) ? markdown() : null) || plain();
+        if (tr?.docChanged) dispatch(tr);
     };
 }
 
@@ -197,12 +212,20 @@ export function createEditor(el, options = {}) {
 
     const commands = toolbarCommands(schema);
 
+    function finishComposition() {
+        const active = document.activeElement;
+        if (active && view.dom.contains(active)) active.blur();
+        view.onCompositionEnd();
+    }
+
     return {
         /** Runs a selection-toolbar command by name (toolbar.js).
          *  `arg` reaches commands that take one (setCodeLanguage). */
         exec(name, arg) {
             const command = commands[name];
             if (!command) return false;
+            if (view.composing) finishComposition();
+            view.onSelectionChange();
             const ok = command(view.state, (tr) => view.dispatch(tr), arg);
             view.focus();
             return ok;
@@ -280,8 +303,7 @@ export function createEditor(el, options = {}) {
         },
         /** Commits a pending IME composition before navigation. */
         finishComposing() {
-            const active = document.activeElement;
-            if (active && view.dom.contains(active)) active.blur();
+            finishComposition();
         },
         /**
          * Replaces the document and resets history when switching entries.

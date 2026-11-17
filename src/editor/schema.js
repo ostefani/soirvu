@@ -32,7 +32,7 @@ const nodes = {
     },
     heading: {
         attrs: { level: { default: 1, validate: "number" } },
-        content: "(text | image)*",
+        content: "inline*",
         group: "block",
         defining: true,
         toDOM(node) { return ["h" + +node.attrs.level, 0]; }

@@ -428,6 +428,11 @@ export function inputRulesPlugin(onBracketLink = null) {
 // ---------------------------------------------------------------------------
 // Keymap
 
+export function isMacLineDelete(event) {
+    return event.key === "Backspace" && event.metaKey && !event.ctrlKey &&
+        !event.altKey && !event.shiftKey && (globalThis.navigator?.platform?.includes("Mac") ?? false);
+}
+
 function keyNameCandidates(event) {
     const mods = [];
     if (event.ctrlKey || event.metaKey) mods.push("Mod");
@@ -479,6 +484,8 @@ export function keymapPlugin(schema) {
         key: "soirvu-keymap",
         props: {
             handleKeyDown(state, event, dispatch) {
+                // The view measures the rendered line for this shortcut.
+                if (isMacLineDelete(event)) return false;
                 for (const name of keyNameCandidates(event)) {
                     const command = table[name];
                     if (command && command(state, dispatch)) return true;
